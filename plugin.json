@@ -1,7 +1,7 @@
 {
-  "name": "siyuan-plugin-ai-copilot",
+  "name": "siyuan-plugin-copilot",
   "author": "Achuan-2",
-  "url": "https://github.com/Achuan-2/siyuan-plugin-ai-copilot",
+  "url": "https://github.com/Achuan-2/siyuan-plugin-copilot",
   "version": "0.0.3",
   "minAppVersion": "3.0.12",
   "backends": [
@@ -12,12 +12,12 @@
   ],
   "disabledInPublish": true,
   "displayName": {
-    "default": "AI Copilot",
-    "zh_CN": "AI Copilot"
+    "default": "Copilot",
+    "zh_CN": "Copilot"
   },
   "description": {
     "default": "AI assistant for SiYuan Note",
-    "zh_CN": "思源笔记 AI 助手"
+    "zh_CN": "思源笔记 AI 助手,支持 OpenAI、Google Gemini、DeepSeek 等多种 AI 接口，支持拖动块、页签获取笔记上下文"
   },
   "readme": {
     "default": "README.md",
@@ -31,6 +31,7 @@
   "keywords": [
     "ai",
     "copilot",
+    "llm",
     "assistant",
     "chatbot",
     "openai",
