@@ -34,6 +34,7 @@ export interface ChatOptions {
     onChunk?: (chunk: string) => void;
     onComplete?: (fullText: string) => void;
     onError?: (error: Error) => void;
+    signal?: AbortSignal; // 用于中断请求
 }
 
 export interface ModelInfo {
@@ -236,7 +237,8 @@ async function chatOpenAIFormat(
         const response = await fetch(url, {
             method: 'POST',
             headers,
-            body: JSON.stringify(requestBody)
+            body: JSON.stringify(requestBody),
+            signal: options.signal // 传递 AbortSignal
         });
 
         if (!response.ok) {
@@ -252,8 +254,14 @@ async function chatOpenAIFormat(
             options.onComplete?.(content);
         }
     } catch (error) {
-        console.error('Chat error:', error);
-        options.onError?.(error as Error);
+        // 检查是否是用户主动中断
+        if ((error as Error).name === 'AbortError') {
+            console.log('Request was aborted by user');
+            options.onError?.(new Error('Request aborted'));
+        } else {
+            console.error('Chat error:', error);
+            options.onError?.(error as Error);
+        }
         throw error;
     }
 }
@@ -323,7 +331,8 @@ async function chatGeminiFormat(
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(requestBody)
+            body: JSON.stringify(requestBody),
+            signal: options.signal // 传递 AbortSignal
         });
 
         if (!response.ok) {
@@ -334,8 +343,14 @@ async function chatGeminiFormat(
             await handleGeminiStreamResponse(response.body, options);
         }
     } catch (error) {
-        console.error('Gemini chat error:', error);
-        options.onError?.(error as Error);
+        // 检查是否是用户主动中断
+        if ((error as Error).name === 'AbortError') {
+            console.log('Gemini request was aborted by user');
+            options.onError?.(new Error('Request aborted'));
+        } else {
+            console.error('Gemini chat error:', error);
+            options.onError?.(error as Error);
+        }
         throw error;
     }
 }
@@ -384,9 +399,20 @@ async function handleStreamResponse(
 
         options.onComplete?.(fullText);
     } catch (error) {
-        console.error('Stream reading error:', error);
-        options.onError?.(error as Error);
+        // 检查是否是用户主动中断
+        if ((error as Error).name === 'AbortError') {
+            console.log('Stream reading was aborted');
+            // 如果已经有部分内容，仍然调用 onComplete
+            if (fullText) {
+                options.onComplete?.(fullText);
+            }
+        } else {
+            console.error('Stream reading error:', error);
+            options.onError?.(error as Error);
+        }
         throw error;
+    } finally {
+        reader.releaseLock();
     }
 }
 
@@ -432,9 +458,20 @@ async function handleGeminiStreamResponse(
 
         options.onComplete?.(fullText);
     } catch (error) {
-        console.error('Gemini stream reading error:', error);
-        options.onError?.(error as Error);
+        // 检查是否是用户主动中断
+        if ((error as Error).name === 'AbortError') {
+            console.log('Gemini stream reading was aborted');
+            // 如果已经有部分内容，仍然调用 onComplete
+            if (fullText) {
+                options.onComplete?.(fullText);
+            }
+        } else {
+            console.error('Gemini stream reading error:', error);
+            options.onError?.(error as Error);
+        }
         throw error;
+    } finally {
+        reader.releaseLock();
     }
 }
 

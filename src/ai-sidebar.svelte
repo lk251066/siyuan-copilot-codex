@@ -39,6 +39,9 @@
     let currentAttachments: MessageAttachment[] = [];
     let isUploadingFile = false;
 
+    // 中断控制
+    let abortController: AbortController | null = null;
+
     // 上下文文档
     let contextDocuments: ContextDocument[] = [];
     let isSearchDialogOpen = false;
@@ -544,6 +547,10 @@
         if (settings.aiSystemPrompt) {
             messagesToSend.unshift({ role: 'system', content: settings.aiSystemPrompt });
         }
+
+        // 创建新的 AbortController
+        abortController = new AbortController();
+
         try {
             await chat(
                 currentProvider,
@@ -554,6 +561,7 @@
                     temperature: modelConfig.temperature,
                     maxTokens: modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
                     stream: true,
+                    signal: abortController.signal, // 传递 AbortSignal
                     onChunk: async (chunk: string) => {
                         streamingMessage += chunk;
                         await scrollToBottom();
@@ -566,20 +574,48 @@
                         messages = [...messages, assistantMessage];
                         streamingMessage = '';
                         isLoading = false;
+                        abortController = null;
                         hasUnsavedChanges = true;
                     },
                     onError: (error: Error) => {
-                        pushErrMsg(`AI 请求失败: ${error.message}`);
+                        // 如果是主动中断，不显示错误
+                        if (error.message !== 'Request aborted') {
+                            pushErrMsg(`AI 请求失败: ${error.message}`);
+                        }
                         isLoading = false;
                         streamingMessage = '';
+                        abortController = null;
                     },
                 },
                 providerConfig.customApiUrl
             );
         } catch (error) {
             console.error('Send message error:', error);
-            isLoading = false;
+            // 如果是中断错误，不需要额外处理
+            if ((error as Error).name !== 'AbortError') {
+                isLoading = false;
+                streamingMessage = '';
+            }
+            abortController = null;
+        }
+    }
+
+    // 中断消息生成
+    function abortMessage() {
+        if (abortController) {
+            abortController.abort();
+            // 如果有已生成的部分，将其保存为消息
+            if (streamingMessage) {
+                messages = [
+                    ...messages,
+                    { role: 'assistant', content: streamingMessage + '\n\n[生成已中断]' },
+                ];
+                hasUnsavedChanges = true;
+            }
             streamingMessage = '';
+            isLoading = false;
+            abortController = null;
+            pushMsg('已中断消息生成');
         }
     }
 
@@ -606,6 +642,11 @@
 
     // 清空对话
     function clearChat() {
+        // 如果消息正在生成，先中断
+        if (isLoading && abortController) {
+            abortMessage();
+        }
+
         if (hasUnsavedChanges && messages.filter(m => m.role !== 'system').length > 0) {
             confirm('清空对话', '当前会话有未保存的更改，确定要清空吗？', () => {
                 doClearChat();
@@ -629,7 +670,11 @@
     function handleKeydown(e: KeyboardEvent) {
         if (e.key === 'Enter' && e.ctrlKey) {
             e.preventDefault();
-            sendMessage();
+            if (isLoading) {
+                abortMessage();
+            } else {
+                sendMessage();
+            }
         }
     }
 
@@ -915,13 +960,21 @@
             if (blocks && blocks.length > 0) {
                 const block = blocks[0];
                 let docId = targetBlockId;
-                let docTitle = block.content || '未命名文档';
+                let docTitle = '未命名文档';
 
                 // 如果是文档块，直接添加
                 if (block.type === 'd') {
+                    docTitle = block.content || '未命名文档';
                     await addDocumentToContext(docId, docTitle);
                 } else {
-                    // 如果是普通块，添加该块的内容
+                    // 如果是普通块，获取所属文档的标题
+                    const rootBlocks = await sql(
+                        `SELECT content FROM blocks WHERE id = '${block.root_id}' AND type = 'd'`
+                    );
+                    if (rootBlocks && rootBlocks.length > 0) {
+                        docTitle = rootBlocks[0].content || '未命名文档';
+                    }
+                    // 添加该块的内容
                     await addBlockToContext(targetBlockId, docTitle);
                 }
             }
@@ -951,7 +1004,6 @@
                         content: data.content,
                     },
                 ];
-                pushMsg(`已添加块: ${blockTitle}`);
             }
         } catch (error) {
             console.error('Add block error:', error);
@@ -1105,6 +1157,11 @@
     }
 
     async function loadSession(sessionId: string) {
+        // 如果消息正在生成，先中断
+        if (isLoading && abortController) {
+            abortMessage();
+        }
+
         if (hasUnsavedChanges) {
             confirm(
                 '切换会话',
@@ -1143,6 +1200,11 @@
     }
 
     async function newSession() {
+        // 如果消息正在生成，先中断
+        if (isLoading && abortController) {
+            abortMessage();
+        }
+
         // 如果有未保存的更改，自动保存当前会话
         if (hasUnsavedChanges && messages.filter(m => m.role !== 'system').length > 0) {
             await saveCurrentSession();
@@ -1552,14 +1614,16 @@
                 rows="1"
             ></textarea>
             <button
-                class="b3-button b3-button--primary ai-sidebar__send-btn"
-                on:click={sendMessage}
-                disabled={isLoading || (!currentInput.trim() && currentAttachments.length === 0)}
-                title="发送消息 (Ctrl+Enter)"
+                class="b3-button ai-sidebar__send-btn"
+                class:b3-button--primary={!isLoading}
+                class:b3-button--cancel={isLoading}
+                on:click={isLoading ? abortMessage : sendMessage}
+                disabled={!isLoading && !currentInput.trim() && currentAttachments.length === 0}
+                title={isLoading ? '中断生成 (Ctrl+Enter)' : '发送消息 (Ctrl+Enter)'}
             >
                 {#if isLoading}
-                    <svg class="b3-button__icon ai-sidebar__loading-icon">
-                        <use xlink:href="#iconRefresh"></use>
+                    <svg class="b3-button__icon">
+                        <use xlink:href="#iconClose"></use>
                     </svg>
                 {:else}
                     <svg class="b3-button__icon"><use xlink:href="#iconLeft"></use></svg>
@@ -2450,6 +2514,15 @@
         &:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+        }
+
+        &.b3-button--cancel {
+            background-color: var(--b3-theme-error);
+            color: var(--b3-theme-on-error);
+
+            &:hover {
+                background-color: var(--b3-theme-error-light);
+            }
         }
     }
 
