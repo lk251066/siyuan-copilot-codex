@@ -1674,7 +1674,7 @@
                         <use xlink:href="#iconPause"></use>
                     </svg>
                 {:else}
-                    <svg class="b3-button__icon"><use xlink:href="#iconLeft"></use></svg>
+                    <svg class="b3-button__icon"><use xlink:href="#iconUp"></use></svg>
                 {/if}
             </button>
         </div>
