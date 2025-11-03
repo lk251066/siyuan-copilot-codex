@@ -376,7 +376,10 @@
     // 处理消息容器的滚动：当用户手动滚动到非底部位置时，禁用自动滚动
     function handleMessagesScroll() {
         if (!messagesContainer) return;
-        const distanceToBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
+        const distanceToBottom =
+            messagesContainer.scrollHeight -
+            messagesContainer.scrollTop -
+            messagesContainer.clientHeight;
         shouldAutoScroll = distanceToBottom <= AUTO_SCROLL_THRESHOLD;
     }
 
@@ -1596,9 +1599,9 @@
                 <p>开始与 AI 对话吧！</p>
                 <p class="ai-sidebar__empty-hint">Ctrl+Enter 发送消息</p>
             </div>
-    {/if}
+        {/if}
 
-    {#if !shouldAutoScroll && messages.filter(msg => msg.role !== 'system').length > 0}
+        {#if !shouldAutoScroll && messages.filter(msg => msg.role !== 'system').length > 0}
             <button
                 class="ai-sidebar__scroll-to-bottom"
                 on:click={() => scrollToBottom(true)}
@@ -2110,7 +2113,7 @@
         background: var(--b3-theme-surface);
         color: var(--b3-theme-on-surface);
         cursor: pointer;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
     }
 
     .ai-sidebar__empty {
