@@ -9,7 +9,6 @@
     import { settingsStore } from './stores/settings';
     import { confirm, Constants } from 'siyuan';
     import { t } from './utils/i18n';
-    import katex from 'katex';
 
     export let plugin: any;
 
@@ -38,12 +37,14 @@
     let textareaElement: HTMLTextAreaElement;
     let inputContainer: HTMLElement;
     let fileInputElement: HTMLInputElement;
-    // 是否允许自动滚动到底部（当用户手动向上滚动时禁用）
-    let shouldAutoScroll = true;
-    const AUTO_SCROLL_THRESHOLD = 50; // px，距离底部小于则自动滚动
 
     // 思考过程折叠状态管理
     let thinkingCollapsed: Record<number, boolean> = {};
+
+    // 消息编辑状态
+    let editingMessageIndex: number | null = null;
+    let editingMessageContent = '';
+    let isEditDialogOpen = false;
 
     // 附件管理
     let currentAttachments: MessageAttachment[] = [];
@@ -370,25 +371,11 @@
         currentAttachments = currentAttachments.filter((_, i) => i !== index);
     }
 
-    // 处理消息容器的滚动：当用户手动滚动到非底部位置时，禁用自动滚动
-    function handleMessagesScroll() {
-        if (!messagesContainer) return;
-        const distanceToBottom =
-            messagesContainer.scrollHeight -
-            messagesContainer.scrollTop -
-            messagesContainer.clientHeight;
-        shouldAutoScroll = distanceToBottom <= AUTO_SCROLL_THRESHOLD;
-    }
-
-    // 滚动到底部。默认会尊重用户是否手动滚动（即只有在 shouldAutoScroll 为 true 时才滚动），
-    // 传入 force=true 强制滚动并恢复自动滚动行为。
-    async function scrollToBottom(force: boolean = false) {
+    // 滚动到底部
+    async function scrollToBottom() {
         await tick();
-        if (!force && !shouldAutoScroll) return;
         if (messagesContainer) {
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            // 强制或正常滚动后认为用户位于底部，允许后续自动滚动
-            shouldAutoScroll = true;
         }
     }
 
@@ -770,7 +757,12 @@
     }
 
     function formatMessage(content: string | MessageContent[]): string {
-        const textContent = getMessageText(content);
+        let textContent = getMessageText(content);
+        
+        // 预处理：将 LaTeX 数学公式格式转换为 Markdown 格式
+        textContent = textContent.replace(/\\\[(.*?)\\\]/gs, '\n$$$$$1$$$$\n'); // LaTeX 块级数学公式 \[...\] -> $$...$$
+        textContent = textContent.replace(/\\\((.*?)\\\)/g, '$$$1$$'); // LaTeX 行内数学公式 \(...\) -> $...$
+        
         try {
             // 检查window.Lute是否存在
             if (typeof window !== 'undefined' && (window as any).Lute) {
@@ -871,52 +863,119 @@
         });
     }
 
+    // 初始化 KaTeX
+    async function initKatex() {
+        if ((window as any).katex) return true;
+        
+        try {
+            // 使用思源的 CDN 加载 KaTeX
+            const cdn = Constants.PROTYLE_CDN;
+            
+            // 添加 KaTeX 样式
+            if (!document.getElementById('protyleKatexStyle')) {
+                const link = document.createElement('link');
+                link.id = 'protyleKatexStyle';
+                link.rel = 'stylesheet';
+                link.href = `${cdn}/js/katex/katex.min.css`;
+                document.head.appendChild(link);
+            }
+            
+            // 添加 KaTeX 脚本
+            if (!document.getElementById('protyleKatexScript')) {
+                await new Promise<void>((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.id = 'protyleKatexScript';
+                    script.src = `${cdn}/js/katex/katex.min.js`;
+                    script.onload = () => resolve();
+                    script.onerror = () => reject(new Error('Failed to load KaTeX'));
+                    document.head.appendChild(script);
+                });
+            }
+            
+            return (window as any).katex !== undefined && (window as any).katex !== null;
+        } catch (error) {
+            console.error('Init KaTeX error:', error);
+            return false;
+        }
+    }
+
+    // 渲染单个数学公式块
+    function renderMathBlock(element: HTMLElement) {
+        try {
+            const formula = element.textContent || '';
+            if (!formula.trim()) {
+                return;
+            }
+
+            const isBlock = element.tagName.toUpperCase() === 'DIV';
+
+            // 使用 KaTeX 渲染公式
+            const katex = (window as any).katex;
+            const html = katex.renderToString(formula, {
+                throwOnError: false, // 发生错误时不抛出异常
+                displayMode: isBlock, // 使用显示模式（居中显示）
+                strict: (errorCode: string) => errorCode === 'unicodeTextInMathMode' ? 'ignore' : 'warn',
+                trust: true,
+            });
+
+            // 清空原始内容并插入渲染后的内容
+            element.innerHTML = html;
+            
+            // 标记已渲染
+            element.setAttribute('data-math-rendered', 'true');
+        } catch (error) {
+            console.error('Error rendering math formula:', error);
+            element.innerHTML = `<span style="color: red;">公式渲染错误</span>`;
+            element.setAttribute('data-math-rendered', 'true');
+        }
+    }
+
     // 渲染数学公式
-    function renderMathFormulas(element: HTMLElement) {
+    async function renderMathFormulas(element: HTMLElement) {
         if (!element) return;
 
         // 使用 tick 确保 DOM 已更新
-        tick().then(() => {
-            try {
-                // 处理行内公式和块级公式
-                const mathElements = element.querySelectorAll(
-                    '[data-subtype="math"]:not([data-math-rendered])'
-                );
+        await tick();
+        
+        try {
+            // 处理行内公式和块级公式
+            const mathElements = element.querySelectorAll(
+                '[data-subtype="math"]:not([data-math-rendered])'
+            );
 
-                if (mathElements.length === 0) return;
+            if (mathElements.length === 0) return;
 
-                mathElements.forEach((mathElement: HTMLElement) => {
-                    try {
-                        // 获取数学公式内容
-                        const mathContent = mathElement.getAttribute('data-content');
-                        if (!mathContent) {
-                            return;
-                        }
-
-                        // 判断是行内公式还是块级公式
-                        // 行内公式：data-type="inline-math"
-                        // 块级公式：data-type="NodeMathBlock"
-                        const dataType = mathElement.getAttribute('data-type');
-                        const isBlockMath = dataType === 'NodeMathBlock';
-
-                        // 渲染数学公式
-                        katex.render(mathContent, mathElement, {
-                            throwOnError: false,
-                            displayMode: isBlockMath,
-                        });
-
-                        // 标记已渲染
-                        mathElement.setAttribute('data-math-rendered', 'true');
-                    } catch (error) {
-                        console.error('Render math formula error:', error, mathElement);
-                        // 即使渲染失败也标记，避免重复尝试
-                        mathElement.setAttribute('data-math-rendered', 'true');
-                    }
-                });
-            } catch (error) {
-                console.error('Render math formulas error:', error);
+            // 确保 KaTeX 已加载
+            if (!(window as any).katex) {
+                const loaded = await initKatex();
+                if (!loaded) {
+                    console.error('Failed to initialize KaTeX');
+                    return;
+                }
             }
-        });
+
+            mathElements.forEach((mathElement: HTMLElement) => {
+                try {
+                    // 获取数学公式内容
+                    const mathContent = mathElement.getAttribute('data-content');
+                    if (!mathContent) {
+                        return;
+                    }
+
+                    // 临时设置文本内容用于渲染
+                    mathElement.textContent = mathContent;
+                    
+                    // 渲染公式
+                    renderMathBlock(mathElement);
+                } catch (error) {
+                    console.error('Render math formula error:', error, mathElement);
+                    // 即使渲染失败也标记，避免重复尝试
+                    mathElement.setAttribute('data-math-rendered', 'true');
+                }
+            });
+        } catch (error) {
+            console.error('Render math formulas error:', error);
+        }
     }
 
     // 监听消息变化，高亮代码块和渲染数学公式
@@ -1325,7 +1384,7 @@
             }
             currentSessionId = sessionId;
             hasUnsavedChanges = false;
-            await scrollToBottom(true);
+            await scrollToBottom();
         }
     }
 
@@ -1485,6 +1544,171 @@
             }
         }
     }
+
+    // 消息操作函数
+    // 开始编辑消息
+    function startEditMessage(index: number) {
+        editingMessageIndex = index;
+        editingMessageContent = getMessageText(messages[index].content);
+        isEditDialogOpen = true;
+    }
+
+    // 取消编辑消息
+    function cancelEditMessage() {
+        editingMessageIndex = null;
+        editingMessageContent = '';
+        isEditDialogOpen = false;
+    }
+
+    // 保存编辑的消息
+    function saveEditMessage() {
+        if (editingMessageIndex === null) return;
+        
+        const message = messages[editingMessageIndex];
+        message.content = editingMessageContent.trim();
+        messages = [...messages];
+        hasUnsavedChanges = true;
+        
+        editingMessageIndex = null;
+        editingMessageContent = '';
+        isEditDialogOpen = false;
+    }
+
+    // 删除消息
+    function deleteMessage(index: number) {
+        confirm(
+            t('aiSidebar.confirm.deleteMessage.title'),
+            t('aiSidebar.confirm.deleteMessage.message'),
+            () => {
+                messages = messages.filter((_, i) => i !== index);
+                hasUnsavedChanges = true;
+            }
+        );
+    }
+
+    // 重新生成AI回复
+    async function regenerateMessage(index: number) {
+        if (isLoading) {
+            pushErrMsg(t('aiSidebar.errors.generating'));
+            return;
+        }
+
+        // 删除从此消息开始的所有后续消息
+        messages = messages.slice(0, index);
+        hasUnsavedChanges = true;
+        
+        // 获取最后一条用户消息
+        const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+        if (!lastUserMessage) {
+            pushErrMsg(t('aiSidebar.errors.noUserMessage'));
+            return;
+        }
+
+        // 重新发送请求
+        isLoading = true;
+        streamingMessage = '';
+        streamingThinking = '';
+        isThinkingPhase = false;
+
+        await scrollToBottom();
+
+        // 准备发送给AI的消息
+        const messagesToSend = messages
+            .filter(msg => msg.role !== 'system')
+            .map(msg => ({
+                role: msg.role,
+                content: msg.content,
+            }));
+
+        if (settings.aiSystemPrompt) {
+            messagesToSend.unshift({ role: 'system', content: settings.aiSystemPrompt });
+        }
+
+        // 创建新的 AbortController
+        abortController = new AbortController();
+
+        const providerConfig = getCurrentProviderConfig();
+        const modelConfig = getCurrentModelConfig();
+
+        if (!providerConfig || !modelConfig) {
+            pushErrMsg(t('aiSidebar.errors.noProvider'));
+            isLoading = false;
+            return;
+        }
+
+        try {
+            const enableThinking = modelConfig.capabilities?.thinking || false;
+
+            await chat(
+                currentProvider,
+                {
+                    apiKey: providerConfig.apiKey,
+                    model: modelConfig.id,
+                    messages: messagesToSend,
+                    temperature: modelConfig.temperature,
+                    maxTokens: modelConfig.maxTokens > 0 ? modelConfig.maxTokens : undefined,
+                    stream: true,
+                    signal: abortController.signal,
+                    enableThinking,
+                    onThinkingChunk: enableThinking
+                        ? async (chunk: string) => {
+                              isThinkingPhase = true;
+                              streamingThinking += chunk;
+                              await scrollToBottom();
+                          }
+                        : undefined,
+                    onThinkingComplete: enableThinking
+                        ? (thinking: string) => {
+                              isThinkingPhase = false;
+                              thinkingCollapsed[messages.length] = true;
+                          }
+                        : undefined,
+                    onChunk: async (chunk: string) => {
+                        streamingMessage += chunk;
+                        await scrollToBottom();
+                    },
+                    onComplete: (fullText: string) => {
+                        const assistantMessage: Message = {
+                            role: 'assistant',
+                            content: fullText,
+                        };
+
+                        if (enableThinking && streamingThinking) {
+                            assistantMessage.thinking = streamingThinking;
+                        }
+
+                        messages = [...messages, assistantMessage];
+                        streamingMessage = '';
+                        streamingThinking = '';
+                        isThinkingPhase = false;
+                        isLoading = false;
+                        abortController = null;
+                        hasUnsavedChanges = true;
+                    },
+                    onError: (error: Error) => {
+                        if (error.message !== 'Request aborted') {
+                            pushErrMsg(`AI 请求失败: ${error.message}`);
+                        }
+                        isLoading = false;
+                        streamingMessage = '';
+                        streamingThinking = '';
+                        isThinkingPhase = false;
+                        abortController = null;
+                    },
+                },
+                providerConfig.customApiUrl
+            );
+        } catch (error) {
+            console.error('Regenerate message error:', error);
+            if ((error as Error).name !== 'AbortError') {
+                isLoading = false;
+                streamingMessage = '';
+                streamingThinking = '';
+                isThinkingPhase = false;
+            }
+            abortController = null;
+        }
+    }
 </script>
 
 <div class="ai-sidebar">
@@ -1542,9 +1766,9 @@
         on:dragover={handleDragOver}
         on:dragleave={handleDragLeave}
         on:drop={handleDrop}
-        on:scroll={handleMessagesScroll}
     >
-        {#each messages.filter(msg => msg.role !== 'system') as message, index (index)}
+        {#each messages as message, index (index)}
+            {#if message.role !== 'system'}
             <div
                 class="ai-message ai-message--{message.role}"
                 on:contextmenu={e => handleContextMenu(e, message.content)}
@@ -1553,13 +1777,6 @@
                     <span class="ai-message__role">
                         {message.role === 'user' ? '👤 You' : '🤖 AI'}
                     </span>
-                    <button
-                        class="b3-button b3-button--text ai-message__copy"
-                        on:click={() => copyMessage(message.content)}
-                        title="复制这条消息"
-                    >
-                        <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                    </button>
                 </div>
 
                 <!-- 显示附件 -->
@@ -1616,10 +1833,46 @@
                     </div>
                 {/if}
 
+                <!-- 显示模式 -->
                 <div class="ai-message__content protyle-wysiwyg">
                     {@html formatMessage(message.content)}
                 </div>
+                
+                <!-- 消息操作按钮 -->
+                <div class="ai-message__actions">
+                    <button
+                        class="b3-button b3-button--text ai-message__action"
+                        on:click={() => copyMessage(message.content)}
+                        title={t('aiSidebar.actions.copyMessage')}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
+                    </button>
+                    <button
+                        class="b3-button b3-button--text ai-message__action"
+                        on:click={() => startEditMessage(index)}
+                        title={t('aiSidebar.actions.editMessage')}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
+                    </button>
+                    <button
+                        class="b3-button b3-button--text ai-message__action"
+                        on:click={() => deleteMessage(index)}
+                        title={t('aiSidebar.actions.deleteMessage')}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
+                    </button>
+                    {#if message.role === 'assistant'}
+                        <button
+                            class="b3-button b3-button--text ai-message__action"
+                            on:click={() => regenerateMessage(index)}
+                            title={t('aiSidebar.actions.regenerate')}
+                        >
+                            <svg class="b3-button__icon"><use xlink:href="#iconRefresh"></use></svg>
+                        </button>
+                    {/if}
+                </div>
             </div>
+            {/if}
         {/each}
 
         {#if isLoading && (streamingMessage || streamingThinking)}
@@ -1670,16 +1923,6 @@
                 <div class="ai-sidebar__empty-icon">💬</div>
                 <p>{t('aiSidebar.empty.greeting')}</p>
             </div>
-        {/if}
-
-        {#if !shouldAutoScroll && messages.filter(msg => msg.role !== 'system').length > 0}
-            <button
-                class="ai-sidebar__scroll-to-bottom"
-                on:click={() => scrollToBottom(true)}
-                title={t('aiSidebar.actions.scrollToBottom')}
-            >
-                ↓ 最新
-            </button>
         {/if}
     </div>
 
@@ -2025,6 +2268,46 @@
             </div>
         </div>
     {/if}
+
+    <!-- 编辑消息弹窗 -->
+    {#if isEditDialogOpen}
+        <div class="ai-sidebar__edit-dialog">
+            <div class="ai-sidebar__edit-dialog-overlay" on:click={cancelEditMessage}></div>
+            <div class="ai-sidebar__edit-dialog-content">
+                <div class="ai-sidebar__edit-dialog-header">
+                    <h3>{t('aiSidebar.actions.editMessage')}</h3>
+                    <button
+                        class="b3-button b3-button--cancel"
+                        on:click={cancelEditMessage}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
+                    </button>
+                </div>
+                <div class="ai-sidebar__edit-dialog-body">
+                    <textarea
+                        class="ai-sidebar__edit-dialog-textarea"
+                        bind:value={editingMessageContent}
+                        rows="15"
+                        autofocus
+                    ></textarea>
+                </div>
+                <div class="ai-sidebar__edit-dialog-footer">
+                    <button
+                        class="b3-button b3-button--cancel"
+                        on:click={cancelEditMessage}
+                    >
+                        {t('aiSidebar.actions.cancel')}
+                    </button>
+                    <button
+                        class="b3-button b3-button--text"
+                        on:click={saveEditMessage}
+                    >
+                        {t('aiSidebar.actions.save')}
+                    </button>
+                </div>
+            </div>
+        </div>
+    {/if}
 </div>
 
 <style lang="scss">
@@ -2178,21 +2461,6 @@
         }
     }
 
-    /* 跳转到底部按钮 */
-    .ai-sidebar__scroll-to-bottom {
-        position: absolute;
-        right: 16px;
-        bottom: 96px; /* 放在输入框上方，避免遮挡 */
-        z-index: 50;
-        padding: 6px 10px;
-        border-radius: 6px;
-        border: 1px solid var(--b3-border-color);
-        background: var(--b3-theme-surface);
-        color: var(--b3-theme-on-surface);
-        cursor: pointer;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    }
-
     .ai-sidebar__empty {
         display: flex;
         flex-direction: column;
@@ -2242,8 +2510,7 @@
     .ai-message__header {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 8px;
+        margin-bottom: 8px;
     }
 
     .ai-message__role {
@@ -2252,14 +2519,21 @@
         color: var(--b3-theme-on-surface);
     }
 
-    .ai-message__copy {
+    .ai-message__actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 8px;
         opacity: 0;
         transition: opacity 0.2s;
-        flex-shrink: 0;
     }
 
-    .ai-message:hover .ai-message__copy {
+    .ai-message:hover .ai-message__actions {
         opacity: 1;
+    }
+
+    .ai-message__action {
+        flex-shrink: 0;
     }
 
     .ai-message__streaming-indicator {
@@ -2493,19 +2767,35 @@
     }
 
     .ai-message--user {
+        .ai-message__header {
+            justify-content: flex-end;
+        }
+
         .ai-message__content {
             background: var(--b3-theme-primary-lightest);
             color: var(--b3-theme-on-background);
             margin-left: auto;
             max-width: 85%;
         }
+
+        .ai-message__actions {
+            justify-content: flex-end;
+        }
     }
 
     .ai-message--assistant {
+        .ai-message__header {
+            justify-content: flex-start;
+        }
+
         .ai-message__content {
             background: var(--b3-theme-surface);
             color: var(--b3-theme-on-surface);
             max-width: 90%;
+        }
+
+        .ai-message__actions {
+            justify-content: flex-start;
         }
     }
 
@@ -2661,6 +2951,39 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    // 消息编辑样式
+    .ai-message__edit {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 8px 0;
+    }
+
+    .ai-message__edit-textarea {
+        width: 100%;
+        min-height: 100px;
+        padding: 10px 12px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 8px;
+        background: var(--b3-theme-background);
+        color: var(--b3-theme-on-background);
+        font-family: var(--b3-font-family);
+        font-size: 14px;
+        line-height: 1.6;
+        resize: vertical;
+
+        &:focus {
+            outline: none;
+            border-color: var(--b3-theme-primary);
+        }
+    }
+
+    .ai-message__edit-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
     }
 
     // 提示词选择器样式
@@ -3082,6 +3405,93 @@
         text-align: center;
         padding: 32px;
         color: var(--b3-theme-on-surface-light);
+    }
+
+    // 编辑消息对话框样式
+    .ai-sidebar__edit-dialog {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .ai-sidebar__edit-dialog-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+    }
+
+    .ai-sidebar__edit-dialog-content {
+        position: relative;
+        width: 90%;
+        max-width: 700px;
+        background: var(--b3-theme-background);
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        display: flex;
+        flex-direction: column;
+        max-height: 80vh;
+    }
+
+    .ai-sidebar__edit-dialog-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px;
+        border-bottom: 1px solid var(--b3-border-color);
+
+        h3 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .b3-button {
+            padding: 4px;
+            min-width: auto;
+        }
+    }
+
+    .ai-sidebar__edit-dialog-body {
+        padding: 16px;
+        overflow-y: auto;
+        flex: 1;
+    }
+
+    .ai-sidebar__edit-dialog-textarea {
+        width: 100%;
+        min-height: 300px;
+        padding: 12px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 4px;
+        background: var(--b3-theme-background);
+        color: var(--b3-theme-on-background);
+        font-family: var(--b3-font-family);
+        font-size: 14px;
+        line-height: 1.6;
+        resize: vertical;
+        transition: border-color 0.2s ease;
+
+        &:focus {
+            outline: none;
+            border-color: var(--b3-theme-primary);
+        }
+    }
+
+    .ai-sidebar__edit-dialog-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 16px;
+        border-top: 1px solid var(--b3-border-color);
     }
 
     // 响应式布局
