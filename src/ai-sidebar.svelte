@@ -1425,6 +1425,29 @@
         }
     }
 
+    // 清理代码块中不需要的元素
+    function cleanupCodeBlocks(element: HTMLElement) {
+        if (!element) return;
+
+        tick().then(() => {
+            try {
+                // 删除 .protyle-action__menu 元素
+                const menuElements = element.querySelectorAll('.protyle-action__menu');
+                menuElements.forEach((menu: HTMLElement) => {
+                    menu.remove();
+                });
+
+                // 删除 .protyle-action__copy 元素上的 b3-tooltips__nw 和 b3-tooltips 类
+                const copyButtons = element.querySelectorAll('.protyle-action__copy');
+                copyButtons.forEach((btn: HTMLElement) => {
+                    btn.classList.remove('b3-tooltips__nw', 'b3-tooltips');
+                });
+            } catch (error) {
+                console.error('Cleanup code blocks error:', error);
+            }
+        });
+    }
+
     // 监听消息变化，高亮代码块和渲染数学公式
     $: {
         if (messages.length > 0 || streamingMessage) {
@@ -1432,6 +1455,7 @@
                 if (messagesContainer) {
                     highlightCodeBlocks(messagesContainer);
                     renderMathFormulas(messagesContainer);
+                    cleanupCodeBlocks(messagesContainer);
                 }
             });
         }
@@ -3918,12 +3942,10 @@
                 margin: 8px 0;
                 border-radius: 6px;
                 background: var(--b3-theme-surface);
-                overflow: hidden;
 
                 // contenteditable 内的代码
                 :global(> div[contenteditable]) {
                     padding: 12px;
-                    overflow-x: auto;
                     font-family: var(--b3-font-family-code);
                     font-size: 0.9em;
                     line-height: 1.5;
@@ -3950,7 +3972,6 @@
             :global(.code-block) {
                 margin: 8px 0;
                 border-radius: 6px;
-                overflow: hidden;
             }
 
             :global(pre) {
