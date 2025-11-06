@@ -89,7 +89,12 @@
                 ...settings.aiProviders,
                 customProviders: [...settings.aiProviders.customProviders, newPlatform],
             },
+            // 自动选中新创建的平台（仅设置面板，不影响对话）
+            selectedProviderId: newPlatform.id,
         };
+
+        // 更新本地选中状态
+        selectedProviderId = newPlatform.id;
 
         newPlatformName = '';
         showAddPlatform = false;
@@ -108,6 +113,10 @@
             t('aiSidebar.confirm.deletePlatform.title'),
             t('aiSidebar.confirm.deletePlatform.message', { platformName }),
             async () => {
+                // 检查是否需要清空当前选中的模型
+                // 只有当删除的平台是当前正在使用的平台时才清空模型选择
+                const shouldClearModel = settings.currentProvider === providerId;
+
                 // 如果是内置平台，删除其所有配置
                 if (builtInProviderNames[providerId]) {
                     // 使用响应式更新确保 Svelte 检测到变化
@@ -137,12 +146,16 @@
                     };
                 }
 
-                // 如果删除的是当前选中的平台，清空选择
+                // 如果删除的是当前选中的平台（在设置面板中），清空面板选择
                 if (selectedProviderId === providerId) {
                     selectedProviderId = '';
+                    settings.selectedProviderId = '';
+                }
+
+                // 只有当删除的平台是当前对话使用的平台时，才清空对话中的平台和模型选择
+                if (shouldClearModel) {
                     settings = {
                         ...settings,
-                        selectedProviderId: '',
                         currentProvider: '',
                         currentModelId: '',
                     };
@@ -187,14 +200,12 @@
         return customProvider?.name || t('platform.unknown');
     })();
 
-    // 保存选中的平台ID
+    // 保存选中的平台ID（仅在设置面板中选择平台，不影响对话中的当前平台）
     function handleProviderSelect() {
         // 使用响应式更新确保 Svelte 检测到变化
         settings = {
             ...settings,
             selectedProviderId: selectedProviderId,
-            // 兼容ai-sidebar.svelte，同时保存currentProvider
-            currentProvider: selectedProviderId,
         };
         saveSettings();
     }
@@ -328,16 +339,17 @@
             settings.aiProviders.customProviders = [];
         }
 
-        // 恢复选中的平台ID，确保兼容性
+        // 恢复选中的平台ID（仅用于设置面板显示）
+        // 优先使用 selectedProviderId，如果不存在则使用 currentProvider 作为初始值
         selectedProviderId = settings.selectedProviderId || settings.currentProvider || 'openai';
+
+        // 确保 selectedProviderId 设置被保存
+        if (!settings.selectedProviderId) {
+            settings.selectedProviderId = selectedProviderId;
+        }
 
         updateGroupItems();
         // 确保设置已保存（可能包含新的默认值）
-        await saveSettings();
-
-        // 双向同步，确保 currentProvider 和 selectedProviderId 一致
-        settings.currentProvider = selectedProviderId;
-        settings.selectedProviderId = selectedProviderId;
         await saveSettings();
 
         console.debug(t('common.configComplete'));
