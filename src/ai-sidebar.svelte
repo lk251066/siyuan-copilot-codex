@@ -6,6 +6,7 @@
         type MessageAttachment,
         type EditOperation,
         type ToolCall,
+        type ContextDocument,
     } from './ai-chat';
     import type { MessageContent } from './ai-chat';
     import { getActiveEditor } from 'siyuan';
@@ -39,16 +40,8 @@
         id: string;
         title: string;
         messages: Message[];
-        contextDocuments?: ContextDocument[];
         createdAt: number;
         updatedAt: number;
-    }
-
-    interface ContextDocument {
-        id: string;
-        title: string;
-        content: string;
-        type?: 'doc' | 'block'; // 标识是文档还是块
     }
 
     let messages: Message[] = [];
@@ -596,11 +589,16 @@
             role: 'user',
             content: userContent,
             attachments: currentAttachments.length > 0 ? [...currentAttachments] : undefined,
+            contextDocuments:
+                contextDocumentsWithLatestContent.length > 0
+                    ? [...contextDocumentsWithLatestContent]
+                    : undefined,
         };
 
         messages = [...messages, userMessage];
         currentInput = '';
         currentAttachments = [];
+        contextDocuments = []; // 发送后清空全局上下文
         isLoading = true;
         streamingMessage = '';
         streamingThinking = '';
@@ -615,7 +613,7 @@
         // 保留工具调用相关字段（如果存在），以便在 Agent 模式下正确处理历史工具调用
         let messagesToSend = messages
             .filter(msg => msg.role !== 'system')
-            .map(msg => {
+            .map((msg, index, array) => {
                 const baseMsg: any = {
                     role: msg.role,
                     content: msg.content,
@@ -628,6 +626,86 @@
                 if (msg.tool_call_id) {
                     baseMsg.tool_call_id = msg.tool_call_id;
                     baseMsg.name = msg.name;
+                }
+
+                // 只处理历史用户消息的上下文（不是最后一条消息）
+                // 最后一条消息将在后面用最新内容处理
+                const isLastMessage = index === array.length - 1;
+                if (!isLastMessage && msg.role === 'user' && msg.contextDocuments && msg.contextDocuments.length > 0) {
+                    const hasImages = msg.attachments?.some(att => att.type === 'image');
+                    
+                    // 获取原始消息内容
+                    const originalContent = typeof msg.content === 'string' 
+                        ? msg.content 
+                        : getMessageText(msg.content);
+                    
+                    // 构建上下文文本
+                    const contextText = msg.contextDocuments
+                        .map(doc => {
+                            const label = doc.type === 'doc' ? '文档' : '块';
+                            return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
+                        })
+                        .join('\n\n---\n\n');
+                    
+                    // 如果有图片附件，使用多模态格式
+                    if (hasImages) {
+                        const contentParts: any[] = [];
+                        
+                        // 添加文本内容和上下文
+                        let textContent = originalContent;
+                        textContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
+                        contentParts.push({ type: 'text', text: textContent });
+                        
+                        // 添加图片
+                        msg.attachments?.forEach(att => {
+                            if (att.type === 'image') {
+                                contentParts.push({
+                                    type: 'image_url',
+                                    image_url: { url: att.data },
+                                });
+                            }
+                        });
+                        
+                        // 添加文本文件内容
+                        const fileTexts = msg.attachments
+                            ?.filter(att => att.type === 'file')
+                            .map(att => `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`)
+                            .join('\n\n---\n\n');
+                        
+                        if (fileTexts) {
+                            contentParts.push({
+                                type: 'text',
+                                text: `\n\n以下是附件文件内容：\n\n${fileTexts}`,
+                            });
+                        }
+                        
+                        baseMsg.content = contentParts;
+                    } else {
+                        // 纯文本格式
+                        let enhancedContent = originalContent;
+                        
+                        // 添加文本文件附件
+                        if (msg.attachments && msg.attachments.length > 0) {
+                            const attachmentTexts = msg.attachments
+                                .map(att => {
+                                    if (att.type === 'file') {
+                                        return `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`;
+                                    }
+                                    return '';
+                                })
+                                .filter(Boolean)
+                                .join('\n\n---\n\n');
+                            
+                            if (attachmentTexts) {
+                                enhancedContent += `\n\n---\n\n以下是附件内容：\n\n${attachmentTexts}`;
+                            }
+                        }
+                        
+                        // 添加上下文文档
+                        enhancedContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
+                        
+                        baseMsg.content = enhancedContent;
+                    }
                 }
 
                 return baseMsg;
@@ -2141,8 +2219,6 @@
             const session = sessions.find(s => s.id === currentSessionId);
             if (session) {
                 session.messages = [...messages];
-                session.contextDocuments =
-                    contextDocuments.length > 0 ? [...contextDocuments] : undefined;
                 session.title = generateSessionTitle();
                 session.updatedAt = now;
             }
@@ -2152,7 +2228,6 @@
                 id: `session_${now}`,
                 title: generateSessionTitle(),
                 messages: [...messages],
-                contextDocuments: contextDocuments.length > 0 ? [...contextDocuments] : undefined,
                 createdAt: now,
                 updatedAt: now,
             };
@@ -2195,8 +2270,8 @@
         const session = sessions.find(s => s.id === sessionId);
         if (session) {
             messages = [...session.messages];
-            // 恢复上下文文档
-            contextDocuments = session.contextDocuments ? [...session.contextDocuments] : [];
+            // 清空全局上下文文档（上下文现在存储在各个消息中）
+            contextDocuments = [];
             // 确保系统提示词存在且是最新的
             if (settings.aiSystemPrompt) {
                 const systemMsgIndex = messages.findIndex(m => m.role === 'system');
@@ -2815,9 +2890,10 @@
 
         await scrollToBottom(true);
 
-        // 获取最新的上下文文档内容
+        // 获取最后一条用户消息关联的上下文文档，并获取最新内容
         const contextDocumentsWithLatestContent: ContextDocument[] = [];
-        for (const doc of contextDocuments) {
+        const userContextDocs = lastUserMessage.contextDocuments || [];
+        for (const doc of userContextDocs) {
             try {
                 let content: string;
 
@@ -2858,10 +2934,94 @@
         // 深拷贝消息数组，避免修改原始消息
         const messagesToSend = messages
             .filter(msg => msg.role !== 'system')
-            .map(msg => ({
-                role: msg.role,
-                content: msg.content,
-            }));
+            .map((msg, index, array) => {
+                const baseMsg: any = {
+                    role: msg.role,
+                    content: msg.content,
+                };
+
+                // 只处理历史用户消息的上下文（不是最后一条消息）
+                // 最后一条消息将在后面用最新内容处理
+                const isLastMessage = index === array.length - 1;
+                if (!isLastMessage && msg.role === 'user' && msg.contextDocuments && msg.contextDocuments.length > 0) {
+                    const hasImages = msg.attachments?.some(att => att.type === 'image');
+                    
+                    // 获取原始消息内容
+                    const originalContent = typeof msg.content === 'string' 
+                        ? msg.content 
+                        : getMessageText(msg.content);
+                    
+                    // 构建上下文文本
+                    const contextText = msg.contextDocuments
+                        .map(doc => {
+                            const label = doc.type === 'doc' ? '文档' : '块';
+                            return `## ${label}: ${doc.title}\n\n**BlockID**: \`${doc.id}\`\n\n\`\`\`markdown\n${doc.content}\n\`\`\``;
+                        })
+                        .join('\n\n---\n\n');
+                    
+                    // 如果有图片附件，使用多模态格式
+                    if (hasImages) {
+                        const contentParts: any[] = [];
+                        
+                        // 添加文本内容和上下文
+                        let textContent = originalContent;
+                        textContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
+                        contentParts.push({ type: 'text', text: textContent });
+                        
+                        // 添加图片
+                        msg.attachments?.forEach(att => {
+                            if (att.type === 'image') {
+                                contentParts.push({
+                                    type: 'image_url',
+                                    image_url: { url: att.data },
+                                });
+                            }
+                        });
+                        
+                        // 添加文本文件内容
+                        const fileTexts = msg.attachments
+                            ?.filter(att => att.type === 'file')
+                            .map(att => `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`)
+                            .join('\n\n---\n\n');
+                        
+                        if (fileTexts) {
+                            contentParts.push({
+                                type: 'text',
+                                text: `\n\n以下是附件文件内容：\n\n${fileTexts}`,
+                            });
+                        }
+                        
+                        baseMsg.content = contentParts;
+                    } else {
+                        // 纯文本格式
+                        let enhancedContent = originalContent;
+                        
+                        // 添加文本文件附件
+                        if (msg.attachments && msg.attachments.length > 0) {
+                            const attachmentTexts = msg.attachments
+                                .map(att => {
+                                    if (att.type === 'file') {
+                                        return `## 文件: ${att.name}\n\n\`\`\`\n${att.data}\n\`\`\`\n`;
+                                    }
+                                    return '';
+                                })
+                                .filter(Boolean)
+                                .join('\n\n---\n\n');
+                            
+                            if (attachmentTexts) {
+                                enhancedContent += `\n\n---\n\n以下是附件内容：\n\n${attachmentTexts}`;
+                            }
+                        }
+                        
+                        // 添加上下文文档
+                        enhancedContent += `\n\n---\n\n以下是相关内容作为上下文：\n\n${contextText}`;
+                        
+                        baseMsg.content = enhancedContent;
+                    }
+                }
+
+                return baseMsg;
+            });
 
         // 处理最后一条用户消息，添加附件和上下文文档
         if (messagesToSend.length > 0) {
@@ -3270,6 +3430,27 @@
                         >
                             {@html formatMessage(message.content)}
                         </div>
+
+                        <!-- 显示上下文文档 -->
+                        {#if message.contextDocuments && message.contextDocuments.length > 0}
+                            <div class="ai-message__context-docs">
+                                <div class="ai-message__context-docs-title">
+                                    📎 {t('aiSidebar.context.content')} ({message.contextDocuments
+                                        .length})
+                                </div>
+                                <div class="ai-message__context-docs-list">
+                                    {#each message.contextDocuments as doc}
+                                        <button
+                                            class="ai-message__context-doc-link"
+                                            on:click={() => openDocument(doc.id)}
+                                            title={doc.title}
+                                        >
+                                            {doc.type === 'doc' ? '📄' : '📝'} {doc.title}
+                                        </button>
+                                    {/each}
+                                </div>
+                            </div>
+                        {/if}
 
                         <!-- 显示工具调用 -->
                         {#if message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0}
@@ -3691,7 +3872,6 @@
                     on:paste={handlePaste}
                     placeholder={t('aiSidebar.input.placeholder')}
                     class="ai-sidebar__input"
-                    disabled={isLoading}
                     rows="1"
                 ></textarea>
                 <button
@@ -5100,6 +5280,51 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    // 消息上下文文档样式
+    .ai-message__context-docs {
+        margin-bottom: 12px;
+        padding: 10px;
+        background: var(--b3-theme-surface);
+        border: 1px solid var(--b3-border-color);
+        border-radius: 6px;
+    }
+
+    .ai-message__context-docs-title {
+        font-size: 12px;
+        color: var(--b3-theme-on-surface-light);
+        margin-bottom: 8px;
+        font-weight: 500;
+    }
+
+    .ai-message__context-docs-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .ai-message__context-doc-link {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 10px;
+        font-size: 12px;
+        color: var(--b3-theme-primary);
+        background: var(--b3-theme-primary-lightest);
+        border: 1px solid var(--b3-theme-primary-light);
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-decoration: none;
+        max-width: 200px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+
+        &:hover {
+            background: var(--b3-theme-primary-lighter);
+            border-color: var(--b3-theme-primary);
+        }
     }
 
     // 消息编辑样式

@@ -39,10 +39,18 @@ export interface EditOperation {
     position?: 'before' | 'after'; // 插入位置：before=在blockId之前，after=在blockId之后
 }
 
+export interface ContextDocument {
+    id: string;
+    title: string;
+    content: string;
+    type?: 'doc' | 'block'; // 标识是文档还是块
+}
+
 export interface Message {
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string | MessageContent[];
     attachments?: MessageAttachment[];
+    contextDocuments?: ContextDocument[]; // 关联的上下文文档
     thinking?: string; // 思考过程内容
     editOperations?: EditOperation[]; // 编辑操作
     tool_calls?: ToolCall[]; // Tool Calls
