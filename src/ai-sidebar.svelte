@@ -3818,17 +3818,17 @@
                             <use xlink:href="#iconTrashcan"></use>
                         </svg>
                     </button>
-                    {#if group.type === 'assistant'}
-                        <button
-                            class="b3-button b3-button--text ai-message__action"
-                            on:click={() => regenerateMessage(messageIndex)}
-                            title={t('aiSidebar.actions.regenerate')}
-                        >
-                            <svg class="b3-button__icon">
-                                <use xlink:href="#iconRefresh"></use>
-                            </svg>
-                        </button>
-                    {/if}
+                    <button
+                        class="b3-button b3-button--text ai-message__action"
+                        on:click={() => regenerateMessage(messageIndex)}
+                        title={group.type === 'user'
+                            ? t('aiSidebar.actions.resend')
+                            : t('aiSidebar.actions.regenerate')}
+                    >
+                        <svg class="b3-button__icon">
+                            <use xlink:href="#iconRefresh"></use>
+                        </svg>
+                    </button>
                 </div>
             </div>
         {/each}
