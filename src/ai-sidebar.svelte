@@ -6427,7 +6427,6 @@
         border-bottom: 1px solid var(--b3-border-color);
         flex-shrink: 0;
         min-width: 0; /* 允许在flex布局中缩小 */
-        overflow: hidden; /* 防止内容溢出 */
     }
 
     .ai-sidebar__title {
