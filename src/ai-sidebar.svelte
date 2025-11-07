@@ -1909,7 +1909,7 @@
         // 如果有未选择的多模型响应，先保存它们
         if (isWaitingForAnswerSelection && multiModelResponses.length > 0) {
             const firstSuccessIndex = multiModelResponses.findIndex(r => !r.error && !r.isLoading);
-            
+
             if (firstSuccessIndex !== -1) {
                 const assistantMessage: Message = {
                     role: 'assistant',
@@ -1917,10 +1917,13 @@
                     multiModelResponses: multiModelResponses.map((response, i) => ({
                         ...response,
                         isSelected: i === firstSuccessIndex,
-                        modelName: i === firstSuccessIndex ? response.modelName + ' ✅' : response.modelName,
+                        modelName:
+                            i === firstSuccessIndex
+                                ? response.modelName + ' ✅'
+                                : response.modelName,
                     })),
                 };
-                
+
                 messages = [...messages, assistantMessage];
                 hasUnsavedChanges = true;
             }
@@ -1950,13 +1953,13 @@
         thinkingCollapsed = {};
         currentSessionId = '';
         hasUnsavedChanges = false;
-        
+
         // 清除多模型状态
         multiModelResponses = [];
         isWaitingForAnswerSelection = false;
         selectedAnswerIndex = null;
         selectedTabIndex = 0;
-        
+
         pushMsg(t('aiSidebar.success.clearSuccess'));
     }
 
@@ -2827,7 +2830,7 @@
         // 如果有未选择的多模型响应，先保存它们
         if (isWaitingForAnswerSelection && multiModelResponses.length > 0) {
             const firstSuccessIndex = multiModelResponses.findIndex(r => !r.error && !r.isLoading);
-            
+
             if (firstSuccessIndex !== -1) {
                 const assistantMessage: Message = {
                     role: 'assistant',
@@ -2835,10 +2838,13 @@
                     multiModelResponses: multiModelResponses.map((response, i) => ({
                         ...response,
                         isSelected: i === firstSuccessIndex,
-                        modelName: i === firstSuccessIndex ? response.modelName + ' ✅' : response.modelName,
+                        modelName:
+                            i === firstSuccessIndex
+                                ? response.modelName + ' ✅'
+                                : response.modelName,
                     })),
                 };
-                
+
                 messages = [...messages, assistantMessage];
                 hasUnsavedChanges = true;
             }
@@ -2878,13 +2884,13 @@
             }
             currentSessionId = sessionId;
             hasUnsavedChanges = false;
-            
+
             // 清除多模型状态
             multiModelResponses = [];
             isWaitingForAnswerSelection = false;
             selectedAnswerIndex = null;
             selectedTabIndex = 0;
-            
+
             await scrollToBottom();
         }
     }
@@ -2899,7 +2905,7 @@
         if (isWaitingForAnswerSelection && multiModelResponses.length > 0) {
             // 找到第一个成功的响应作为默认选择（如果所有都失败则不保存）
             const firstSuccessIndex = multiModelResponses.findIndex(r => !r.error && !r.isLoading);
-            
+
             if (firstSuccessIndex !== -1) {
                 // 创建assistant消息，保存所有多模型响应
                 const assistantMessage: Message = {
@@ -2908,10 +2914,13 @@
                     multiModelResponses: multiModelResponses.map((response, i) => ({
                         ...response,
                         isSelected: i === firstSuccessIndex, // 标记第一个成功的为默认选择
-                        modelName: i === firstSuccessIndex ? response.modelName + ' ✅' : response.modelName,
+                        modelName:
+                            i === firstSuccessIndex
+                                ? response.modelName + ' ✅'
+                                : response.modelName,
                     })),
                 };
-                
+
                 messages = [...messages, assistantMessage];
                 hasUnsavedChanges = true;
             }
@@ -4084,12 +4093,19 @@
                                     <div class="ai-message__multi-model-tab-headers">
                                         {#each message.multiModelResponses as response, index}
                                             {@const tabKey = `history_multi_${messageIndex}_${msgIndex}`}
-                                            {@const currentTabIndex = thinkingCollapsed[`${tabKey}_selectedTab`] ?? message.multiModelResponses.findIndex(r => r.isSelected) ?? 0}
+                                            {@const currentTabIndex =
+                                                thinkingCollapsed[`${tabKey}_selectedTab`] ??
+                                                message.multiModelResponses.findIndex(
+                                                    r => r.isSelected
+                                                ) ??
+                                                0}
                                             <button
                                                 class="ai-message__multi-model-tab-header"
-                                                class:ai-message__multi-model-tab-header--active={currentTabIndex === index}
+                                                class:ai-message__multi-model-tab-header--active={currentTabIndex ===
+                                                    index}
                                                 on:click={() => {
-                                                    thinkingCollapsed[`${tabKey}_selectedTab`] = index;
+                                                    thinkingCollapsed[`${tabKey}_selectedTab`] =
+                                                        index;
                                                     thinkingCollapsed = { ...thinkingCollapsed };
                                                 }}
                                             >
@@ -4097,7 +4113,9 @@
                                                     {response.modelName}
                                                 </span>
                                                 {#if response.error}
-                                                    <span class="ai-message__multi-model-tab-status ai-message__multi-model-tab-status--error">
+                                                    <span
+                                                        class="ai-message__multi-model-tab-status ai-message__multi-model-tab-status--error"
+                                                    >
                                                         ❌
                                                     </span>
                                                 {/if}
@@ -4107,7 +4125,12 @@
                                     <div class="ai-message__multi-model-tab-content">
                                         {#each message.multiModelResponses as response, index}
                                             {@const tabKey = `history_multi_${messageIndex}_${msgIndex}`}
-                                            {@const currentTabIndex = thinkingCollapsed[`${tabKey}_selectedTab`] ?? message.multiModelResponses.findIndex(r => r.isSelected) ?? 0}
+                                            {@const currentTabIndex =
+                                                thinkingCollapsed[`${tabKey}_selectedTab`] ??
+                                                message.multiModelResponses.findIndex(
+                                                    r => r.isSelected
+                                                ) ??
+                                                0}
                                             {#if currentTabIndex === index}
                                                 <div class="ai-message__multi-model-tab-panel">
                                                     {#if response.thinking}
@@ -4126,9 +4149,13 @@
                                                                         `history_multi_${messageIndex}_${msgIndex}_${index}_thinking`
                                                                     ]}
                                                                 >
-                                                                    <use xlink:href="#iconRight"></use>
+                                                                    <use
+                                                                        xlink:href="#iconRight"
+                                                                    ></use>
                                                                 </svg>
-                                                                <span class="ai-message__thinking-title">
+                                                                <span
+                                                                    class="ai-message__thinking-title"
+                                                                >
                                                                     💭 思考过程
                                                                 </span>
                                                             </div>
@@ -4136,7 +4163,9 @@
                                                                 <div
                                                                     class="ai-message__thinking-content protyle-wysiwyg"
                                                                 >
-                                                                    {@html formatMessage(response.thinking)}
+                                                                    {@html formatMessage(
+                                                                        response.thinking
+                                                                    )}
                                                                 </div>
                                                             {/if}
                                                         </div>
@@ -4149,7 +4178,9 @@
                                                             : ''}
                                                     >
                                                         {#if response.error}
-                                                            <div class="ai-message__multi-model-tab-panel-error">
+                                                            <div
+                                                                class="ai-message__multi-model-tab-panel-error"
+                                                            >
                                                                 {response.error}
                                                             </div>
                                                         {:else if response.content}
