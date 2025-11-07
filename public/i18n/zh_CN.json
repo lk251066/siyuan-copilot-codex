@@ -7,6 +7,7 @@
             "systemPrompt": "系统提示词",
             "platformManagement": "平台管理",
             "displayAndOperation": "显示与操作",
+            "noteExport": "对话导出",
             "group1": "页签1",
             "group2": "页签2",
             "reset": "重置设置"
@@ -65,6 +66,16 @@
         "messageFontSize": {
             "title": "消息字体大小",
             "description": "调整消息内容的字体大小（默认12px）"
+        },
+        "exportNotebook": {
+            "title": "导出笔记本",
+            "description": "选择保存会话的默认笔记本",
+            "placeholder": "-- 请选择笔记本 --"
+        },
+        "exportDefaultPath": {
+            "title": "全局保存文档位置",
+            "description": "设置保存会话的默认路径，支持sprig语法，如 /{{now | date \"2006/200601\"}}/",
+            "placeholder": "留空则使用当前文档路径"
         },
         "textinput": {
             "title": "文本输入",
@@ -166,6 +177,7 @@
             "regenerate": "重新生成",
             "resend": "重新发送",
             "save": "保存",
+            "saveToNote": "保存到笔记",
             "cancel": "取消",
             "applyEdit": "应用编辑",
             "rejectEdit": "拒绝",
@@ -199,7 +211,22 @@
             "daysAgo": "天前",
             "delete": "删除",
             "save": "保存会话",
-            "load": "加载会话"
+            "load": "加载会话",
+            "saveToNote": {
+                "title": "保存到笔记",
+                "documentName": "文档名称",
+                "documentNamePlaceholder": "留空则自动生成",
+                "notebook": "笔记本",
+                "path": "路径",
+                "pathPlaceholder": "点击选择路径",
+                "selectPath": "选择路径",
+                "currentPath": "当前路径",
+                "confirm": "确定",
+                "cancel": "取消",
+                "searching": "搜索中...",
+                "useCurrentDoc": "使用当前文档路径",
+                "openAfterSave": "保存后打开笔记"
+            }
         },
         "context": {
             "title": "上下文文档",
@@ -272,6 +299,7 @@
             "addPromptSuccess": "已添加自定义平台",
             "deletePromptSuccess": "已删除平台",
             "saveSessionSuccess": "会话已保存",
+            "saveToNoteSuccess": "会话已保存到笔记",
             "applyEditSuccess": "编辑已应用",
             "insertBlockSuccess": "新块已插入",
             "rejectEditSuccess": "已拒绝编辑",

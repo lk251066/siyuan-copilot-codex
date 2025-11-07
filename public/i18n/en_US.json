@@ -7,6 +7,7 @@
             "systemPrompt": "System Prompt",
             "platformManagement": "Platform Management",
             "displayAndOperation": "Display & Operation",
+            "noteExport": "Chat Export",
             "group1": "Tab1",
             "group2": "Tab2",
             "reset": "Reset Settings"
@@ -65,6 +66,16 @@
         "messageFontSize": {
             "title": "Message Font Size",
             "description": "Adjust the font size of message content (default 12px)"
+        },
+        "exportNotebook": {
+            "title": "Export Notebook",
+            "description": "Select the default notebook for saving sessions",
+            "placeholder": "-- Select Notebook --"
+        },
+        "exportDefaultPath": {
+            "title": "Global Save Document Path",
+            "description": "Set the default path for saving sessions, supports sprig syntax like /{{now | date \"2006/200601\"}}/",
+            "placeholder": "Leave empty to use current document path"
         },
         "textinput": {
             "title": "Text Input",
@@ -167,6 +178,7 @@
             "regenerate": "Regenerate",
             "resend": "Resend",
             "save": "Save",
+            "saveToNote": "Save to Note",
             "cancel": "Cancel",
             "applyEdit": "Apply Edit",
             "rejectEdit": "Reject",
@@ -200,7 +212,22 @@
             "daysAgo": "days ago",
             "delete": "Delete",
             "save": "Save Session",
-            "load": "Load Session"
+            "load": "Load Session",
+            "saveToNote": {
+                "title": "Save to Note",
+                "documentName": "Document Name",
+                "documentNamePlaceholder": "Leave empty to auto-generate",
+                "notebook": "Notebook",
+                "path": "Path",
+                "pathPlaceholder": "Click to select path",
+                "selectPath": "Select Path",
+                "currentPath": "Current Path",
+                "confirm": "Confirm",
+                "cancel": "Cancel",
+                "searching": "Searching...",
+                "useCurrentDoc": "Use Current Document Path",
+                "openAfterSave": "Open note after saving"
+            }
         },
         "context": {
             "title": "Context Documents",
@@ -273,6 +300,7 @@
             "addPromptSuccess": "Custom platform added",
             "deletePromptSuccess": "Platform deleted",
             "saveSessionSuccess": "Session saved",
+            "saveToNoteSuccess": "Chat saved to note",
             "applyEditSuccess": "Edit applied successfully",
             "insertBlockSuccess": "New block inserted successfully",
             "rejectEditSuccess": "Edit rejected",

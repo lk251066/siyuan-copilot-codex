@@ -77,7 +77,16 @@ export async function getRiffCards(deckID: string): Promise<any> {
 
 export async function lsNotebooks(): Promise<IReslsNotebooks> {
     let url = '/api/notebook/lsNotebooks';
-    return request(url, '');
+    const res = await request(url, '');
+    try {
+        if (res && res.notebooks && Array.isArray(res.notebooks)) {
+            // 只返回未关闭的笔记本
+            res.notebooks = res.notebooks.filter((n: any) => n.closed === false || n.closed === 0 || n.closed === 'false' ? true : false);
+        }
+    } catch (e) {
+        console.error('Filter notebooks error:', e);
+    }
+    return res;
 }
 
 

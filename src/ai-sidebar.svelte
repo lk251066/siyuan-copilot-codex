@@ -23,6 +23,11 @@
         getBlockKramdown,
         getBlockByID,
         getFileBlob,
+        renderSprig,
+        createDocWithMd,
+        lsNotebooks,
+        searchDocs,
+        getHPathByID,
     } from './api';
     import ModelSelector from './components/ModelSelector.svelte';
     import MultiModelSelector from './components/MultiModelSelector.svelte';
@@ -156,6 +161,23 @@
     let selectedAnswerIndex: number | null = null; // 用户选择的答案索引
     let multiModelLayout: 'card' | 'tab' = 'tab'; // 多模型布局模式：card 或 tab
     let selectedTabIndex: number = 0; // 当前选中的页签索引
+
+    // 保存到笔记相关
+    let isSaveToNoteDialogOpen = false; // 保存到笔记对话框是否打开
+    let saveDocumentName = ''; // 保存的文档名称
+    let saveNotebookId = ''; // 保存的笔记本ID
+    let savePath = ''; // 保存的路径
+    let savePathSearchKeyword = ''; // 路径搜索关键词
+    let savePathSearchResults: any[] = []; // 路径搜索结果
+    let isSavePathSearching = false; // 是否正在搜索路径
+    let savePathSearchTimeout: number | null = null; // 路径搜索防抖
+    let showSavePathDropdown = false; // 是否显示路径下拉框
+    let currentDocPath = ''; // 当前文档路径
+    let currentDocNotebookId = ''; // 当前文档所在笔记本ID
+    let hasDefaultPath = false; // 是否有全局默认路径
+    let saveDialogNotebooks: any[] = []; // 保存对话框中的笔记本列表
+    let saveMessageIndex: number | null = null; // 要保存的单个消息索引（null表示保存整个会话）
+    let openAfterSave = true; // 保存后是否打开笔记
 
     // 订阅设置变化
     let unsubscribe: () => void;
@@ -2441,7 +2463,6 @@
 
                 // 将Markdown写入剪贴板
                 event.clipboardData?.setData('text/plain', markdown);
-
             } else {
                 // 降级：如果Lute不可用，使用纯文本
                 const text = selection.toString();
@@ -2480,7 +2501,7 @@
     }
 
     // 处理右键菜单项点击
-    function handleContextMenuAction(action: 'copy' | 'edit' | 'delete' | 'regenerate') {
+    function handleContextMenuAction(action: 'copy' | 'edit' | 'delete' | 'regenerate' | 'save') {
         if (contextMenuMessageIndex === null) return;
 
         const messageIndex = contextMenuMessageIndex;
@@ -2501,6 +2522,9 @@
                 break;
             case 'regenerate':
                 regenerateMessage(messageIndex);
+                break;
+            case 'save':
+                openSaveToNoteDialog(messageIndex);
                 break;
         }
     }
@@ -3076,6 +3100,298 @@
                 }
             }
         );
+    }
+
+    // 保存到笔记相关函数
+    async function openSaveToNoteDialog(messageIndex: number | null = null) {
+        if (messages.length === 0) {
+            pushErrMsg(t('aiSidebar.errors.emptySession'));
+            return;
+        }
+
+        // 保存消息索引
+        saveMessageIndex = messageIndex;
+
+        // 初始化对话框数据
+        saveDocumentName = '';
+
+        // 解析默认路径
+        let defaultPath = settings.exportDefaultPath || '';
+        if (defaultPath) {
+            try {
+                // 使用 renderSprig 解析 sprig 语法
+                defaultPath = await renderSprig(defaultPath);
+            } catch (error) {
+                console.error('Parse default path error:', error);
+            }
+        }
+
+        // 记录是否有全局默认路径
+        hasDefaultPath = !!defaultPath;
+
+        // 获取当前文档信息
+        currentDocPath = '/';
+        currentDocNotebookId = '';
+        const focusedBlockId = getFocusedBlockId();
+        if (focusedBlockId) {
+            try {
+                const block = await getBlockByID(focusedBlockId);
+                if (block) {
+                    const hpath = await getHPathByID(block.root_id);
+                    currentDocPath = hpath;
+                    currentDocNotebookId = block.box;
+                }
+            } catch (error) {
+                console.error('Get current document info error:', error);
+            }
+        }
+
+        // 预先加载笔记本列表（在打开对话框前）
+        try {
+            const notebooks = await lsNotebooks();
+            if (notebooks?.notebooks && notebooks.notebooks.length > 0) {
+                // 过滤掉已关闭的笔记本
+                saveDialogNotebooks = notebooks.notebooks.filter(n => !n.closed);
+            } else {
+                saveDialogNotebooks = [];
+            }
+        } catch (error) {
+            console.error('Get notebooks error:', error);
+            saveDialogNotebooks = [];
+        }
+
+        // 如果全局保存文档位置为空，使用当前文档路径和笔记本（优先使用当前文档的笔记本）
+        if (!defaultPath) {
+            savePath = currentDocPath;
+            // 优先使用当前文档所在笔记本（如果能取得），并验证该笔记本存在于系统中；若不存在或未取得则回退到第一个笔记本
+            // 只有当 currentDocNotebookId 有值时才赋值，否则保持为空，让后续逻辑处理
+            if (currentDocNotebookId) {
+                saveNotebookId = currentDocNotebookId;
+            }
+
+            if (saveDialogNotebooks.length > 0) {
+                if (saveNotebookId) {
+                    const found = saveDialogNotebooks.find(
+                        n => String(n.id) === String(saveNotebookId)
+                    );
+                    if (!found) {
+                        // 当前文档的笔记本ID没有在笔记本列表中找到，使用第一个作为回退
+                        saveNotebookId = saveDialogNotebooks[0].id;
+                    }
+                } else {
+                    // 没有获取到当前文档的笔记本ID，回退到第一个笔记本
+                    saveNotebookId = saveDialogNotebooks[0].id;
+                }
+            }
+        } else {
+            // 如果有全局默认路径，使用全局配置
+            savePath = defaultPath;
+            // 笔记本优先使用设置中的默认笔记本
+            if (settings.exportNotebook) {
+                saveNotebookId = settings.exportNotebook;
+            } else if (settings.exportLastNotebook) {
+                saveNotebookId = settings.exportLastNotebook;
+            } else {
+                // 使用已加载的笔记本列表
+                if (saveDialogNotebooks.length > 0) {
+                    saveNotebookId = saveDialogNotebooks[0].id;
+                }
+            }
+        }
+
+        // 重置搜索状态
+        savePathSearchKeyword = savePath;
+        savePathSearchResults = [];
+        showSavePathDropdown = false;
+
+        isSaveToNoteDialogOpen = true;
+    }
+
+    function closeSaveToNoteDialog() {
+        isSaveToNoteDialogOpen = false;
+    }
+
+    // 切换到当前文档路径
+    function useCurrentDocPath() {
+        if (currentDocPath && currentDocNotebookId) {
+            savePath = currentDocPath;
+            saveNotebookId = currentDocNotebookId;
+            savePathSearchKeyword = currentDocPath;
+            savePathSearchResults = [];
+            showSavePathDropdown = false;
+        }
+    }
+
+    // 搜索保存路径
+    async function searchSavePath() {
+        if (!savePathSearchKeyword.trim()) {
+            savePathSearchResults = [];
+            return;
+        }
+
+        isSavePathSearching = true;
+        try {
+            const results = await searchDocs(savePathSearchKeyword);
+            // 过滤：只显示选中笔记本中的文档
+            if (results && saveNotebookId) {
+                savePathSearchResults = results.filter(doc => doc.box === saveNotebookId);
+            } else {
+                savePathSearchResults = results || [];
+            }
+        } catch (error) {
+            console.error('Search save path error:', error);
+            savePathSearchResults = [];
+        } finally {
+            isSavePathSearching = false;
+        }
+    }
+
+    // 自动搜索保存路径（带防抖）
+    function autoSearchSavePath() {
+        if (savePathSearchTimeout) {
+            clearTimeout(savePathSearchTimeout);
+        }
+        savePathSearchTimeout = window.setTimeout(() => {
+            searchSavePath();
+        }, 300);
+    }
+
+    // 监听路径搜索关键词变化
+    $: {
+        if (isSaveToNoteDialogOpen && savePathSearchKeyword !== savePath) {
+            autoSearchSavePath();
+        }
+    }
+
+    // 选择路径
+    function selectSavePath(path: string) {
+        savePath = path;
+        savePathSearchKeyword = path;
+        showSavePathDropdown = false;
+        savePathSearchResults = [];
+    }
+
+    // 确认保存到笔记
+    async function confirmSaveToNote() {
+        if (!saveNotebookId) {
+            pushErrMsg('请选择笔记本');
+            return;
+        }
+
+        if (!savePath) {
+            pushErrMsg('请输入保存路径');
+            return;
+        }
+
+        try {
+            // 生成文档名称
+            let docName = saveDocumentName.trim();
+            if (!docName) {
+                docName = generateSessionTitle();
+            }
+
+            // 生成 Markdown 内容（不需要一级标题，思源会自动使用文档名作为标题）
+            let markdown = '';
+
+            // 确定要保存的消息
+            const messagesToSave =
+                saveMessageIndex !== null
+                    ? [messages[saveMessageIndex]].filter(m => m !== undefined && m !== null)
+                    : messages.filter(
+                          m =>
+                              m &&
+                              m !== null &&
+                              m !== undefined &&
+                              (m.role === 'user' || m.role === 'assistant')
+                      );
+
+            for (const message of messagesToSave) {
+                if (!message || !message.role) {
+                    continue;
+                }
+                if (message.role === 'user') {
+                    markdown += `## User\n\n`;
+                } else if (message.role === 'assistant') {
+                    markdown += `## AI\n\n`;
+                } else {
+                    // 跳过其他类型的消息（如 system, tool）
+                    continue;
+                }
+
+                // 处理消息内容
+                const content = getMessageText(message.content);
+                markdown += content + '\n\n';
+
+                // 如果有思考内容，添加思考信息
+                if (message.thinking) {
+                    markdown += `### 思考过程\n\n`;
+                    markdown += message.thinking + '\n\n';
+                }
+
+                // 如果有工具调用后的最终回复
+                if (message.finalReply) {
+                    markdown += `### 最终回复\n\n`;
+                    markdown += message.finalReply + '\n\n';
+                }
+
+                // 如果有附件，添加附件信息
+                if (message.attachments && message.attachments.length > 0) {
+                    markdown += `### 附件\n\n`;
+                    for (const attachment of message.attachments) {
+                        if (attachment.type === 'image') {
+                            markdown += `![${attachment.name}](${attachment.url || attachment.data})\n\n`;
+                        } else {
+                            markdown += `- ${attachment.name}\n`;
+                        }
+                    }
+                    markdown += '\n';
+                }
+
+                // 如果有上下文文档
+                if (message.contextDocuments && message.contextDocuments.length > 0) {
+                    markdown += `### 相关上下文\n\n`;
+                    for (const doc of message.contextDocuments) {
+                        markdown += `- [${doc.title}](siyuan://blocks/${doc.id})\n`;
+                    }
+                    markdown += '\n';
+                }
+            }
+
+            // 检查是否有内容需要保存
+            if (!markdown.trim()) {
+                const errorMsg =
+                    messagesToSave.length === 0
+                        ? '当前会话没有可保存的消息（user/assistant）'
+                        : '消息内容为空，无法保存';
+                pushErrMsg(errorMsg);
+                return;
+            }
+
+            // 创建文档
+            const fullPath = `${savePath}/${docName}`.replace(/\/+/g, '/');
+            const docId = await createDocWithMd(saveNotebookId, fullPath, markdown);
+
+            // 记住上次选择
+            settings.exportLastPath = savePath;
+            settings.exportLastNotebook = saveNotebookId;
+            await plugin.saveSettings(settings);
+
+            pushMsg(t('aiSidebar.success.saveToNoteSuccess'));
+            closeSaveToNoteDialog();
+
+            // 如果选择了保存后打开笔记，则打开文档
+            if (openAfterSave && docId) {
+                try {
+                    await openBlock(docId);
+                } catch (error) {
+                    console.error('Open document error:', error);
+                    pushErrMsg(t('aiSidebar.errors.openDocumentFailed'));
+                }
+            }
+        } catch (error) {
+            console.error('Save to note error:', error);
+            pushErrMsg('保存失败: ' + error.message);
+        }
     }
 
     // 打开插件设置
@@ -4117,6 +4433,13 @@
             </button>
             <button
                 class="b3-button b3-button--text"
+                on:click={() => openSaveToNoteDialog()}
+                title={t('aiSidebar.actions.saveToNote')}
+            >
+                <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
+            </button>
+            <button
+                class="b3-button b3-button--text"
                 on:click={clearChat}
                 title={t('aiSidebar.actions.clear')}
             >
@@ -4590,6 +4913,13 @@
                         title={t('aiSidebar.actions.copyMessage')}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
+                    </button>
+                    <button
+                        class="b3-button b3-button--text ai-message__action"
+                        on:click={() => openSaveToNoteDialog(messageIndex)}
+                        title={t('aiSidebar.actions.saveToNote')}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
                     </button>
                     <button
                         class="b3-button b3-button--text ai-message__action"
@@ -5616,6 +5946,13 @@
             <div class="ai-sidebar__context-menu-divider"></div>
             <button
                 class="ai-sidebar__context-menu-item"
+                on:click={() => handleContextMenuAction('save')}
+            >
+                <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
+                <span>{t('aiSidebar.actions.saveToNote')}</span>
+            </button>
+            <button
+                class="ai-sidebar__context-menu-item"
                 on:click={() => handleContextMenuAction('regenerate')}
             >
                 <svg class="b3-button__icon"><use xlink:href="#iconRefresh"></use></svg>
@@ -5631,6 +5968,124 @@
     <!-- 工具选择器对话框 -->
     {#if isToolSelectorOpen}
         <ToolSelector bind:selectedTools on:close={() => (isToolSelectorOpen = false)} />
+    {/if}
+
+    <!-- 保存到笔记对话框 -->
+    {#if isSaveToNoteDialogOpen}
+        <div class="save-to-note-dialog__overlay" on:click={closeSaveToNoteDialog}></div>
+        <div class="save-to-note-dialog">
+            <div class="save-to-note-dialog__header">
+                <h3>{t('aiSidebar.session.saveToNote.title')}</h3>
+                <button
+                    class="b3-button b3-button--text"
+                    on:click={closeSaveToNoteDialog}
+                    title={t('common.close')}
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
+                </button>
+            </div>
+
+            <!-- 如果有全局默认路径，显示切换到当前文档的按钮 -->
+            {#if hasDefaultPath && currentDocPath && currentDocNotebookId}
+                <div class="save-to-note-dialog__switch-bar">
+                    <button
+                        class="b3-button b3-button--outline"
+                        on:click={useCurrentDocPath}
+                        title={t('aiSidebar.session.saveToNote.useCurrentDoc')}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconFile"></use></svg>
+                        <span>{t('aiSidebar.session.saveToNote.useCurrentDoc')}</span>
+                    </button>
+                </div>
+            {/if}
+
+            <div class="save-to-note-dialog__content">
+                <div class="save-to-note-dialog__field">
+                    <label>{t('aiSidebar.session.saveToNote.documentName')}</label>
+                    <input
+                        type="text"
+                        class="b3-text-field"
+                        bind:value={saveDocumentName}
+                        placeholder={t('aiSidebar.session.saveToNote.documentNamePlaceholder')}
+                    />
+                </div>
+
+                <div class="save-to-note-dialog__field">
+                    <label>{t('aiSidebar.session.saveToNote.notebook')}</label>
+                    <select
+                        class="b3-select"
+                        bind:value={saveNotebookId}
+                        on:change={searchSavePath}
+                    >
+                        {#if saveDialogNotebooks.length > 0}
+                            {#each saveDialogNotebooks as notebook}
+                                <option value={notebook.id}>{notebook.name}</option>
+                            {/each}
+                        {:else}
+                            <option value="">{t('common.loading')}</option>
+                        {/if}
+                    </select>
+                </div>
+
+                <div class="save-to-note-dialog__field">
+                    <label>{t('aiSidebar.session.saveToNote.path')}</label>
+                    <div class="save-to-note-dialog__path-input-wrapper">
+                        <input
+                            type="text"
+                            class="b3-text-field"
+                            bind:value={savePathSearchKeyword}
+                            on:focus={() => (showSavePathDropdown = true)}
+                            on:blur={() => {
+                                setTimeout(() => (showSavePathDropdown = false), 200);
+                            }}
+                            placeholder={t('aiSidebar.session.saveToNote.pathPlaceholder')}
+                        />
+                        <!-- 路径搜索结果下拉框 -->
+                        {#if showSavePathDropdown && (savePathSearchResults.length > 0 || isSavePathSearching)}
+                            <div class="save-to-note-dialog__path-dropdown">
+                                {#if isSavePathSearching}
+                                    <div class="save-to-note-dialog__path-loading">
+                                        {t('aiSidebar.session.saveToNote.searching')}
+                                    </div>
+                                {:else if savePathSearchResults.length > 0}
+                                    {#each savePathSearchResults as doc}
+                                        <div
+                                            class="save-to-note-dialog__path-item"
+                                            on:click={() => selectSavePath(doc.hPath)}
+                                            on:keydown={e => {
+                                                if (e.key === 'Enter') selectSavePath(doc.hPath);
+                                            }}
+                                            role="button"
+                                            tabindex="0"
+                                        >
+                                            <svg class="b3-button__icon">
+                                                <use xlink:href="#iconFile"></use>
+                                            </svg>
+                                            <span>{doc.hPath}</span>
+                                        </div>
+                                    {/each}
+                                {/if}
+                            </div>
+                        {/if}
+                    </div>
+                </div>
+            </div>
+
+            <div class="save-to-note-dialog__footer">
+                <label class="save-to-note-dialog__footer-option">
+                    <input type="checkbox" class="b3-switch" bind:checked={openAfterSave} />
+                    <span>{t('aiSidebar.session.saveToNote.openAfterSave')}</span>
+                </label>
+                <div class="save-to-note-dialog__footer-buttons">
+                    <button class="b3-button b3-button--cancel" on:click={closeSaveToNoteDialog}>
+                        {t('aiSidebar.session.saveToNote.cancel')}
+                    </button>
+                    <button class="b3-button b3-button--primary" on:click={confirmSaveToNote}>
+                        {t('aiSidebar.session.saveToNote.confirm')}
+                    </button>
+                </div>
+            </div>
+        </div>
     {/if}
 
     <!-- 工具批准对话框 -->
@@ -7381,6 +7836,224 @@
         gap: 8px;
         padding: 16px;
         border-top: 1px solid var(--b3-border-color);
+    }
+
+    // 保存到笔记对话框样式
+    .save-to-note-dialog__overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 999;
+    }
+
+    .save-to-note-dialog {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        display: flex;
+        flex-direction: column;
+        width: 90%;
+        max-width: 500px;
+        background: var(--b3-theme-background);
+        border-radius: 8px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+        z-index: 1000;
+        overflow: hidden;
+    }
+
+    .save-to-note-dialog__header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 16px;
+        border-bottom: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-surface);
+
+        h3 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--b3-theme-on-surface);
+        }
+    }
+
+    .save-to-note-dialog__switch-bar {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 12px 16px;
+        background: var(--b3-theme-surface);
+        border-bottom: 1px solid var(--b3-border-color);
+
+        button {
+            padding: 6px 12px;
+            font-size: 13px;
+            color: var(--b3-theme-primary);
+            background: transparent;
+            border: 1px solid var(--b3-theme-primary);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+
+            &:hover {
+                background: var(--b3-theme-primary);
+                color: var(--b3-theme-on-primary);
+            }
+        }
+    }
+
+    .save-to-note-dialog__content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+
+    .save-to-note-dialog__field {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+
+        label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--b3-theme-on-surface);
+        }
+
+        input,
+        select {
+            width: 100%;
+            font-size: 14px;
+            border: 1px solid var(--b3-border-color);
+            border-radius: 4px;
+            background: var(--b3-theme-background);
+            color: var(--b3-theme-on-background);
+
+            &:focus {
+                outline: none;
+                border-color: var(--b3-theme-primary);
+                box-shadow: 0 0 0 2px var(--b3-theme-primary-lightest);
+            }
+        }
+    }
+
+    .save-to-note-dialog__path-input-wrapper {
+        position: relative;
+    }
+
+    .save-to-note-dialog__path-dropdown {
+        max-height: 300px;
+        overflow-y: auto;
+        background: var(--b3-theme-surface);
+        border: 1px solid var(--b3-border-color);
+        border-radius: 4px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        z-index: 10;
+    }
+
+    // 路径搜索结果弹窗样式 - 作为独立popup显示在对话框上层
+    .save-to-note-dialog__path-popup {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 90%;
+        max-width: 500px;
+        max-height: 400px;
+        background: var(--b3-theme-surface);
+        border: 1px solid var(--b3-border-color);
+        border-radius: 8px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        z-index: 1001; // 确保在对话框上层
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .save-to-note-dialog__path-results {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px;
+    }
+
+    .save-to-note-dialog__path-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        cursor: pointer;
+        transition: background 0.2s;
+        border-radius: 4px;
+        margin: 2px 0;
+
+        &:hover {
+            background: var(--b3-theme-primary-lightest);
+        }
+
+        .b3-button__icon {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+            color: var(--b3-theme-on-surface-light);
+        }
+
+        span {
+            flex: 1;
+            font-size: 13px;
+            color: var(--b3-theme-on-surface);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+    }
+
+    .save-to-note-dialog__path-loading {
+        padding: 16px;
+        text-align: center;
+        font-size: 13px;
+        color: var(--b3-theme-on-surface-light);
+    }
+
+    .save-to-note-dialog__footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        padding: 16px;
+        border-top: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-surface);
+
+        .save-to-note-dialog__footer-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            user-select: none;
+
+            span {
+                color: var(--b3-theme-on-surface);
+                font-size: 14px;
+            }
+
+            .b3-switch {
+                cursor: pointer;
+            }
+        }
+
+        .save-to-note-dialog__footer-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .b3-button {
+            min-width: 100px;
+        }
     }
 
     // 工具批准对话框样式

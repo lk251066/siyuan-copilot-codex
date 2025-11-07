@@ -311,7 +311,6 @@
     .multi-model-selector__count-header {
         padding: 8px 16px;
         border-bottom: 1px solid var(--b3-border-color);
-        background: var(--b3-theme-surface-lighter);
     }
 
     .multi-model-selector__count {

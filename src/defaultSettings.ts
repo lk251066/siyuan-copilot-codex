@@ -67,6 +67,12 @@ export const getDefaultSettings = () => ({
     // 多模型设置
     selectedMultiModels: [] as Array<{ provider: string; modelId: string }>, // 选中的多模型列表
 
+    // 笔记导出设置
+    exportNotebook: '' as string,  // 导出笔记本ID
+    exportDefaultPath: '' as string,  // 全局保存文档位置（支持sprig语法）
+    exportLastPath: '' as string,  // 上次保存的路径
+    exportLastNotebook: '' as string,  // 上次保存的笔记本ID
+
     // 保留旧设置以便兼容升级
     aiProvider: 'openai',
     aiApiKey: '',

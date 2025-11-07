@@ -3,7 +3,7 @@
     import SettingPanel from '@/libs/components/setting-panel.svelte';
     import { t } from './utils/i18n';
     import { getDefaultSettings } from './defaultSettings';
-    import { pushMsg, pushErrMsg } from './api';
+    import { pushMsg, pushErrMsg, lsNotebooks } from './api';
     import { confirm } from 'siyuan';
     import ProviderConfigPanel from './components/ProviderConfigPanel.svelte';
     import type { CustomProviderConfig } from './defaultSettings';
@@ -11,6 +11,9 @@
 
     // 使用动态默认设置
     let settings = { ...getDefaultSettings() };
+
+    // 笔记本列表
+    let notebookOptions: Record<string, string> = {};
 
     interface ISettingGroup {
         name: string;
@@ -259,6 +262,27 @@
             ],
         },
         {
+            name: t('settings.settingsGroup.noteExport'),
+            items: [
+                {
+                    key: 'exportNotebook',
+                    value: settings.exportNotebook,
+                    type: 'select',
+                    title: t('settings.exportNotebook.title'),
+                    description: t('settings.exportNotebook.description'),
+                    options: notebookOptions,
+                },
+                {
+                    key: 'exportDefaultPath',
+                    value: settings.exportDefaultPath,
+                    type: 'textinput',
+                    title: t('settings.exportDefaultPath.title'),
+                    description: t('settings.exportDefaultPath.description'),
+                    placeholder: t('settings.exportDefaultPath.placeholder'),
+                },
+            ],
+        },
+        {
             name: t('settings.settingsGroup.reset') || 'Reset Settings',
             items: [
                 {
@@ -348,6 +372,9 @@
             settings.selectedProviderId = selectedProviderId;
         }
 
+        // 加载笔记本列表
+        await loadNotebooks();
+
         updateGroupItems();
         // 确保设置已保存（可能包含新的默认值）
         await saveSettings();
@@ -355,13 +382,47 @@
         // console.debug(t('common.configComplete'));
     }
 
+    // 加载笔记本列表
+    async function loadNotebooks() {
+        try {
+            const notebooks = await lsNotebooks();
+            if (notebooks?.notebooks && notebooks.notebooks.length > 0) {
+                // 构建笔记本选项对象 { id: name }，只显示 closed=false 的笔记本
+                notebookOptions = {};
+                notebookOptions[''] =
+                    t('settings.exportNotebook.placeholder') || '-- 请选择笔记本 --';
+                notebooks.notebooks
+                    .filter(notebook => notebook.closed === false)
+                    .forEach(notebook => {
+                        notebookOptions[notebook.id] = notebook.name;
+                    });
+            } else {
+                notebookOptions = {
+                    '': t('settings.exportNotebook.placeholder') || '-- 请选择笔记本 --',
+                };
+            }
+        } catch (error) {
+            console.error('Load notebooks error:', error);
+            notebookOptions = {
+                '': t('settings.exportNotebook.placeholder') || '-- 请选择笔记本 --',
+            };
+        }
+    }
+
     function updateGroupItems() {
         groups = groups.map(group => ({
             ...group,
-            items: group.items.map(item => ({
-                ...item,
-                value: settings[item.key] ?? item.value,
-            })),
+            items: group.items.map(item => {
+                const updatedItem: any = {
+                    ...item,
+                    value: settings[item.key] ?? item.value,
+                };
+                // 为笔记本选择器更新 options
+                if (item.key === 'exportNotebook') {
+                    updatedItem.options = notebookOptions;
+                }
+                return updatedItem;
+            }),
         }));
     }
 
