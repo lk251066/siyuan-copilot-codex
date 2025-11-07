@@ -119,6 +119,10 @@
     let isSessionManagerOpen = false;
     let hasUnsavedChanges = false;
 
+    // 在新窗口打开菜单
+    let showOpenWindowMenu = false;
+    let openWindowMenuButton: HTMLButtonElement;
+
     // 当前选中的提供商和模型
     let currentProvider = '';
     let currentModelId = '';
@@ -3611,6 +3615,24 @@
         plugin.openSetting();
     }
 
+    // 切换在新窗口打开菜单
+    function toggleOpenWindowMenu(event: MouseEvent) {
+        event.stopPropagation();
+        showOpenWindowMenu = !showOpenWindowMenu;
+    }
+
+    // 在页签打开
+    function openInTab() {
+        plugin.openAITab();
+        showOpenWindowMenu = false;
+    }
+
+    // 在新窗口打开
+    function openInNewWindow() {
+        plugin.openAIWindow();
+        showOpenWindowMenu = false;
+    }
+
     // 提示词管理函数
     async function loadPrompts() {
         try {
@@ -3782,6 +3804,11 @@
         // 关闭右键菜单
         if (contextMenuVisible && !target.closest('.ai-sidebar__context-menu')) {
             closeContextMenu();
+        }
+
+        // 关闭打开窗口菜单
+        if (showOpenWindowMenu && !target.closest('.ai-sidebar__open-window-menu-container')) {
+            showOpenWindowMenu = false;
         }
 
         if (isPromptSelectorOpen) {
@@ -4637,6 +4664,32 @@
                 on:new={newSession}
                 on:update={e => handleSessionUpdate(e.detail.sessions)}
             />
+            <div class="ai-sidebar__open-window-menu-container" style="position: relative;">
+                <button
+                    class="b3-button b3-button--text"
+                    bind:this={openWindowMenuButton}
+                    on:click={toggleOpenWindowMenu}
+                    title="在新窗口打开"
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconOpenWindow"></use></svg>
+                </button>
+                {#if showOpenWindowMenu}
+                    <div class="ai-sidebar__open-window-menu">
+                        <button class="b3-menu__item" on:click={openInTab}>
+                            <svg class="b3-menu__icon">
+                                <use xlink:href="#iconOpenWindow"></use>
+                            </svg>
+                            <span class="b3-menu__label">在页签打开</span>
+                        </button>
+                        <button class="b3-menu__item" on:click={openInNewWindow}>
+                            <svg class="b3-menu__icon">
+                                <use xlink:href="#iconOpenWindow"></use>
+                            </svg>
+                            <span class="b3-menu__label">在新窗口打开</span>
+                        </button>
+                    </div>
+                {/if}
+            </div>
             <button
                 class="b3-button b3-button--text"
                 on:click={copyAsMarkdown}
@@ -6395,6 +6448,53 @@
         display: flex;
         align-items: center;
         gap: 4px;
+    }
+
+    .ai-sidebar__open-window-menu-container {
+        position: relative;
+    }
+
+    .ai-sidebar__open-window-menu {
+        position: absolute;
+        top: 100%;
+        right: 0;
+        margin-top: 4px;
+        background: var(--b3-theme-background);
+        border: 1px solid var(--b3-border-color);
+        border-radius: 4px;
+        box-shadow: var(--b3-dialog-shadow);
+        z-index: 1000;
+        min-width: 150px;
+        overflow: hidden;
+    }
+
+    .ai-sidebar__open-window-menu .b3-menu__item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        width: 100%;
+        border: none;
+        background: none;
+        text-align: left;
+        cursor: pointer;
+        color: var(--b3-theme-on-background);
+        font-size: 14px;
+        transition: background-color 0.2s;
+
+        &:hover {
+            background: var(--b3-list-hover);
+        }
+
+        .b3-menu__icon {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+        }
+
+        .b3-menu__label {
+            flex: 1;
+        }
     }
 
     .ai-sidebar__context-docs {
