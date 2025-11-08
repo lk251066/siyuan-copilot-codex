@@ -2745,10 +2745,10 @@
             // 使用思源的 Lute 将 HTML 转换为 Markdown
             if (window.Lute) {
                 const lute = window.Lute.New();
-                let result = lute.HTML2Markdown(html);
+                let markdown= lute.HTML2Md(html);
                 
                 // 将Markdown写入剪贴板
-                event.clipboardData?.setData('text/plain', result[0]);
+                event.clipboardData?.setData('text/plain', markdown);
             } else {
                 // 降级：如果Lute不可用，使用纯文本
                 const text = selection.toString();
