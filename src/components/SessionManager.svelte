@@ -65,7 +65,7 @@
             toggleSessionSelection(sessionId);
             return;
         }
-        
+
         dispatch('load', { sessionId });
         isOpen = false;
     }
@@ -120,7 +120,7 @@
         }
 
         dispatch('batchDelete', { sessionIds: Array.from(selectedSessionIds) });
-        
+
         // 删除后退出多选模式
         isMultiSelectMode = false;
         selectedSessionIds.clear();
@@ -128,7 +128,8 @@
     }
 
     // 是否全选
-    $: isAllSelected = sortedSessions.length > 0 && selectedSessionIds.size === sortedSessions.length;
+    $: isAllSelected =
+        sortedSessions.length > 0 && selectedSessionIds.size === sortedSessions.length;
 
     function closeOnOutsideClick(event: MouseEvent) {
         const target = event.target as HTMLElement;
@@ -319,7 +320,9 @@
                             title={isAllSelected ? '取消全选' : '全选'}
                         >
                             <svg class="b3-button__icon">
-                                <use xlink:href={isAllSelected ? '#iconCloseRound' : '#iconSelect'}></use>
+                                <use
+                                    xlink:href={isAllSelected ? '#iconCloseRound' : '#iconSelect'}
+                                ></use>
                             </svg>
                         </button>
                         <button
@@ -506,7 +509,7 @@
         button {
             font-size: 12px;
             padding: 4px 12px;
-            
+
             &:disabled {
                 opacity: 0.5;
                 cursor: not-allowed;
@@ -569,7 +572,7 @@
         margin: 0;
         cursor: pointer;
 
-        input[type="checkbox"] {
+        input[type='checkbox'] {
             width: 16px;
             height: 16px;
             cursor: pointer;

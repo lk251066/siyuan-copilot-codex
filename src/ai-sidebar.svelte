@@ -3510,7 +3510,7 @@
             async () => {
                 // 【修复】删除前重新加载最新的会话列表，避免多页签覆盖问题
                 await loadSessions();
-                
+
                 // 过滤掉要删除的会话
                 sessions = sessions.filter(s => !sessionIds.includes(s.id));
                 await saveSessions();
