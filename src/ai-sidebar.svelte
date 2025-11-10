@@ -368,7 +368,6 @@
         document.addEventListener('scroll', closeContextMenu, true);
         // 添加全局复制事件监听器
         document.addEventListener('copy', handleCopyEvent);
-
     });
 
     onDestroy(async () => {
@@ -383,7 +382,6 @@
         document.removeEventListener('scroll', closeContextMenu, true);
         // 移除全局复制事件监听器
         document.removeEventListener('copy', handleCopyEvent);
-
 
         // 保存工具配置
         if (isToolConfigLoaded) {
@@ -1110,7 +1108,6 @@
                 ...response,
                 isSelected: i === index, // 标记哪个被选择,
                 modelName: i === index ? ' ✅' + response.modelName : response.modelName, // 选择的模型名添加✅
-
             })),
         };
 
@@ -1718,7 +1715,10 @@
                             onThinkingComplete: enableThinking
                                 ? (thinking: string) => {
                                       isThinkingPhase = false;
-                                      thinkingCollapsed = { ...thinkingCollapsed, [messages.length]: true };
+                                      thinkingCollapsed = {
+                                          ...thinkingCollapsed,
+                                          [messages.length]: true,
+                                      };
                                   }
                                 : undefined,
                             onToolCallComplete: async (toolCalls: ToolCall[]) => {
@@ -1961,7 +1961,10 @@
                         onThinkingComplete: enableThinking
                             ? (thinking: string) => {
                                   isThinkingPhase = false;
-                                  thinkingCollapsed = { ...thinkingCollapsed, [messages.length]: true };
+                                  thinkingCollapsed = {
+                                      ...thinkingCollapsed,
+                                      [messages.length]: true,
+                                  };
                               }
                             : undefined,
                         onChunk: async (chunk: string) => {
@@ -2187,8 +2190,10 @@
                     multiModelResponses: multiModelResponses.map((response, i) => ({
                         ...response,
                         isSelected: i === firstSuccessIndex,
-                        modelName: i === firstSuccessIndex ? ' ✅' + response.modelName : response.modelName, // 选择的模型名添加✅
-
+                        modelName:
+                            i === firstSuccessIndex
+                                ? ' ✅' + response.modelName
+                                : response.modelName, // 选择的模型名添加✅
                     })),
                 };
 
@@ -2259,8 +2264,6 @@
             }
         }
     }
-
-
 
     // 使用思源内置的Lute渲染markdown为HTML
     // 将消息内容转换为字符串
@@ -5268,12 +5271,16 @@
                                                     </div>
 
                                                     {#if response.thinking}
-                                                        {@const isCollapsed = response.thinkingCollapsed ?? true}
+                                                        {@const isCollapsed =
+                                                            response.thinkingCollapsed ?? true}
                                                         <div class="ai-message__thinking">
                                                             <div
                                                                 class="ai-message__thinking-header"
                                                                 on:click={() => {
-                                                                    message.multiModelResponses[index].thinkingCollapsed = !isCollapsed;
+                                                                    message.multiModelResponses[
+                                                                        index
+                                                                    ].thinkingCollapsed =
+                                                                        !isCollapsed;
                                                                     messages = [...messages];
                                                                 }}
                                                             >
@@ -5370,14 +5377,23 @@
                                 {#if message.contextDocuments && message.contextDocuments.length > 0}
                                     <div class="ai-message__context-docs-list">
                                         {#each message.contextDocuments as doc}
-                                            <button
-                                                class="ai-message__context-doc-link"
-                                                on:click={() => openDocument(doc.id)}
-                                                title={doc.title}
-                                            >
-                                                {doc.type === 'doc' ? '📄' : '📝'}
-                                                {doc.title}
-                                            </button>
+                                            <div class="ai-sidebar__context-doc-item">
+                                                <button
+                                                    class="ai-sidebar__context-doc-link"
+                                                    on:click={() => openDocument(doc.id)}
+                                                    title={doc.title}
+                                                >
+                                                    {doc.type === 'doc' ? '📄' : '📝'}
+                                                    {doc.title}
+                                                </button>
+                                                <button
+                                                    class="b3-button b3-button--text ai-sidebar__context-doc-copy"
+                                                    on:click={() => copyMessage(doc.content || '')}
+                                                    title={t('aiSidebar.actions.copyMessage')}
+                                                >
+                                                    <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
+                                                </button>
+                                            </div>
                                         {/each}
                                     </div>
                                 {/if}
@@ -5791,33 +5807,34 @@
                                     </div>
                                 </div>
 
-                            <!-- 思考过程 -->
-                            {#if response.thinking}
-                                <div class="ai-message__thinking">
-                                    <div
-                                        class="ai-message__thinking-header"
-                                        on:click={() => {
-                                            multiModelResponses[index].thinkingCollapsed = !multiModelResponses[index].thinkingCollapsed;
-                                            multiModelResponses = [...multiModelResponses];
-                                        }}
-                                    >
-                                        <svg
-                                            class="ai-message__thinking-icon"
-                                            class:collapsed={response.thinkingCollapsed}
+                                <!-- 思考过程 -->
+                                {#if response.thinking}
+                                    <div class="ai-message__thinking">
+                                        <div
+                                            class="ai-message__thinking-header"
+                                            on:click={() => {
+                                                multiModelResponses[index].thinkingCollapsed =
+                                                    !multiModelResponses[index].thinkingCollapsed;
+                                                multiModelResponses = [...multiModelResponses];
+                                            }}
                                         >
-                                            <use xlink:href="#iconRight"></use>
-                                        </svg>
-                                        <span class="ai-message__thinking-title">
-                                            💭 {t('aiSidebar.thinkingProcess')}
-                                        </span>
-                                    </div>
-                                    {#if !response.thinkingCollapsed}
-                                        <div class="ai-message__thinking-content b3-typography">
-                                            {@html formatMessage(response.thinking)}
+                                            <svg
+                                                class="ai-message__thinking-icon"
+                                                class:collapsed={response.thinkingCollapsed}
+                                            >
+                                                <use xlink:href="#iconRight"></use>
+                                            </svg>
+                                            <span class="ai-message__thinking-title">
+                                                💭 {t('aiSidebar.thinkingProcess')}
+                                            </span>
                                         </div>
-                                    {/if}
-                                </div>
-                            {/if}
+                                        {#if !response.thinkingCollapsed}
+                                            <div class="ai-message__thinking-content b3-typography">
+                                                {@html formatMessage(response.thinking)}
+                                            </div>
+                                        {/if}
+                                    </div>
+                                {/if}
 
                                 <div
                                     class="ai-sidebar__multi-model-card-content b3-typography"
@@ -5940,7 +5957,11 @@
                                             <div
                                                 class="ai-message__thinking-header"
                                                 on:click={() => {
-                                                    multiModelResponses[selectedTabIndex].thinkingCollapsed = !multiModelResponses[selectedTabIndex].thinkingCollapsed;
+                                                    multiModelResponses[
+                                                        selectedTabIndex
+                                                    ].thinkingCollapsed =
+                                                        !multiModelResponses[selectedTabIndex]
+                                                            .thinkingCollapsed;
                                                     multiModelResponses = [...multiModelResponses];
                                                 }}
                                             >
@@ -6019,6 +6040,13 @@
                             title="点击查看文档"
                         >
                             📄 {doc.title}
+                        </button>
+                        <button
+                            class="b3-button b3-button--text ai-sidebar__context-doc-copy"
+                            on:click={() => copyMessage(doc.content || '')}
+                            title={t('aiSidebar.actions.copyMessage')}
+                        >
+                            <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
                         </button>
                     </div>
                 {/each}
@@ -6970,6 +6998,27 @@
         &:hover {
             background: var(--b3-theme-error-lighter);
             color: var(--b3-theme-error);
+        }
+    }
+
+    .ai-sidebar__context-doc-copy {
+        flex-shrink: 0;
+        padding: 4px;
+        border: none;
+        background: none;
+        cursor: pointer;
+        color: var(--b3-theme-on-surface-light);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        .b3-button__icon {
+            width: 14px;
+            height: 14px;
+        }
+
+        &:hover {
+            color: var(--b3-theme-primary);
         }
     }
 
