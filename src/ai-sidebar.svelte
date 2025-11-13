@@ -504,7 +504,8 @@
                         messages = [...messages];
                     },
                     onComplete: async (text: string) => {
-                        msg.multiModelResponses[responseIndex].content = convertLatexToMarkdown(text);
+                        msg.multiModelResponses[responseIndex].content =
+                            convertLatexToMarkdown(text);
                         msg.multiModelResponses[responseIndex].thinking = thinking;
                         msg.multiModelResponses[responseIndex].isLoading = false;
                         if (thinking && !msg.multiModelResponses[responseIndex].thinkingCollapsed) {
@@ -1221,32 +1222,6 @@
         // 等待所有请求完成
         await Promise.all(promises);
 
-        // 如果仍在等待用户选择答案，自动保存多模型响应并默认选择第一个成功的（或第一个）
-        if (isWaitingForAnswerSelection && multiModelResponses.length > 0) {
-            const firstSuccessIndex = multiModelResponses.findIndex(r => !r.error && !r.isLoading);
-            const defaultIndex = firstSuccessIndex !== -1 ? firstSuccessIndex : 0;
-
-            const assistantMessage: Message = {
-                role: 'assistant',
-                content: multiModelResponses[defaultIndex].content || '',
-                thinking: multiModelResponses[defaultIndex].thinking,
-                multiModelResponses: multiModelResponses.map((response, i) => ({
-                    ...response,
-                    isSelected: i === defaultIndex,
-                    modelName: i === defaultIndex ? ' ✅' + response.modelName : response.modelName,
-                })),
-            };
-
-            messages = [...messages, assistantMessage];
-            hasUnsavedChanges = true;
-
-            // 清除多模型状态
-            multiModelResponses = [];
-            isWaitingForAnswerSelection = false;
-            selectedAnswerIndex = null;
-            selectedTabIndex = 0;
-        }
-
         isLoading = false;
         abortController = null;
     }
@@ -1258,8 +1233,16 @@
         userContent: string,
         lastUserMessage: Message
     ) {
+        // 过滤掉空的 assistant 消息，防止某些 Provider（例如 Kimi）报错
         let messagesToSend = messages
-            .filter(msg => msg.role !== 'system')
+            .filter(msg => {
+                if (msg.role === 'system') return false;
+                if (msg.role === 'assistant') {
+                    const text = typeof msg.content === 'string' ? msg.content : getMessageText(msg.content || []);
+                    return text && text.toString().trim() !== '';
+                }
+                return true;
+            })
             .map((msg, index, array) => {
                 const baseMsg: any = {
                     role: msg.role,
@@ -1616,8 +1599,16 @@
         // 准备发送给AI的消息（包含系统提示词和上下文文档）
         // 深拷贝消息数组，避免修改原始消息
         // 保留工具调用相关字段（如果存在），以便在 Agent 模式下正确处理历史工具调用
+        // 过滤掉空的 assistant 消息，防止部分 Provider（例如 Kimi）返回错误
         let messagesToSend = messages
-            .filter(msg => msg.role !== 'system')
+            .filter(msg => {
+                if (msg.role === 'system') return false;
+                if (msg.role === 'assistant') {
+                    const text = typeof msg.content === 'string' ? msg.content : getMessageText(msg.content || []);
+                    return text && text.toString().trim() !== '';
+                }
+                return true;
+            })
             .map((msg, index, array) => {
                 const baseMsg: any = {
                     role: msg.role,
@@ -5668,19 +5659,26 @@
                                                             >
                                                                 {response.modelName}
                                                             </span>
-
                                                         </div>
                                                         <div
                                                             class="ai-message__multi-model-tab-panel-actions"
                                                         >
                                                             {#if !response.error && response.content}
-                                                                                                                            <button
+                                                                <button
                                                                     class="b3-button b3-button--text"
-                                                                    on:click={() => regenerateHistoryModelResponse(messageIndex + msgIndex, index)}
-                                                                    title={t('aiSidebar.actions.regenerate')}
+                                                                    on:click={() =>
+                                                                        regenerateHistoryModelResponse(
+                                                                            messageIndex + msgIndex,
+                                                                            index
+                                                                        )}
+                                                                    title={t(
+                                                                        'aiSidebar.actions.regenerate'
+                                                                    )}
                                                                 >
                                                                     <svg class="b3-button__icon">
-                                                                        <use xlink:href="#iconRefresh"></use>
+                                                                        <use
+                                                                            xlink:href="#iconRefresh"
+                                                                        ></use>
                                                                     </svg>
                                                                 </button>
                                                                 <button
