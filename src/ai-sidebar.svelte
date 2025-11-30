@@ -3299,11 +3299,20 @@
             // 使用更可靠的方式：检查选区开始/结束节点的祖先是否包含 code/pre
             const startContainer = range.startContainer as Node | null;
             const endContainer = range.endContainer as Node | null;
-            const startElem = startContainer && startContainer.nodeType === Node.ELEMENT_NODE ? (startContainer as Element) : (startContainer?.parentElement as Element | null);
-            const endElem = endContainer && endContainer.nodeType === Node.ELEMENT_NODE ? (endContainer as Element) : (endContainer?.parentElement as Element | null);
-            const ancestorContainsCode = !!startElem?.closest('pre') || !!endElem?.closest('pre, code');
+            const startElem =
+                startContainer && startContainer.nodeType === Node.ELEMENT_NODE
+                    ? (startContainer as Element)
+                    : (startContainer?.parentElement as Element | null);
+            const endElem =
+                endContainer && endContainer.nodeType === Node.ELEMENT_NODE
+                    ? (endContainer as Element)
+                    : (endContainer?.parentElement as Element | null);
+            const ancestorContainsCode =
+                !!startElem?.closest('pre') || !!endElem?.closest('pre, code');
             // 同时检查 cloneContents 中是否包含高亮器 span 或者 language class 等指示为代码的元素
-            const hasHighlightedSpan = !!div.querySelector('[class*="hljs-"], [class*="language-"], [data-language]');
+            const hasHighlightedSpan = !!div.querySelector(
+                '[class*="hljs-"], [class*="language-"], [data-language]'
+            );
             const containsCodeBlock = ancestorContainsCode || hasHighlightedSpan;
 
             // 如果选区为代码块或包含高亮 / 具有典型代码特征（如下划线+括号/分号/=），认为是代码片段
@@ -10310,5 +10319,4 @@
             height: 20px !important;
         }
     }
-
 </style>
