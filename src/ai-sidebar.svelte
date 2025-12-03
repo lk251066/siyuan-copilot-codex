@@ -3162,10 +3162,15 @@
         if (!element) return;
 
         // 使用 tick 确保 DOM 已更新
-        tick().then(() => {
+        tick().then(async () => {
             try {
-                if (typeof window === 'undefined' || !(window as any).hljs) {
-                    return;
+                // 确保 highlight.js 已加载
+                if (!(window as any).hljs) {
+                    const loaded = await initHljs();
+                    if (!loaded) {
+                        console.error('Failed to initialize highlight.js');
+                        return;
+                    }
                 }
 
                 const hljs = (window as any).hljs;
@@ -3287,6 +3292,79 @@
             return (window as any).katex !== undefined && (window as any).katex !== null;
         } catch (error) {
             console.error('Init KaTeX error:', error);
+            return false;
+        }
+    }
+
+    // 初始化 highlight.js
+    async function initHljs() {
+        if ((window as any).hljs) return true;
+
+        try {
+            // 使用思源的 CDN 加载 highlight.js
+            const cdn = Constants.PROTYLE_CDN;
+
+            // 设置代码主题样式
+            const setCodeTheme = (cdnUrl = cdn) => {
+                const protyleHljsStyle = document.getElementById("protyleHljsStyle") as HTMLLinkElement;
+                let css;
+                if ((window as any).siyuan.config.appearance.mode === 0) {
+                    css = (window as any).siyuan.config.appearance.codeBlockThemeLight;
+                    if (!Constants.SIYUAN_CONFIG_APPEARANCE_LIGHT_CODE.includes(css)) {
+                        css = "default";
+                    }
+                } else {
+                    css = (window as any).siyuan.config.appearance.codeBlockThemeDark;
+                    if (!Constants.SIYUAN_CONFIG_APPEARANCE_DARK_CODE.includes(css)) {
+                        css = "github-dark";
+                    }
+                }
+                const href = `${cdnUrl}/js/highlight.js/styles/${css}.min.css`;
+                if (!protyleHljsStyle) {
+                    const link = document.createElement('link');
+                    link.id = 'protyleHljsStyle';
+                    link.rel = 'stylesheet';
+                    link.href = href;
+                    document.head.appendChild(link);
+                } else if (!protyleHljsStyle.href.includes(href)) {
+                    protyleHljsStyle.remove();
+                    const link = document.createElement('link');
+                    link.id = 'protyleHljsStyle';
+                    link.rel = 'stylesheet';
+                    link.href = href;
+                    document.head.appendChild(link);
+                }
+            };
+
+            setCodeTheme(cdn);
+
+            // 添加 highlight.js 主脚本
+            if (!document.getElementById('protyleHljsScript')) {
+                await new Promise<void>((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.id = 'protyleHljsScript';
+                    script.src = `${cdn}/js/highlight.js/highlight.min.js`;
+                    script.onload = () => resolve();
+                    script.onerror = () => reject(new Error('Failed to load highlight.js'));
+                    document.head.appendChild(script);
+                });
+            }
+
+            // 添加 highlight.js 第三方语言脚本
+            if (!document.getElementById('protyleHljsThirdScript')) {
+                await new Promise<void>((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.id = 'protyleHljsThirdScript';
+                    script.src = `${cdn}/js/highlight.js/third-languages.js`;
+                    script.onload = () => resolve();
+                    script.onerror = () => reject(new Error('Failed to load highlight.js third languages'));
+                    document.head.appendChild(script);
+                });
+            }
+
+            return (window as any).hljs !== undefined && (window as any).hljs !== null;
+        } catch (error) {
+            console.error('Init highlight.js error:', error);
             return false;
         }
     }
@@ -8419,6 +8497,7 @@
         overflow-x: auto;
         user-select: text; // 允许鼠标选择文本进行复制
         cursor: text; // 显示文本选择光标
+        box-shadow: 0 0 0 1px var(--b3-border-color);
     }
 
     .ai-message--user {
