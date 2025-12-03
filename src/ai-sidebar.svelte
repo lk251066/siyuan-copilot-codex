@@ -3306,17 +3306,19 @@
 
             // 设置代码主题样式
             const setCodeTheme = (cdnUrl = cdn) => {
-                const protyleHljsStyle = document.getElementById("protyleHljsStyle") as HTMLLinkElement;
+                const protyleHljsStyle = document.getElementById(
+                    'protyleHljsStyle'
+                ) as HTMLLinkElement;
                 let css;
                 if ((window as any).siyuan.config.appearance.mode === 0) {
                     css = (window as any).siyuan.config.appearance.codeBlockThemeLight;
                     if (!Constants.SIYUAN_CONFIG_APPEARANCE_LIGHT_CODE.includes(css)) {
-                        css = "default";
+                        css = 'default';
                     }
                 } else {
                     css = (window as any).siyuan.config.appearance.codeBlockThemeDark;
                     if (!Constants.SIYUAN_CONFIG_APPEARANCE_DARK_CODE.includes(css)) {
-                        css = "github-dark";
+                        css = 'github-dark';
                     }
                 }
                 const href = `${cdnUrl}/js/highlight.js/styles/${css}.min.css`;
@@ -3357,7 +3359,8 @@
                     script.id = 'protyleHljsThirdScript';
                     script.src = `${cdn}/js/highlight.js/third-languages.js`;
                     script.onload = () => resolve();
-                    script.onerror = () => reject(new Error('Failed to load highlight.js third languages'));
+                    script.onerror = () =>
+                        reject(new Error('Failed to load highlight.js third languages'));
                     document.head.appendChild(script);
                 });
             }
