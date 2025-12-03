@@ -7,6 +7,9 @@
         type EditOperation,
         type ToolCall,
         type ContextDocument,
+        type ThinkingEffort,
+        isSupportedThinkingGeminiModel,
+        isSupportedThinkingClaudeModel,
     } from './ai-chat';
     import type { MessageContent } from './ai-chat';
     import { getActiveEditor } from 'siyuan';
@@ -337,6 +340,7 @@
                     signal: localAbort.signal,
                     customBody,
                     enableThinking: modelConfig.capabilities?.thinking || false,
+                    reasoningEffort: modelConfig.thinkingEffort || 'medium',
                     onThinkingChunk: async (chunk: string) => {
                         thinking += chunk;
                         multiModelResponses[index].thinking = thinking;
@@ -520,6 +524,7 @@
                     enableThinking:
                         modelConfig.capabilities?.thinking &&
                         (modelConfig.thinkingEnabled || false),
+                    reasoningEffort: modelConfig.thinkingEffort || 'medium',
                     onThinkingChunk: async (chunk: string) => {
                         thinking += chunk;
                         msg.multiModelResponses[responseIndex].thinking = thinking;
@@ -1217,6 +1222,125 @@
         return modelConfig?.capabilities?.thinking || false;
     })();
 
+    // 是否显示思考程度选择器（只有 Gemini 和 Claude 模型在启用思考模式时才显示）
+    $: showThinkingEffortSelector = (() => {
+        if (!isThinkingModeEnabled || !currentModelId) {
+            return false;
+        }
+        // 检查是否是支持思考程度设置的模型（Gemini 或 Claude）
+        return isSupportedThinkingGeminiModel(currentModelId) || isSupportedThinkingClaudeModel(currentModelId);
+    })();
+
+    // 当前模型是否是 Gemini 模型（用于决定是否显示"默认"选项）
+    $: isCurrentModelGemini = currentModelId ? isSupportedThinkingGeminiModel(currentModelId) : false;
+
+    // 当前思考程度设置
+    $: currentThinkingEffort = (() => {
+        if (!currentProvider || !currentModelId) {
+            return 'medium' as ThinkingEffort;
+        }
+
+        const providerConfig = (() => {
+            const customProvider = settings.aiProviders?.customProviders?.find(
+                (p: any) => p.id === currentProvider
+            );
+            if (customProvider) {
+                return customProvider;
+            }
+
+            if (settings.aiProviders?.[currentProvider]) {
+                return settings.aiProviders[currentProvider];
+            }
+
+            if (providers[currentProvider] && !Array.isArray(providers[currentProvider])) {
+                return providers[currentProvider];
+            }
+
+            if (providers.customProviders && Array.isArray(providers.customProviders)) {
+                return providers.customProviders.find((p: any) => p.id === currentProvider);
+            }
+
+            return null;
+        })();
+
+        if (!providerConfig) {
+            return 'medium' as ThinkingEffort;
+        }
+
+        const modelConfig = providerConfig.models?.find((m: any) => m.id === currentModelId);
+        return (modelConfig?.thinkingEffort || 'medium') as ThinkingEffort;
+    })();
+
+    // 更新思考程度
+    async function updateThinkingEffort(effort: ThinkingEffort) {
+        if (!currentProvider || !currentModelId) {
+            return;
+        }
+
+        const modelConfig = getCurrentModelConfig();
+        if (!modelConfig) {
+            return;
+        }
+
+        modelConfig.thinkingEffort = effort;
+
+        // 获取提供商配置
+        const providerConfig = getCurrentProviderConfig();
+        if (!providerConfig) {
+            return;
+        }
+
+        // 找到模型在数组中的索引并更新
+        const modelIndex = providerConfig.models.findIndex((m: any) => m.id === currentModelId);
+        if (modelIndex !== -1) {
+            providerConfig.models[modelIndex] = { ...modelConfig };
+            providerConfig.models = [...providerConfig.models];
+        }
+
+        // 更新 settings 并保存
+        const isCustomProvider =
+            settings.aiProviders.customProviders?.some((p: any) => p.id === currentProvider) ||
+            false;
+
+        if (isCustomProvider) {
+            const customProviders = settings.aiProviders.customProviders || [];
+            const customProviderIndex = customProviders.findIndex(
+                (p: any) => p.id === currentProvider
+            );
+            if (customProviderIndex !== -1) {
+                customProviders[customProviderIndex] = { ...providerConfig };
+                settings = {
+                    ...settings,
+                    aiProviders: {
+                        ...settings.aiProviders,
+                        customProviders: [...customProviders],
+                    },
+                };
+            }
+        } else {
+            settings = {
+                ...settings,
+                aiProviders: {
+                    ...settings.aiProviders,
+                    [currentProvider]: providerConfig,
+                },
+            };
+        }
+
+        providers = {
+            ...providers,
+            [currentProvider]: providerConfig,
+        };
+
+        await plugin.saveSettings(settings);
+    }
+
+    // 处理思考程度选择器变化
+    function handleThinkingEffortChange(event: Event) {
+        const target = event.currentTarget as HTMLSelectElement;
+        updateThinkingEffort(target.value as ThinkingEffort);
+    }
+
     // 切换思考模式
     async function toggleThinkingMode() {
         if (!currentProvider || !currentModelId) {
@@ -1433,6 +1557,7 @@
                         enableThinking:
                             modelConfig.capabilities?.thinking &&
                             (modelConfig.thinkingEnabled || false),
+                        reasoningEffort: modelConfig.thinkingEffort || 'medium',
                         customBody, // 传递自定义参数
                         onThinkingChunk: async (chunk: string) => {
                             thinking += chunk;
@@ -2350,6 +2475,7 @@
                             stream: true,
                             signal: abortController.signal,
                             enableThinking,
+                            reasoningEffort: modelConfig.thinkingEffort || 'medium',
                             tools: toolsForAgent,
                             customBody, // 传递自定义参数
                             onThinkingChunk: enableThinking
@@ -2598,6 +2724,7 @@
                         stream: true,
                         signal: abortController.signal,
                         enableThinking,
+                        reasoningEffort: modelConfig.thinkingEffort || 'medium',
                         customBody, // 传递自定义参数
                         onThinkingChunk: enableThinking
                             ? async (chunk: string) => {
@@ -5701,6 +5828,7 @@
                     signal: abortController.signal,
                     customBody,
                     enableThinking,
+                    reasoningEffort: modelConfig.thinkingEffort || 'medium',
                     onThinkingChunk: enableThinking
                         ? async (chunk: string) => {
                               isThinkingPhase = true;
@@ -7103,11 +7231,26 @@
                                 class="ai-sidebar__thinking-toggle b3-button b3-button--text"
                                 class:ai-sidebar__thinking-toggle--active={isThinkingModeEnabled}
                                 on:click={toggleThinkingMode}
-                                title={isThinkingModeEnabled ? '思考模式已启用' : '思考模式已禁用'}
+                                title={isThinkingModeEnabled ? t('thinking.enabled') : t('thinking.disabled')}
                                 disabled={!currentProvider || !currentModelId}
                             >
-                                思考
+                                {t('thinking.toggle')}
                             </button>
+                            {#if showThinkingEffortSelector}
+                                <select
+                                    class="ai-sidebar__thinking-effort-select b3-select"
+                                    value={currentThinkingEffort}
+                                    on:change={handleThinkingEffortChange}
+                                    title={t('thinking.effort.title')}
+                                >
+                                    {#if isCurrentModelGemini}
+                                        <option value="auto">{t('thinking.effort.auto')}</option>
+                                    {/if}
+                                    <option value="low">{t('thinking.effort.low')}</option>
+                                    <option value="medium">{t('thinking.effort.medium')}</option>
+                                    <option value="high">{t('thinking.effort.high')}</option>
+                                </select>
+                            {/if}
                         </div>
                     {/if}
                     <div class="ai-sidebar__model-selector-container">
@@ -8455,6 +8598,9 @@
     }
 
     .ai-sidebar__thinking-toggle-container {
+        display: flex;
+        align-items: center;
+        gap: 4px;
         flex-shrink: 0;
     }
 
@@ -8480,6 +8626,30 @@
     .ai-sidebar__thinking-toggle:disabled {
         opacity: 0.5;
         cursor: not-allowed;
+    }
+
+    .ai-sidebar__thinking-effort-select {
+        font-size: 11px;
+        padding: 2px 4px;
+        min-width: 50px;
+        max-width: 70px;
+        height: 24px;
+        border-radius: 4px;
+        border: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-surface);
+        color: var(--b3-theme-on-surface);
+        cursor: pointer;
+        transition: all 0.2s;
+
+        &:hover {
+            border-color: var(--b3-theme-primary);
+        }
+
+        &:focus {
+            outline: none;
+            border-color: var(--b3-theme-primary);
+            box-shadow: 0 0 0 2px var(--b3-theme-primary-lightest);
+        }
     }
 
     .ai-sidebar__model-selector-container {

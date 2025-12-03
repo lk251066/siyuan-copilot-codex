@@ -1,4 +1,5 @@
 import { t } from "./utils/i18n";
+import type { ThinkingEffort } from "./ai-chat";
 
 export interface ModelConfig {
     id: string;
@@ -11,6 +12,7 @@ export interface ModelConfig {
         vision?: boolean;   // 是否支持视觉
     };
     thinkingEnabled?: boolean; // 用户是否开启思考模式（仅当支持思考时有效）
+    thinkingEffort?: ThinkingEffort; // 思考努力程度（low/medium/high/auto）
 };
 
 export interface ProviderConfig {

@@ -538,6 +538,18 @@
             "tab": "页签视图"
         }
     },
+    "thinking": {
+        "toggle": "思考模式",
+        "enabled": "思考模式已启用",
+        "disabled": "思考模式已禁用",
+        "effort": {
+            "title": "思考程度",
+            "auto": "默认",
+            "low": "低",
+            "medium": "中",
+            "high": "高"
+        }
+    },
     "fullscreen": {
         "title": "全屏查看",
         "exit": "退出全屏"

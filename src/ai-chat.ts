@@ -71,6 +71,9 @@ export interface Message {
     }>; // 多模型响应
 }
 
+// 思考努力程度类型
+export type ThinkingEffort = 'low' | 'medium' | 'high' | 'auto';
+
 export interface ChatOptions {
     apiKey: string;
     model: string;
@@ -84,7 +87,7 @@ export interface ChatOptions {
     signal?: AbortSignal; // 用于中断请求
     enableThinking?: boolean; // 是否启用思考模式
     thinkingBudget?: number; // 思考预算（token数），-1表示动态
-    reasoningEffort?: 'low' | 'medium' | 'high' | 'auto'; // Gemini 3 系列的推理努力程度
+    reasoningEffort?: ThinkingEffort; // 思考努力程度（适用于 Gemini/Claude 等模型）
     onThinkingChunk?: (chunk: string) => void; // 思考过程回调
     onThinkingComplete?: (thinking: string) => void; // 思考完成回调
     tools?: any[]; // Agent模式的工具列表
@@ -101,10 +104,36 @@ export interface ModelInfo {
 
 export type AIProvider = 'gemini' | 'deepseek' | 'openai' | 'moonshot' | 'volcano' | 'v3' | 'custom';
 
+// 思考努力程度到比例的映射（用于计算 token 预算）
+export const EFFORT_RATIO: Record<ThinkingEffort, number> = {
+    low: 0.2,
+    medium: 0.5,
+    high: 0.8,
+    auto: 0.5  // auto 使用中等比例
+};
+
+// Claude 模型的 token 限制配置
+interface TokenLimitConfig {
+    min: number;
+    max: number;
+}
+
+const CLAUDE_TOKEN_LIMITS: Record<string, TokenLimitConfig> = {
+    'claude-3-7-sonnet': { min: 1024, max: 32768 },
+    'claude-3-5-sonnet': { min: 1024, max: 16384 },
+    'claude-sonnet-4': { min: 1024, max: 32768 },
+    'claude-opus-4': { min: 1024, max: 32768 },
+    // 默认值
+    'default': { min: 1024, max: 32768 }
+};
+
 // Gemini 支持思考模式的模型正则表达式
 // 匹配: gemini-2.5-*, gemini-3-*, gemini-flash-latest, gemini-pro-latest 等
 export const GEMINI_THINKING_MODEL_REGEX =
     /gemini-(?:2\.5.*(?:-latest)?|3(?:\.\d+)?-(?:flash|pro)(?:-preview)?|flash-latest|pro-latest|flash-lite-latest)(?:-[\w-]+)*$/i;
+
+// Claude 模型正则表达式（所有以 claude 开头的模型都认为支持思考模式）
+export const CLAUDE_THINKING_MODEL_REGEX = /^claude/i;
 
 /**
  * 获取模型ID的基础名称（小写，去除提供商前缀）
@@ -112,6 +141,30 @@ export const GEMINI_THINKING_MODEL_REGEX =
 function getLowerBaseModelName(modelId: string, separator: string = '/'): string {
     const parts = modelId.split(separator);
     return parts[parts.length - 1].toLowerCase();
+}
+
+/**
+ * 查找 Claude 模型的 token 限制配置
+ */
+function findClaudeTokenLimit(modelId: string): TokenLimitConfig {
+    const baseModelId = getLowerBaseModelName(modelId, '/');
+    
+    // 按优先级匹配
+    for (const [key, config] of Object.entries(CLAUDE_TOKEN_LIMITS)) {
+        if (key !== 'default' && baseModelId.includes(key)) {
+            return config;
+        }
+    }
+    
+    return CLAUDE_TOKEN_LIMITS['default'];
+}
+
+/**
+ * 检测模型是否是支持思考模式的 Claude 模型
+ */
+export function isSupportedThinkingClaudeModel(modelId: string): boolean {
+    const baseModelId = getLowerBaseModelName(modelId, '/');
+    return CLAUDE_THINKING_MODEL_REGEX.test(baseModelId);
 }
 
 /**
@@ -135,6 +188,31 @@ export function isSupportedThinkingGeminiModel(modelId: string): boolean {
 export function isGemini3Model(modelId: string): boolean {
     const baseModelId = getLowerBaseModelName(modelId, '/');
     return baseModelId.includes('gemini-3');
+}
+
+/**
+ * 计算 Claude 模型的思考预算 token 数
+ */
+export function calculateClaudeThinkingBudget(
+    modelId: string,
+    reasoningEffort: ThinkingEffort,
+    maxTokens?: number
+): number {
+    const DEFAULT_MAX_TOKENS = 8192;
+    const tokenLimit = findClaudeTokenLimit(modelId);
+    const effortRatio = EFFORT_RATIO[reasoningEffort];
+    
+    // 计算基础预算
+    let budgetTokens = Math.floor(
+        (tokenLimit.max - tokenLimit.min) * effortRatio + tokenLimit.min
+    );
+    
+    // 根据 maxTokens 限制调整
+    budgetTokens = Math.floor(
+        Math.max(1024, Math.min(budgetTokens, (maxTokens || DEFAULT_MAX_TOKENS) * effortRatio))
+    );
+    
+    return budgetTokens;
 }
 
 interface ProviderConfig {
@@ -411,15 +489,44 @@ async function chatOpenAIFormat(
 
     // 如果启用思考模式，添加相关参数
     if (options.enableThinking) {
+        const reasoningEffort = options.reasoningEffort || 'medium';
+        
+        // 检查是否是 Claude 模型（通过 OpenAI 兼容 API）
+        if (isSupportedThinkingClaudeModel(options.model)) {
+            // Claude 模型使用 thinking 参数
+            // https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
+            const budgetTokens = calculateClaudeThinkingBudget(
+                options.model,
+                reasoningEffort,
+                options.maxTokens
+            );
+            requestBody.thinking = {
+                type: 'enabled',
+                budget_tokens: budgetTokens
+            };
+        }
         // 检查是否是通过 OpenAI 兼容 API 调用的 Gemini 模型
-        if (isSupportedThinkingGeminiModel(options.model)) {
+        else if (isSupportedThinkingGeminiModel(options.model)) {
             // Gemini 3 系列使用 reasoning_effort 参数
             // https://ai.google.dev/gemini-api/docs/gemini-3?thinking=high#openai_compatibility
             if (isGemini3Model(options.model)) {
-                requestBody.reasoning_effort = options.reasoningEffort || 'auto';
+                requestBody.reasoning_effort = reasoningEffort === 'auto' ? 'medium' : reasoningEffort;
             } else {
                 // Gemini 2.5 等使用 google.thinking_config
-                const thinkingBudget = options.thinkingBudget ?? -1; // -1 表示动态思考
+                // 根据 reasoningEffort 计算 thinkingBudget
+                let thinkingBudget: number;
+                if (reasoningEffort === 'auto') {
+                    thinkingBudget = -1; // -1 表示动态思考
+                } else {
+                    // 根据努力程度设置预算（以 token 为单位）
+                    const budgetMap: Record<ThinkingEffort, number> = {
+                        low: 4096,
+                        medium: 16384,
+                        high: 32768,
+                        auto: -1
+                    };
+                    thinkingBudget = options.thinkingBudget ?? budgetMap[reasoningEffort];
+                }
                 requestBody.extra_body = {
                     ...requestBody.extra_body,
                     google: {

@@ -539,6 +539,18 @@
             "tab": "Tab View"
         }
     },
+    "thinking": {
+        "toggle": "Thinking Mode",
+        "enabled": "Thinking mode enabled",
+        "disabled": "Thinking mode disabled",
+        "effort": {
+            "title": "Thinking Effort",
+            "auto": "Auto",
+            "low": "low",
+            "medium": "medium",
+            "high": "high"
+        }
+    },
     "fullscreen": {
         "title": "Fullscreen View",
         "exit": "Exit Fullscreen"
