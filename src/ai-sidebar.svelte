@@ -3347,7 +3347,7 @@
 
     // https://github.com/siyuan-note/siyuan/blob/master/app/src/protyle/util/addScript.ts
     export const addScript = (path: string, id: string) => {
-        return new Promise((resolve) => {
+        return new Promise(resolve => {
             if (document.getElementById(id)) {
                 // 脚本加载后再次调用直接返回
                 resolve(false);
