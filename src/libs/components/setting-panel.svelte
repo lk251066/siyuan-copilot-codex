@@ -26,7 +26,7 @@
     $: fn__none = display ? '' : 'fn__none';
 </script>
 
-<div class="config__tab-container {fn__none}" data-name={group}>
+<div class="config__tab-container_plugin {fn__none}" data-name={group}>
     <slot />
     {#each settingItems as item (item.key)}
         <Form.Wrap title={item.title} description={item.description} direction={item?.direction}>

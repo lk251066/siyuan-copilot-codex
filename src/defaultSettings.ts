@@ -102,6 +102,12 @@ export const getDefaultSettings = () => ({
     exportLastPath: '' as string,  // 上次保存的路径
     exportLastNotebook: '' as string,  // 上次保存的笔记本ID
 
+    // 会话自动重命名设置
+    autoRenameSession: false as boolean,  // 是否启用会话自动重命名
+    autoRenameProvider: '' as string,  // 自动重命名使用的平台
+    autoRenameModelId: '' as string,  // 自动重命名使用的模型ID
+    autoRenamePrompt: '请根据以下用户消息生成一个简洁的会话标题（不超过20个字，不要使用引号，标题前添加一个合适的emoji）：\n\n{message}' as string,  // 自动重命名提示词模板
+
     // 保留旧设置以便兼容升级
     aiProvider: 'openai',
     aiApiKey: '',

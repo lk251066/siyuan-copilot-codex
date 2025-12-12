@@ -297,6 +297,18 @@
             ],
         },
         {
+            name: t('settings.settingsGroup.sessionManagement') || '会话管理',
+            items: [
+                {
+                    key: 'autoRenameSession',
+                    value: settings.autoRenameSession,
+                    type: 'checkbox',
+                    title: t('settings.autoRenameSession.title') || '会话自动重命名',
+                    description: t('settings.autoRenameSession.description') || '在首次发送消息时，自动使用AI生成会话标题',
+                },
+            ],
+        },
+        {
             name: t('settings.settingsGroup.reset') || 'Reset Settings',
             items: [
                 {
@@ -632,6 +644,87 @@
                     {/if}
                 </main>
             </div>
+        {:else if focusGroup === (t('settings.settingsGroup.sessionManagement') || '会话管理')}
+            <div class="session-management-panel">
+                <SettingPanel
+                    group={currentGroup?.name || ''}
+                    settingItems={currentGroup?.items || []}
+                    display={true}
+                    on:changed={onChanged}
+                />
+                
+                {#if settings.autoRenameSession}
+                    <div class="auto-rename-model-selector">
+                        <div class="config__item">
+                            <div class="config__item-label">
+                                <div class="config__item-title">
+                                    {t('settings.autoRenameSession.modelTitle') || '重命名模型'}
+                                </div>
+                                <div class="config__item-description">
+                                    {t('settings.autoRenameSession.modelDescription') || '选择用于生成会话标题的AI模型'}
+                                </div>
+                            </div>
+                            <div class="config__item-control" style="display: flex; gap: 8px; align-items: center;">
+                                <select
+                                    class="b3-select"
+                                    bind:value={settings.autoRenameProvider}
+                                    on:change={() => {
+                                        settings.autoRenameModelId = '';
+                                        saveSettings();
+                                    }}
+                                >
+                                    <option value="">{t('settings.autoRenameSession.selectProvider') || '-- 选择平台 --'}</option>
+                                    {#each allProviderOptions as provider}
+                                        {#if settings.aiProviders[provider.id]?.models?.length > 0 || (provider.type === 'custom' && settings.aiProviders.customProviders.find(p => p.id === provider.id)?.models?.length > 0)}
+                                            <option value={provider.id}>{provider.name}</option>
+                                        {/if}
+                                    {/each}
+                                </select>
+                                
+                                {#if settings.autoRenameProvider}
+                                    <select
+                                        class="b3-select"
+                                        bind:value={settings.autoRenameModelId}
+                                        on:change={saveSettings}
+                                    >
+                                        <option value="">{t('settings.autoRenameSession.selectModel') || '-- 选择模型 --'}</option>
+                                        {#if builtInProviderNames[settings.autoRenameProvider]}
+                                            {#each settings.aiProviders[settings.autoRenameProvider]?.models || [] as model}
+                                                <option value={model.id}>{model.name || model.id}</option>
+                                            {/each}
+                                        {:else}
+                                            {#each settings.aiProviders.customProviders.find(p => p.id === settings.autoRenameProvider)?.models || [] as model}
+                                                <option value={model.id}>{model.name || model.id}</option>
+                                            {/each}
+                                        {/if}
+                                    </select>
+                                {/if}
+                            </div>
+                        </div>
+                        
+                        <!-- 自定义提示词 -->
+                        <div class="config__item" style="margin-top: 16px;">
+                            <div class="config__item-label">
+                                <div class="config__item-title">
+                                    {t('settings.autoRenameSession.promptTitle') || '自定义提示词'}
+                                </div>
+                                <div class="config__item-description">
+                                    {t('settings.autoRenameSession.promptDescription') || '自定义生成会话标题的提示词，使用 {message} 作为用户消息的占位符'}
+                                </div>
+                            </div>
+                            <div class="config__item-control">
+                                <textarea
+                                    class="b3-text-field"
+                                    rows="4"
+                                    bind:value={settings.autoRenamePrompt}
+                                    on:change={saveSettings}
+                                    placeholder={t('settings.autoRenameSession.promptPlaceholder') || '请根据以下用户消息生成一个简洁的会话标题（不超过20个字，不要使用引号）：\n\n{message}'}
+                                ></textarea>
+                            </div>
+                        </div>
+                    </div>
+                {/if}
+            </div>
         {:else}
             <SettingPanel
                 group={currentGroup?.name || ''}
@@ -788,5 +881,70 @@
         text-align: center;
         color: var(--b3-theme-on-surface-light);
         font-size: 13px;
+    }
+
+    .session-management-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        flex: 1;
+        overflow-y: auto;
+    }
+
+    .auto-rename-model-selector {
+        padding: 16px;
+        background: var(--b3-theme-surface);
+        border-radius: 6px;
+        margin-top: 8px;
+    }
+
+    .config__item {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .config__item-label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .config__item-title {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--b3-theme-on-background);
+    }
+
+    .config__item-description {
+        font-size: 12px;
+        color: var(--b3-theme-on-surface-light);
+        line-height: 1.5;
+    }
+
+    .config__item-control {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        
+        .b3-select {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        textarea.b3-text-field {
+            width: 100%;
+            min-height: 80px;
+            padding: 8px 12px;
+            font-size: 13px;
+            line-height: 1.6;
+            font-family: var(--b3-font-family);
+            resize: vertical;
+            
+            &::placeholder {
+                color: var(--b3-theme-on-surface-light);
+                opacity: 0.6;
+            }
+        }
     }
 </style>

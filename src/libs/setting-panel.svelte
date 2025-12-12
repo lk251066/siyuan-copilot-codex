@@ -15,7 +15,7 @@ You can use this template to quickly create a setting panel,
 with the same UI style in SiYuan
 -->
 
-<div class="config__tab-container">
+<div class="config__tab-container_plugin">
     <div data-type="Header" class="fn__flex b3-label">
         <div class="fn_flex-1">
             <h4>This setting panel is provided by a svelte component</h4>

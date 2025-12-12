@@ -8,6 +8,7 @@
             "platformManagement": "Platform Management",
             "displayAndOperation": "Display & Operation",
             "noteExport": "Chat Export",
+            "sessionManagement": "Session Management",
             "group1": "Tab1",
             "group2": "Tab2",
             "reset": "Reset Settings"
@@ -116,6 +117,17 @@
             "confirm": "Are you sure you want to reset all settings to default values?",
             "confirmMessage": "Are you sure you want to reset all settings to default values? This action cannot be undone.",
             "message": "All settings have been reset to default values"
+        },
+        "autoRenameSession": {
+            "title": "Auto-Rename Session",
+            "description": "Automatically generate session title using AI when first message is sent",
+            "modelTitle": "Rename Model",
+            "modelDescription": "Select the AI model to use for generating session titles",
+            "selectProvider": "-- Select Platform --",
+            "selectModel": "-- Select Model --",
+            "promptTitle": "Custom Prompt",
+            "promptDescription": "Customize the prompt for generating session titles. Use {message} as a placeholder for the user message",
+            "promptPlaceholder": "Generate a concise session title (max 20 characters, no quotes) based on the following user message:\n\n{message}"
         }
     },
     "aiSidebar": {

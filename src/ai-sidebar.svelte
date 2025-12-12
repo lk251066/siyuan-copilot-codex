@@ -1879,6 +1879,103 @@
         saveCurrentSession(true);
     }
 
+    // 自动重命名会话
+    async function autoRenameSession(userMessage: string) {
+        // 检查是否启用自动重命名
+        if (!settings.autoRenameSession) {
+            console.log('Auto-rename disabled');
+            return;
+        }
+
+        // 检查是否配置了重命名模型
+        if (!settings.autoRenameProvider || !settings.autoRenameModelId) {
+            console.log('Auto-rename model not configured');
+            return;
+        }
+
+        // 获取重命名模型配置
+        const config = getProviderAndModelConfig(
+            settings.autoRenameProvider,
+            settings.autoRenameModelId
+        );
+        if (!config) {
+            console.log('Auto-rename model config not found');
+            return;
+        }
+
+        const { providerConfig, modelConfig } = config;
+        if (!providerConfig.apiKey) {
+            console.log('Auto-rename model API key not configured');
+            return;
+        }
+
+        console.log('Starting auto-rename for session:', currentSessionId);
+
+        try {
+            // 使用自定义提示词模板，替换 {message} 占位符
+            const promptTemplate =
+                settings.autoRenamePrompt ||
+                '请根据以下用户消息生成一个简洁的会话标题（不超过20个字，不要使用引号）：\n\n{message}';
+            const prompt = promptTemplate.replace('{message}', userMessage);
+
+            let generatedTitle = '';
+
+            // 调用AI生成标题
+            await chat(
+                settings.autoRenameProvider,
+                {
+                    apiKey: providerConfig.apiKey,
+                    model: modelConfig.id,
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.7,
+                    maxTokens: 50,
+                    stream: true,
+                    onChunk: async (chunk: string) => {
+                        generatedTitle += chunk;
+                    },
+                    onComplete: async (text: string) => {
+                        // 清理生成的标题（移除引号和多余空格）
+                        const cleanTitle = text
+                            .trim()
+                            .replace(/^["']|["']$/g, '')
+                            .substring(0, 50);
+                        if (cleanTitle && currentSessionId) {
+                            // 直接更新当前会话的标题（不重新加载，避免覆盖刚创建的会话）
+                            const session = sessions.find(s => s.id === currentSessionId);
+                            if (session) {
+                                session.title = cleanTitle;
+                                sessions = [...sessions];
+                                await saveSessions();
+                                console.log('Auto-renamed session to:', cleanTitle);
+                            } else {
+                                console.error(
+                                    'Session not found for auto-rename:',
+                                    currentSessionId
+                                );
+                            }
+                        } else {
+                            console.log(
+                                'Auto-rename failed: cleanTitle=',
+                                cleanTitle,
+                                'currentSessionId=',
+                                currentSessionId
+                            );
+                        }
+                    },
+                    onError: (error: Error) => {
+                        console.error('Auto-rename session failed:', error);
+                        // 静默失败，不影响用户体验
+                    },
+                },
+                providerConfig.customApiUrl,
+                providerConfig.advancedConfig
+            );
+        } catch (error) {
+            console.error('Auto-rename session error:', error);
+            // 静默失败
+        }
+    }
+
     // 发送消息
     async function sendMessage() {
         if ((!currentInput.trim() && currentAttachments.length === 0) || isLoading) return;
@@ -2008,6 +2105,25 @@
         isThinkingPhase = false;
         hasUnsavedChanges = true;
         autoScroll = true; // 发送新消息时启用自动滚动
+
+        // 如果是第一条用户消息且没有会话ID，立即创建会话
+        const userMessages = messages.filter(m => m.role === 'user');
+        if (userMessages.length === 1 && !currentSessionId) {
+            const now = Date.now();
+            const newSession: ChatSession = {
+                id: `session_${now}`,
+                title: generateSessionTitle(),
+                messages: [...messages],
+                createdAt: now,
+                updatedAt: now,
+            };
+            sessions = [newSession, ...sessions];
+            currentSessionId = newSession.id;
+            await saveSessions();
+
+            // 立即执行自动重命名
+            autoRenameSession(userContent);
+        }
 
         await scrollToBottom(true);
 
