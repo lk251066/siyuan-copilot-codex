@@ -225,7 +225,17 @@
             "cancel": "Cancel",
             "settingsApplied": "Model settings applied",
             "showPresetManager": "Show Preset Manager",
-            "hidePresetManager": "Hide Preset Manager"
+            "hidePresetManager": "Hide Preset Manager",
+            "enableModelSelection": "Enable Model Selection",
+            "enableMultiModel": "Multi-Model Mode",
+            "modelSelectionHint": "When enabled, applying preset will automatically switch to selected model(s)",
+            "chatMode": "Chat Mode",
+            "chatModeHint": "Select chat mode, only Ask mode supports multi-model",
+            "onlyAskMode": "Only available in Ask mode",
+            "model": "Model",
+            "multiModel": "Multi-Model",
+            "presetMenu": "Preset Menu",
+            "enableThinking": "Thinking"
         },
         "input": {
             "placeholder": "Type a message... (drag docs, blocks or paste images)"

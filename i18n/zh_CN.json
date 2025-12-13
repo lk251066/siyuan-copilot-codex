@@ -198,7 +198,7 @@
             "rejected": "已拒绝"
         },
         "modelSettings": {
-            "title": "模型设置",
+            "title": "预设设置",
             "contextCount": "上下文消息数",
             "contextCountHint": "控制对话历史中包含的消息数量",
             "temperature": "Temperature",
@@ -224,7 +224,17 @@
             "cancel": "取消",
             "settingsApplied": "模型设置已应用",
             "showPresetManager": "显示预设管理",
-            "hidePresetManager": "隐藏预设管理"
+            "hidePresetManager": "隐藏预设管理",
+            "enableModelSelection": "启用模型选择",
+            "enableMultiModel": "多模型模式",
+            "modelSelectionHint": "启用后，应用预设时会自动切换到选择的模型",
+            "chatMode": "聊天模式",
+            "chatModeHint": "选择聊天模式，只有问答模式支持多模型",
+            "onlyAskMode": "仅问答模式可用",
+            "model": "模型",
+            "multiModel": "多模型",
+            "presetMenu": "预设管理",
+            "enableThinking": "思考"
         },
         "input": {
             "placeholder": "输入消息... (可拖入文档、块或粘贴图片)"

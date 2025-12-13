@@ -150,6 +150,10 @@
         temperature: 0.7,
         temperatureEnabled: true,
         systemPrompt: '',
+        modelSelectionEnabled: false,
+        selectedModels: [] as Array<{ provider: string; modelId: string }>,
+        enableMultiModel: false,
+        chatMode: 'ask' as 'ask' | 'edit' | 'agent',
     };
 
     // 编辑模式
@@ -1115,15 +1119,99 @@
     }
 
     // 处理模型设置应用
-    function handleApplyModelSettings(
+    async function handleApplyModelSettings(
         event: CustomEvent<{
             contextCount: number;
             temperature: number;
             temperatureEnabled: boolean;
             systemPrompt: string;
+            modelSelectionEnabled?: boolean;
+            selectedModels?: Array<{ provider: string; modelId: string }>;
+            enableMultiModel?: boolean;
+            chatMode?: 'ask' | 'edit' | 'agent';
+            modelThinkingSettings?: Record<string, boolean>;
         }>
     ) {
-        tempModelSettings = event.detail;
+        const newSettings = event.detail;
+
+        // 更新tempModelSettings，保持所有字段的状态
+        tempModelSettings = {
+            contextCount: newSettings.contextCount,
+            temperature: newSettings.temperature,
+            temperatureEnabled: newSettings.temperatureEnabled,
+            systemPrompt: newSettings.systemPrompt,
+            modelSelectionEnabled: newSettings.modelSelectionEnabled ?? false,
+            selectedModels: newSettings.selectedModels || [],
+            enableMultiModel: newSettings.enableMultiModel ?? false,
+            chatMode: newSettings.chatMode ?? 'ask',
+            modelThinkingSettings: newSettings.modelThinkingSettings || {},
+        };
+
+        // 应用聊天模式
+        if (newSettings.chatMode) {
+            chatMode = newSettings.chatMode;
+        }
+
+        // 应用thinking设置
+        if (newSettings.modelThinkingSettings) {
+            // 更新每个模型的thinking设置
+            for (const [key, enabled] of Object.entries(newSettings.modelThinkingSettings)) {
+                const [provider, modelId] = key.split(':');
+                if (provider && modelId) {
+                    const providerConfig =
+                        providers[provider] ||
+                        providers.customProviders?.find(p => p.id === provider);
+                    if (providerConfig) {
+                        const model = providerConfig.models?.find(m => m.id === modelId);
+                        if (model) {
+                            model.thinkingEnabled = enabled;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 如果启用了模型选择
+        if (
+            newSettings.modelSelectionEnabled &&
+            newSettings.selectedModels &&
+            newSettings.selectedModels.length > 0
+        ) {
+            // 只有ask模式才能启用多模型
+            if (newSettings.enableMultiModel && newSettings.chatMode === 'ask') {
+                // 多模型模式
+                enableMultiModel = true;
+
+                // 先更新设置对象
+                settings.selectedMultiModels = [...newSettings.selectedModels];
+
+                // 然后更新本地变量
+                selectedMultiModels = [...newSettings.selectedModels];
+
+                // 最后保存设置
+                await plugin.saveSettings(settings);
+            } else {
+                // 单模型模式
+                enableMultiModel = false;
+                const selectedModel = newSettings.selectedModels[0];
+                if (selectedModel) {
+                    // 先更新设置对象（包括selectedProviderId）
+                    settings.selectedProviderId = selectedModel.provider;
+                    settings.currentProvider = selectedModel.provider;
+                    settings.currentModelId = selectedModel.modelId;
+
+                    // 然后更新本地变量
+                    currentProvider = selectedModel.provider;
+                    currentModelId = selectedModel.modelId;
+
+                    // 最后保存设置
+                    await plugin.saveSettings(settings);
+                }
+            }
+        } else {
+            // 如果未启用模型选择，确保禁用多模型模式
+            enableMultiModel = false;
+        }
     }
 
     // 获取当前提供商配置

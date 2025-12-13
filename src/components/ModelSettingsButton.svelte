@@ -12,6 +12,11 @@
         temperature: 0.7,
         temperatureEnabled: true,
         systemPrompt: '',
+        modelSelectionEnabled: false,
+        selectedModels: [] as Array<{ provider: string; modelId: string }>,
+        enableMultiModel: false,
+        chatMode: 'ask' as 'ask' | 'edit' | 'agent',
+        modelThinkingSettings: {} as Record<string, boolean>,
     };
     export let plugin: any;
 
@@ -26,8 +31,13 @@
     // 模型设置（临时值，用于编辑）
     let tempContextCount = 10;
     let tempTemperature = 0.7;
-    let tempTemperatureEnabled = true; // 是否启用temperature调整
+    let tempTemperatureEnabled = false; // 是否启用temperature调整
     let tempSystemPrompt = '';
+    let tempModelSelectionEnabled = false; // 是否启用模型选择
+    let tempSelectedModels: Array<{ provider: string; modelId: string }> = []; // 选中的模型列表
+    let tempEnableMultiModel = false; // 是否启用多模型模式
+    let tempChatMode: 'ask' | 'edit' | 'agent' = 'ask'; // 聊天模式
+    let tempModelThinkingSettings: Record<string, boolean> = {}; // 每个模型的thinking设置 {provider:modelId: boolean}
 
     // 预设管理
     interface Preset {
@@ -37,13 +47,20 @@
         temperature: number;
         temperatureEnabled: boolean; // 是否启用temperature调整
         systemPrompt: string;
+        modelSelectionEnabled: boolean; // 是否启用模型选择
+        selectedModels: Array<{ provider: string; modelId: string }>; // 选中的模型列表
+        enableMultiModel: boolean; // 是否启用多模型模式
+        chatMode: 'ask' | 'edit' | 'agent'; // 聊天模式
+        modelThinkingSettings?: Record<string, boolean>; // 每个模型的thinking设置
         createdAt: number;
     }
 
     let presets: Preset[] = [];
     let selectedPresetId: string = '';
-    let showPresetManager = true; // 默认显示预设管理
     let newPresetName = '';
+    let isPresetMenuOpen = false; // 预设菜单是否打开
+    let presetMenuButtonElement: HTMLElement; // 预设菜单按钮元素
+    let presetMenuElement: HTMLElement; // 预设菜单元素
 
     // 获取当前模型配置
     function getCurrentModelConfig() {
@@ -58,6 +75,65 @@
 
         if (!providerConfig) return null;
         return providerConfig.models.find((m: any) => m.id === currentModelId);
+    }
+
+    // 获取所有可用模型
+    function getAllAvailableModels(): Array<{
+        provider: string;
+        modelId: string;
+        modelName: string;
+        providerName: string;
+        supportsThinking: boolean;
+    }> {
+        const models: Array<{
+            provider: string;
+            modelId: string;
+            modelName: string;
+            providerName: string;
+            supportsThinking: boolean;
+        }> = [];
+
+        // 遍历内置提供商
+        for (const [providerId, providerConfig] of Object.entries(providers)) {
+            if (
+                providerId === 'customProviders' ||
+                !providerConfig ||
+                Array.isArray(providerConfig)
+            )
+                continue;
+
+            const providerName = providerId;
+            if (providerConfig.models && Array.isArray(providerConfig.models)) {
+                for (const model of providerConfig.models) {
+                    models.push({
+                        provider: providerId,
+                        modelId: model.id,
+                        modelName: model.name || model.id,
+                        providerName: providerName,
+                        supportsThinking: model.capabilities?.thinking || false,
+                    });
+                }
+            }
+        }
+
+        // 遍历自定义提供商
+        if (providers.customProviders && Array.isArray(providers.customProviders)) {
+            for (const provider of providers.customProviders) {
+                if (provider.models && Array.isArray(provider.models)) {
+                    for (const model of provider.models) {
+                        models.push({
+                            provider: provider.id,
+                            modelId: model.id,
+                            modelName: model.name || model.id,
+                            providerName: provider.name,
+                            supportsThinking: model.capabilities?.thinking || false,
+                        });
+                    }
+                }
+            }
+        }
+
+        return models;
     }
 
     // 加载预设
@@ -101,6 +177,11 @@
             temperature: tempTemperature,
             temperatureEnabled: tempTemperatureEnabled,
             systemPrompt: tempSystemPrompt,
+            modelSelectionEnabled: tempModelSelectionEnabled,
+            selectedModels: tempSelectedModels,
+            enableMultiModel: tempEnableMultiModel,
+            chatMode: tempChatMode,
+            modelThinkingSettings: tempModelThinkingSettings,
             createdAt: Date.now(),
         };
 
@@ -134,9 +215,17 @@
             tempTemperature = preset.temperature;
             tempTemperatureEnabled = preset.temperatureEnabled ?? true; // 兼容旧预设
             tempSystemPrompt = preset.systemPrompt;
+            tempModelSelectionEnabled = preset.modelSelectionEnabled ?? false; // 兼容旧预设
+            tempSelectedModels = [...(preset.selectedModels || [])]; // 创建新数组引用
+            tempEnableMultiModel = preset.enableMultiModel ?? false;
+            tempChatMode = preset.chatMode || 'ask'; // 兼容旧预设
+            tempModelThinkingSettings = { ...(preset.modelThinkingSettings || {}) }; // 创建新对象引用
             selectedPresetId = presetId;
             // 保存选中的预设ID
             await saveSelectedPresetId(presetId);
+
+            // 立即应用设置，确保UI更新
+            applySettings();
         }
     }
 
@@ -183,6 +272,11 @@
             preset.temperature = tempTemperature;
             preset.temperatureEnabled = tempTemperatureEnabled;
             preset.systemPrompt = tempSystemPrompt;
+            preset.modelSelectionEnabled = tempModelSelectionEnabled;
+            preset.selectedModels = tempSelectedModels;
+            preset.enableMultiModel = tempEnableMultiModel;
+            preset.chatMode = tempChatMode;
+            preset.modelThinkingSettings = tempModelThinkingSettings;
             await savePresetsToStorage();
             // 触发响应式更新
             presets = [...presets];
@@ -197,7 +291,35 @@
             temperature: tempTemperature,
             temperatureEnabled: tempTemperatureEnabled,
             systemPrompt: tempSystemPrompt,
+            modelSelectionEnabled: tempModelSelectionEnabled,
+            selectedModels: tempSelectedModels,
+            enableMultiModel: tempEnableMultiModel,
+            chatMode: tempChatMode,
+            modelThinkingSettings: tempModelThinkingSettings,
         });
+    }
+
+    // 比较两个模型数组是否相等
+    function areModelsEqual(
+        models1: Array<{ provider: string; modelId: string }>,
+        models2: Array<{ provider: string; modelId: string }>
+    ): boolean {
+        if (models1.length !== models2.length) return false;
+        return models1.every((m1, index) => {
+            const m2 = models2[index];
+            return m1.provider === m2.provider && m1.modelId === m2.modelId;
+        });
+    }
+
+    // 比较两个thinking settings对象是否相等
+    function areThinkingSettingsEqual(
+        settings1: Record<string, boolean>,
+        settings2: Record<string, boolean>
+    ): boolean {
+        const keys1 = Object.keys(settings1);
+        const keys2 = Object.keys(settings2);
+        if (keys1.length !== keys2.length) return false;
+        return keys1.every(key => settings1[key] === settings2[key]);
     }
 
     // 监听设置值的变化，自动应用
@@ -206,7 +328,15 @@
         (tempContextCount !== appliedSettings.contextCount ||
             tempTemperature !== appliedSettings.temperature ||
             tempTemperatureEnabled !== appliedSettings.temperatureEnabled ||
-            tempSystemPrompt !== appliedSettings.systemPrompt)
+            tempSystemPrompt !== appliedSettings.systemPrompt ||
+            tempModelSelectionEnabled !== (appliedSettings.modelSelectionEnabled ?? false) ||
+            !areModelsEqual(tempSelectedModels, appliedSettings.selectedModels || []) ||
+            tempEnableMultiModel !== (appliedSettings.enableMultiModel ?? false) ||
+            tempChatMode !== (appliedSettings.chatMode ?? 'ask') ||
+            !areThinkingSettingsEqual(
+                tempModelThinkingSettings,
+                appliedSettings.modelThinkingSettings || {}
+            ))
     ) {
         applySettings();
 
@@ -219,7 +349,15 @@
                     selectedPreset.contextCount !== tempContextCount ||
                     selectedPreset.temperature !== tempTemperature ||
                     (selectedPreset.temperatureEnabled ?? true) !== tempTemperatureEnabled ||
-                    selectedPreset.systemPrompt !== tempSystemPrompt
+                    selectedPreset.systemPrompt !== tempSystemPrompt ||
+                    (selectedPreset.modelSelectionEnabled ?? false) !== tempModelSelectionEnabled ||
+                    !areModelsEqual(selectedPreset.selectedModels || [], tempSelectedModels) ||
+                    (selectedPreset.enableMultiModel ?? false) !== tempEnableMultiModel ||
+                    (selectedPreset.chatMode || 'ask') !== tempChatMode ||
+                    !areThinkingSettingsEqual(
+                        selectedPreset.modelThinkingSettings || {},
+                        tempModelThinkingSettings
+                    )
                 ) {
                     selectedPresetId = '';
                     saveSelectedPresetId('');
@@ -234,6 +372,11 @@
         tempTemperature = appliedSettings.temperature;
         tempTemperatureEnabled = appliedSettings.temperatureEnabled ?? true;
         tempSystemPrompt = appliedSettings.systemPrompt;
+        tempModelSelectionEnabled = appliedSettings.modelSelectionEnabled ?? false;
+        tempSelectedModels = [...(appliedSettings.selectedModels || [])]; // 创建新数组引用
+        tempEnableMultiModel = appliedSettings.enableMultiModel ?? false;
+        tempChatMode = appliedSettings.chatMode ?? 'ask';
+        tempModelThinkingSettings = { ...(appliedSettings.modelThinkingSettings || {}) }; // 创建新对象引用
 
         // 检查当前应用的设置是否与某个预设匹配
         const savedPresetId = await loadSelectedPresetId();
@@ -245,7 +388,17 @@
                 preset.temperature === appliedSettings.temperature &&
                 (preset.temperatureEnabled ?? true) ===
                     (appliedSettings.temperatureEnabled ?? true) &&
-                preset.systemPrompt === appliedSettings.systemPrompt
+                preset.systemPrompt === appliedSettings.systemPrompt &&
+                (preset.modelSelectionEnabled ?? false) ===
+                    (appliedSettings.modelSelectionEnabled ?? false) &&
+                areModelsEqual(preset.selectedModels || [], appliedSettings.selectedModels || []) &&
+                (preset.enableMultiModel ?? false) ===
+                    (appliedSettings.enableMultiModel ?? false) &&
+                (preset.chatMode || 'ask') === (appliedSettings.chatMode ?? 'ask') &&
+                areThinkingSettingsEqual(
+                    preset.modelThinkingSettings || {},
+                    appliedSettings.modelThinkingSettings || {}
+                )
             ) {
                 // 设置匹配，保持预设选择
                 selectedPresetId = savedPresetId;
@@ -265,6 +418,11 @@
         tempTemperature = modelConfig?.temperature ?? 0.7;
         tempTemperatureEnabled = true;
         tempSystemPrompt = '';
+        tempModelSelectionEnabled = false;
+        tempSelectedModels = [];
+        tempEnableMultiModel = false;
+        tempChatMode = 'ask';
+        tempModelThinkingSettings = {};
         selectedPresetId = '';
         // 清除保存的预设ID
         await saveSelectedPresetId('');
@@ -340,25 +498,49 @@
     }
 
     // 组件挂载时，自动加载上次选择的预设
-    onMount(async () => {
-        await loadPresets();
-        const savedPresetId = await loadSelectedPresetId();
-        if (savedPresetId) {
-            const preset = presets.find(p => p.id === savedPresetId);
-            if (preset) {
-                // 自动应用保存的预设
-                tempContextCount = preset.contextCount;
-                tempTemperature = preset.temperature;
-                tempTemperatureEnabled = preset.temperatureEnabled ?? true;
-                tempSystemPrompt = preset.systemPrompt;
-                selectedPresetId = savedPresetId;
-                // 触发应用
-                applySettings();
-            } else {
-                // 预设已被删除，清除保存的ID
-                await saveSelectedPresetId('');
+    onMount(() => {
+        (async () => {
+            await loadPresets();
+            const savedPresetId = await loadSelectedPresetId();
+            if (savedPresetId) {
+                const preset = presets.find(p => p.id === savedPresetId);
+                if (preset) {
+                    // 自动应用保存的预设
+                    tempContextCount = preset.contextCount;
+                    tempTemperature = preset.temperature;
+                    tempTemperatureEnabled = preset.temperatureEnabled ?? true;
+                    tempSystemPrompt = preset.systemPrompt;
+                    tempModelSelectionEnabled = preset.modelSelectionEnabled ?? false;
+                    tempSelectedModels = [...(preset.selectedModels || [])]; // 创建新数组引用
+                    tempEnableMultiModel = preset.enableMultiModel ?? false;
+                    tempChatMode = preset.chatMode || 'ask';
+                    tempModelThinkingSettings = { ...(preset.modelThinkingSettings || {}) }; // 创建新对象引用
+                    selectedPresetId = savedPresetId;
+                    // 触发应用
+                    applySettings();
+                } else {
+                    // 预设已被删除，清除保存的ID
+                    await saveSelectedPresetId('');
+                }
             }
-        }
+        })();
+
+        // 点击外部关闭预设菜单
+        const handleClickOutside = (e: MouseEvent) => {
+            if (isPresetMenuOpen && presetMenuElement && presetMenuButtonElement) {
+                const target = e.target as Node;
+                if (
+                    !presetMenuElement.contains(target) &&
+                    !presetMenuButtonElement.contains(target)
+                ) {
+                    isPresetMenuOpen = false;
+                }
+            }
+        };
+        document.addEventListener('click', handleClickOutside);
+        return () => {
+            document.removeEventListener('click', handleClickOutside);
+        };
     });
 
     // 计算当前按钮上要显示的预设名称
@@ -368,7 +550,7 @@
             const preset = presets.find(p => p.id === selectedPresetId);
             if (preset) return preset.name;
         }
-        return '';
+        return '预设';
     })();
 </script>
 
@@ -379,7 +561,7 @@
         on:click|stopPropagation={toggleDropdown}
         title={currentPresetName || t('aiSidebar.modelSettings.title')}
     >
-        <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
+        <svg class="b3-button__icon"><use xlink:href="#iconModelSetting"></use></svg>
         {#if currentPresetName}
             <span class="model-settings-button__label">
                 {currentPresetName}
@@ -395,13 +577,178 @@
         >
             <div class="model-settings-header">
                 <h4>{t('aiSidebar.modelSettings.title')}</h4>
-                <button
-                    class="b3-button b3-button--text"
-                    on:click={() => (isOpen = false)}
-                    title={t('common.close')}
-                >
-                    <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
-                </button>
+                <div class="model-settings-header-actions">
+                    <!-- 预设管理按钮 -->
+                    <div class="model-settings-preset-menu-wrapper">
+                        <button
+                            bind:this={presetMenuButtonElement}
+                            class="b3-button b3-button--text"
+                            on:click|stopPropagation={() => (isPresetMenuOpen = !isPresetMenuOpen)}
+                            title={t('aiSidebar.modelSettings.presetMenu') || '预设管理'}
+                        >
+                            <svg class="b3-button__icon"><use xlink:href="#iconList"></use></svg>
+                        </button>
+
+                        <!-- 预设菜单下拉 -->
+                        {#if isPresetMenuOpen}
+                            <div
+                                bind:this={presetMenuElement}
+                                class="model-settings-preset-menu"
+                                on:click|stopPropagation
+                            >
+                                <!-- 保存新预设 -->
+                                <div class="model-settings-preset-menu-item">
+                                    <input
+                                        type="text"
+                                        bind:value={newPresetName}
+                                        class="b3-text-field"
+                                        placeholder={t('aiSidebar.modelSettings.presetName')}
+                                        on:keydown={e => e.key === 'Enter' && saveAsPreset()}
+                                    />
+                                    <button
+                                        class="b3-button b3-button--primary"
+                                        on:click={saveAsPreset}
+                                        style="margin-left: 8px;"
+                                    >
+                                        {t('aiSidebar.modelSettings.savePreset')}
+                                    </button>
+                                </div>
+
+                                <div class="model-settings-preset-menu-divider"></div>
+
+                                <!-- 预设列表 -->
+                                {#if presets.length > 0}
+                                    {#each presets as preset}
+                                        <div class="model-settings-preset-menu-preset">
+                                            <div class="model-settings-preset-menu-preset-main">
+                                                <div
+                                                    class="model-settings-preset-menu-preset-info"
+                                                    class:selected={selectedPresetId === preset.id}
+                                                    on:click={() => loadPreset(preset.id)}
+                                                    role="button"
+                                                    tabindex="0"
+                                                    on:keydown={e =>
+                                                        e.key === 'Enter' && loadPreset(preset.id)}
+                                                >
+                                                    {#if selectedPresetId === preset.id}
+                                                        <svg
+                                                            class="model-settings-preset-selected-icon"
+                                                        >
+                                                            <use xlink:href="#iconCheck"></use>
+                                                        </svg>
+                                                    {/if}
+                                                    <div
+                                                        class="model-settings-preset-menu-preset-content"
+                                                    >
+                                                        <span class="preset-name">
+                                                            {preset.name}
+                                                        </span>
+                                                        <div class="model-settings-preset-details">
+                                                            {t(
+                                                                'aiSidebar.modelSettings.contextCount'
+                                                            )}: {preset.contextCount}
+                                                            {#if preset.temperatureEnabled ?? true}
+                                                                | {t(
+                                                                    'aiSidebar.modelSettings.temperature'
+                                                                )}: {preset.temperature.toFixed(2)}
+                                                            {/if}
+                                                            {#if preset.chatMode}
+                                                                | {t(
+                                                                    'aiSidebar.modelSettings.chatMode'
+                                                                )}: {t(
+                                                                    `aiSidebar.mode.${preset.chatMode}`
+                                                                ) || preset.chatMode}
+                                                            {/if}
+                                                            {#if preset.modelSelectionEnabled && preset.selectedModels && preset.selectedModels.length > 0}
+                                                                <br />
+                                                                <span
+                                                                    class="model-settings-preset-models"
+                                                                >
+                                                                    {#if preset.enableMultiModel}
+                                                                        {t(
+                                                                            'aiSidebar.modelSettings.multiModel'
+                                                                        ) || '多模型'}:
+                                                                    {:else}
+                                                                        {t(
+                                                                            'aiSidebar.modelSettings.model'
+                                                                        ) || '模型'}:
+                                                                    {/if}
+                                                                    {preset.selectedModels
+                                                                        .map(m => {
+                                                                            const provider =
+                                                                                providers[
+                                                                                    m.provider
+                                                                                ] ||
+                                                                                providers.customProviders?.find(
+                                                                                    p =>
+                                                                                        p.id ===
+                                                                                        m.provider
+                                                                                );
+                                                                            const model =
+                                                                                provider?.models?.find(
+                                                                                    model =>
+                                                                                        model.id ===
+                                                                                        m.modelId
+                                                                                );
+                                                                            return (
+                                                                                model?.name ||
+                                                                                m.modelId
+                                                                            );
+                                                                        })
+                                                                        .join(', ')}
+                                                                </span>
+                                                            {/if}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div
+                                                    class="model-settings-preset-menu-preset-actions"
+                                                >
+                                                    <button
+                                                        class="b3-button b3-button--text"
+                                                        on:click|stopPropagation={() =>
+                                                            updatePreset(preset.id)}
+                                                        title={t(
+                                                            'aiSidebar.modelSettings.updatePreset'
+                                                        )}
+                                                    >
+                                                        <svg class="b3-button__icon">
+                                                            <use xlink:href="#iconRefresh"></use>
+                                                        </svg>
+                                                    </button>
+                                                    <button
+                                                        class="b3-button b3-button--text"
+                                                        on:click|stopPropagation={() =>
+                                                            deletePreset(preset.id)}
+                                                        title={t(
+                                                            'aiSidebar.modelSettings.deletePreset'
+                                                        )}
+                                                    >
+                                                        <svg class="b3-button__icon">
+                                                            <use xlink:href="#iconTrashcan"></use>
+                                                        </svg>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    {/each}
+                                {:else}
+                                    <div class="model-settings-preset-menu-empty">
+                                        {t('aiSidebar.modelSettings.noPresets')}
+                                    </div>
+                                {/if}
+                            </div>
+                        {/if}
+                    </div>
+
+                    <button
+                        class="b3-button b3-button--text"
+                        on:click={() => (isOpen = false)}
+                        title={t('common.close')}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
+                    </button>
+                </div>
             </div>
 
             <div class="model-settings-content">
@@ -472,113 +819,163 @@
                     </div>
                 </div>
 
-                <!-- 预设管理 -->
+                <!-- 聊天模式设置 -->
                 <div class="model-settings-item">
-                    <div class="model-settings-preset-header">
-                        <label class="model-settings-label">
-                            {t('aiSidebar.modelSettings.presets')}
+                    <label class="model-settings-label">
+                        {t('aiSidebar.modelSettings.chatMode') || '聊天模式'}
+                    </label>
+                    <select
+                        bind:value={tempChatMode}
+                        class="b3-select"
+                        on:change={() => {
+                            // 如果切换到非ask模式，自动禁用多模型
+                            if (tempChatMode !== 'ask' && tempEnableMultiModel) {
+                                tempEnableMultiModel = false;
+                            }
+                        }}
+                    >
+                        <option value="ask">{t('aiSidebar.mode.ask') || '问答模式'}</option>
+                        <option value="edit">{t('aiSidebar.mode.edit') || '编辑模式'}</option>
+                        <option value="agent">{t('aiSidebar.mode.agent') || 'Agent模式'}</option>
+                    </select>
+                    <div class="model-settings-hint">
+                        {t('aiSidebar.modelSettings.chatModeHint') ||
+                            '选择聊天模式，只有问答模式支持多模型'}
+                    </div>
+                </div>
+
+                <!-- 模型选择设置 -->
+                <div class="model-settings-item">
+                    <div class="model-settings-checkbox">
+                        <input
+                            type="checkbox"
+                            id="model-selection-enabled"
+                            bind:checked={tempModelSelectionEnabled}
+                            class="b3-switch"
+                        />
+                        <label for="model-selection-enabled">
+                            {t('aiSidebar.modelSettings.enableModelSelection') || '启用模型选择'}
                         </label>
-                        <button
-                            class="b3-button b3-button--text"
-                            on:click={() => (showPresetManager = !showPresetManager)}
-                            title={showPresetManager
-                                ? t('aiSidebar.modelSettings.hidePresetManager')
-                                : t('aiSidebar.modelSettings.showPresetManager')}
-                        >
-                            <svg class="b3-button__icon">
-                                <use
-                                    xlink:href={showPresetManager ? '#iconContract' : '#iconAdd'}
-                                ></use>
-                            </svg>
-                        </button>
                     </div>
 
-                    {#if showPresetManager}
-                        <div class="model-settings-preset-manager">
-                            <div class="model-settings-preset-new">
+                    {#if tempModelSelectionEnabled}
+                        <div class="model-settings-model-selector">
+                            <!-- 多模型模式开关 -->
+                            <div class="model-settings-checkbox">
                                 <input
-                                    type="text"
-                                    bind:value={newPresetName}
-                                    class="b3-text-field"
-                                    placeholder={t('aiSidebar.modelSettings.presetName')}
+                                    type="checkbox"
+                                    id="enable-multi-model"
+                                    bind:checked={tempEnableMultiModel}
+                                    class="b3-switch"
+                                    disabled={tempChatMode !== 'ask'}
                                 />
-                                <button
-                                    class="b3-button b3-button--primary"
-                                    on:click={saveAsPreset}
+                                <label
+                                    for="enable-multi-model"
+                                    class:disabled={tempChatMode !== 'ask'}
                                 >
-                                    {t('aiSidebar.modelSettings.savePreset')}
-                                </button>
+                                    {t('aiSidebar.modelSettings.enableMultiModel') || '多模型模式'}
+                                    {#if tempChatMode !== 'ask'}
+                                        <span class="model-settings-disabled-hint">
+                                            ({t('aiSidebar.modelSettings.onlyAskMode') ||
+                                                '仅问答模式可用'})
+                                        </span>
+                                    {/if}
+                                </label>
                             </div>
 
-                            {#if presets.length > 0}
-                                <div class="model-settings-preset-list">
-                                    {#each presets as preset}
-                                        <div
-                                            class="model-settings-preset-item"
-                                            class:model-settings-preset-item--selected={selectedPresetId ===
-                                                preset.id}
-                                            role="button"
-                                            tabindex="0"
-                                            on:click={() => loadPreset(preset.id)}
-                                            on:keydown={e =>
-                                                e.key === 'Enter' && loadPreset(preset.id)}
-                                        >
-                                            <div class="model-settings-preset-info">
-                                                <div class="model-settings-preset-name">
-                                                    {#if selectedPresetId === preset.id}
-                                                        <svg
-                                                            class="model-settings-preset-selected-icon"
-                                                        >
-                                                            <use xlink:href="#iconCheck"></use>
-                                                        </svg>
-                                                    {/if}
-                                                    {preset.name}
-                                                </div>
-                                                <div class="model-settings-preset-details">
-                                                    {t('aiSidebar.modelSettings.contextCount')}: {preset.contextCount}
-                                                    {#if preset.temperatureEnabled ?? true}
-                                                        | {t(
-                                                            'aiSidebar.modelSettings.temperature'
-                                                        )}: {preset.temperature.toFixed(2)}
-                                                    {/if}
-                                                </div>
-                                            </div>
-                                            <div class="model-settings-preset-actions">
-                                                <button
-                                                    class="b3-button b3-button--text"
-                                                    on:click|stopPropagation={() =>
-                                                        updatePreset(preset.id)}
-                                                    title={t(
-                                                        'aiSidebar.modelSettings.updatePreset'
-                                                    )}
-                                                >
-                                                    <svg class="b3-button__icon">
-                                                        <use xlink:href="#iconRefresh"></use>
-                                                    </svg>
-                                                </button>
-                                                <button
-                                                    class="b3-button b3-button--text"
-                                                    on:click|stopPropagation={() =>
-                                                        deletePreset(preset.id)}
-                                                    title={t(
-                                                        'aiSidebar.modelSettings.deletePreset'
-                                                    )}
-                                                >
-                                                    <svg class="b3-button__icon">
-                                                        <use xlink:href="#iconTrashcan"></use>
-                                                    </svg>
-                                                </button>
-                                            </div>
+                            <!-- 模型选择下拉框 -->
+                            <div class="model-settings-model-list">
+                                {#each getAllAvailableModels() as model}
+                                    <div class="model-settings-model-item">
+                                        <div class="model-settings-model-item-main">
+                                            <input
+                                                type={tempEnableMultiModel ? 'checkbox' : 'radio'}
+                                                id="model-{model.provider}-{model.modelId}"
+                                                name="preset-model-selection"
+                                                checked={tempSelectedModels.some(
+                                                    m =>
+                                                        m.provider === model.provider &&
+                                                        m.modelId === model.modelId
+                                                )}
+                                                on:change={e => {
+                                                    if (tempEnableMultiModel) {
+                                                        // 多模型模式：checkbox
+                                                        if (e.currentTarget.checked) {
+                                                            tempSelectedModels = [
+                                                                ...tempSelectedModels,
+                                                                {
+                                                                    provider: model.provider,
+                                                                    modelId: model.modelId,
+                                                                },
+                                                            ];
+                                                        } else {
+                                                            tempSelectedModels =
+                                                                tempSelectedModels.filter(
+                                                                    m =>
+                                                                        !(
+                                                                            m.provider ===
+                                                                                model.provider &&
+                                                                            m.modelId ===
+                                                                                model.modelId
+                                                                        )
+                                                                );
+                                                        }
+                                                    } else {
+                                                        // 单模型模式：radio
+                                                        tempSelectedModels = [
+                                                            {
+                                                                provider: model.provider,
+                                                                modelId: model.modelId,
+                                                            },
+                                                        ];
+                                                    }
+                                                }}
+                                            />
+                                            <label for="model-{model.provider}-{model.modelId}">
+                                                <span class="model-provider-name">
+                                                    {model.providerName}
+                                                </span>
+                                                <span class="model-name">{model.modelName}</span>
+                                            </label>
                                         </div>
-                                    {/each}
-                                </div>
-                            {:else}
-                                <div class="model-settings-empty">
-                                    {t('aiSidebar.modelSettings.noPresets')}
-                                </div>
-                            {/if}
+
+                                        <!-- Thinking checkbox -->
+                                        {#if model.supportsThinking}
+                                            <div class="model-settings-thinking-checkbox">
+                                                <input
+                                                    type="checkbox"
+                                                    id="thinking-{model.provider}-{model.modelId}"
+                                                    class="b3-switch b3-switch--small"
+                                                    checked={tempModelThinkingSettings[
+                                                        `${model.provider}:${model.modelId}`
+                                                    ] ?? false}
+                                                    on:change={e => {
+                                                        const key = `${model.provider}:${model.modelId}`;
+                                                        tempModelThinkingSettings = {
+                                                            ...tempModelThinkingSettings,
+                                                            [key]: e.currentTarget.checked,
+                                                        };
+                                                    }}
+                                                />
+                                                <label
+                                                    for="thinking-{model.provider}-{model.modelId}"
+                                                    class="thinking-label"
+                                                >
+                                                    {t('aiSidebar.modelSettings.enableThinking') ||
+                                                        '思考'}
+                                                </label>
+                                            </div>
+                                        {/if}
+                                    </div>
+                                {/each}
+                            </div>
                         </div>
                     {/if}
+
+                    <div class="model-settings-hint">
+                        {t('aiSidebar.modelSettings.modelSelectionHint') ||
+                            '启用后，应用预设时会自动切换到选择的模型'}
+                    </div>
                 </div>
             </div>
 
@@ -639,6 +1036,118 @@
             font-weight: 600;
             color: var(--b3-theme-on-background);
         }
+    }
+
+    .model-settings-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .model-settings-preset-menu-wrapper {
+        position: relative;
+    }
+
+    .model-settings-preset-menu {
+        position: absolute;
+        top: calc(100% + 4px);
+        right: 0;
+        min-width: 280px;
+        max-width: 400px;
+        max-height: 400px;
+        overflow-y: auto;
+        background: var(--b3-theme-background);
+        border: 1px solid var(--b3-border-color);
+        border-radius: 6px;
+        box-shadow: var(--b3-dialog-shadow);
+        z-index: 1000;
+        padding: 8px;
+    }
+
+    .model-settings-preset-menu-item {
+        display: flex;
+        align-items: center;
+        padding: 8px;
+        gap: 8px;
+
+        input {
+            flex: 1;
+        }
+    }
+
+    .model-settings-preset-menu-divider {
+        height: 1px;
+        background: var(--b3-border-color);
+        margin: 8px 0;
+    }
+
+    .model-settings-preset-menu-preset {
+        display: flex;
+        flex-direction: column;
+        padding: 8px;
+        border-radius: 4px;
+        transition: background 0.2s;
+
+        &:hover {
+            background: var(--b3-theme-surface);
+        }
+    }
+
+    .model-settings-preset-menu-preset-main {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    .model-settings-preset-menu-preset-info {
+        flex: 1;
+        display: flex;
+        align-items: flex-start;
+        gap: 6px;
+        cursor: pointer;
+        font-size: 13px;
+        color: var(--b3-theme-on-surface);
+
+        &.selected {
+            color: var(--b3-theme-primary);
+
+            .preset-name {
+                font-weight: 600;
+            }
+        }
+
+        svg {
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+    }
+
+    .model-settings-preset-menu-preset-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .preset-name {
+        font-size: 13px;
+        font-weight: 500;
+    }
+
+    .model-settings-preset-menu-preset-actions {
+        display: flex;
+        gap: 2px;
+        flex-shrink: 0;
+    }
+
+    .model-settings-preset-menu-empty {
+        padding: 16px;
+        text-align: center;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
     }
 
     .model-settings-content {
@@ -803,6 +1312,12 @@
     .model-settings-preset-details {
         font-size: 11px;
         color: var(--b3-theme-on-surface-light);
+        line-height: 1.6;
+    }
+
+    .model-settings-preset-models {
+        color: var(--b3-theme-on-surface);
+        font-weight: 500;
     }
 
     .model-settings-footer {
@@ -816,5 +1331,107 @@
 
     .b3-slider {
         width: 100%;
+    }
+
+    .model-settings-model-selector {
+        margin-top: 12px;
+        padding: 12px;
+        background: var(--b3-theme-surface);
+        border-radius: 4px;
+        border: 1px solid var(--b3-border-color);
+    }
+
+    .model-settings-model-list {
+        margin-top: 12px;
+        max-height: 200px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .model-settings-model-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 6px 8px;
+        background: var(--b3-theme-background);
+        border-radius: 4px;
+        border: 1px solid var(--b3-border-color);
+        transition: all 0.2s;
+
+        &:hover {
+            background: var(--b3-theme-surface);
+            border-color: var(--b3-theme-primary-light);
+        }
+
+        input[type='checkbox'],
+        input[type='radio'] {
+            flex-shrink: 0;
+        }
+
+        label {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            margin: 0;
+        }
+
+        .model-provider-name {
+            color: var(--b3-theme-on-surface-light);
+            font-size: 11px;
+            padding: 2px 6px;
+            background: var(--b3-theme-surface);
+            border-radius: 3px;
+        }
+
+        .model-name {
+            color: var(--b3-theme-on-surface);
+            font-weight: 500;
+        }
+    }
+
+    .model-settings-model-item-main {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .model-settings-thinking-checkbox {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding-left: 8px;
+        border-left: 1px solid var(--b3-border-color);
+
+        input[type='checkbox'] {
+            flex-shrink: 0;
+        }
+
+        .thinking-label {
+            font-size: 11px;
+            color: var(--b3-theme-on-surface-light);
+            cursor: pointer;
+            margin: 0;
+            white-space: nowrap;
+        }
+    }
+
+    .model-settings-checkbox {
+        label.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    }
+
+    .model-settings-disabled-hint {
+        font-size: 11px;
+        color: var(--b3-theme-on-surface-light);
+        font-weight: normal;
     }
 </style>
