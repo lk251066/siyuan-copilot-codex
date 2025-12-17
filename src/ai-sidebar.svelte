@@ -3681,46 +3681,19 @@
     }
 
     // 初始化 KaTeX
-    async function initKatex() {
-        if ((window as any).katex) return true;
+    export const initKatex = async () => {
+        if (window.katex) return true;
+        // https://github.com/siyuan-note/siyuan/blob/master/app/src/protyle/render/mathRender.ts
+        const cdn = Constants.PROTYLE_CDN;
+        addStyle(`${cdn}/js/katex/katex.min.css`, "protyleKatexStyle");
+        await addScript(`${cdn}/js/katex/katex.min.js`, "protyleKatexScript");
+        return window.katex !== undefined && window.katex !== null;
+    };
 
-        try {
-            // 使用思源的 CDN 加载 KaTeX
-            const cdn = Constants.PROTYLE_CDN;
-
-            // 添加 KaTeX 样式
-            if (!document.getElementById('protyleKatexStyle')) {
-                const link = document.createElement('link');
-                link.id = 'protyleKatexStyle';
-                link.rel = 'stylesheet';
-                link.href = `${cdn}/js/katex/katex.min.css`;
-                document.head.appendChild(link);
-            }
-
-            // 添加 KaTeX 脚本
-            if (!document.getElementById('protyleKatexScript')) {
-                await new Promise<void>((resolve, reject) => {
-                    const script = document.createElement('script');
-                    script.id = 'protyleKatexScript';
-                    script.src = `${cdn}/js/katex/katex.min.js`;
-                    script.onload = () => resolve();
-                    script.onerror = () => reject(new Error('Failed to load KaTeX'));
-                    document.head.appendChild(script);
-                });
-            }
-
-            return (window as any).katex !== undefined && (window as any).katex !== null;
-        } catch (error) {
-            console.error('Init KaTeX error:', error);
-            return false;
-        }
-    }
-
-    // 初始化 highlight.js (使用用户提供的实现)
+    // 初始化 highlight.js
     export const initHljs = async () => {
         if ((window as any).hljs) return;
 
-        //https://github.com/siyuan-note/siyuan/blob/master/app/src/util/assets.ts#L309
         const setCodeTheme = (cdn = Constants.PROTYLE_CDN) => {
             const protyleHljsStyle = document.getElementById('protyleHljsStyle') as HTMLLinkElement;
             let css;
