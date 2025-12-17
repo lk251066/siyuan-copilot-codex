@@ -1,4 +1,16 @@
 
+## v0.9.0 / 20251217 
+- 🎨 agent添加数据库工具 [#60](https://github.com/Achuan-2/siyuan-plugin-copilot/issues/60)
+- 🎨 agent 模式支持获取块属性和设置块属性功能  [#84](https://github.com/Achuan-2/siyuan-plugin-copilot/issues/84)
+- 🎨 新增对 DeepSeek V3.2思考中工具调用 的支持，避免在agent模式下返回报错——推理内容缺失 ([#83](https://github.com/Achuan-2/siyuan-plugin-copilot/issues/83))，感谢[@zx2021210538](https://github.com/zx2021210538)贡献
+- 🎨 agent添加获取文档树工具
+- 🎨 agent模式的调用工具默认折叠，但是展开查看工具调用参数和结果默认展开
+- 🎨 预设支持拖动排序
+- 🐛 thinking模式报错问题
+- 🐛 Failed to initialize KaTeX [#85](https://github.com/Achuan-2/siyuan-plugin-copilot/issues/85)
+- 🐛 i18n数据不可用，使用key作为后备: toolbar.aiChat
+- 🐛 多模型回答，不会自动重命名会话标题 [#82](https://github.com/Achuan-2/siyuan-plugin-copilot/issues/82)
+
 ## v0.8.0 / 20251213 预设支持选择模型，支持根据场景快速切换模型
 
 - 🎨添加预设模型功能，设置不同场景快速选择模型 [#73](https://github.com/Achuan-2/siyuan-plugin-copilot/issues/73)
