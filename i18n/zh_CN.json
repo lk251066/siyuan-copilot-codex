@@ -514,6 +514,12 @@
         "siyuan_update_block": {
             "name": "更新块"
         },
+        "siyuan_get_block_attrs": {
+            "name": "获取块属性"
+        },
+        "siyuan_set_block_attrs": {
+            "name": "设置块属性"
+        },
         "siyuan_get_block_content": {
             "name": "获取块内容"
         },

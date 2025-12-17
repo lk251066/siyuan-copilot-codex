@@ -31,6 +31,8 @@
             tools: [
                 'siyuan_sql_query',
                 'siyuan_get_block_content',
+                'siyuan_get_block_attrs',
+                'siyuan_set_block_attrs',
                 'siyuan_insert_block',
                 'siyuan_update_block',
                 'siyuan_create_document',

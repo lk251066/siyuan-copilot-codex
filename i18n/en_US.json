@@ -515,6 +515,12 @@
         "siyuan_update_block": {
             "name": "Update Block"
         },
+        "siyuan_get_block_attrs": {
+            "name": "Get Block Attributes"
+        },
+        "siyuan_set_block_attrs": {
+            "name": "Set Block Attributes"
+        },
         "siyuan_get_block_content": {
             "name": "Get Block Content"
         },

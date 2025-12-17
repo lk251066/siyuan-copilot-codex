@@ -18,6 +18,8 @@ import {
     renameDocByID,
     moveDocsByID,
     appendBlock,
+    getBlockAttrs,
+    setBlockAttrs,
 } from '../api';
 import { getActiveEditor } from 'siyuan';
 
@@ -652,6 +654,93 @@ siyuan_move_documents({
             },
         },
     },
+    // 获取块属性工具
+    {
+        type: 'function',
+        function: {
+            name: 'siyuan_get_block_attrs',
+            description: `获取指定块的属性。
+
+## 使用场景
+- 读取某个块的自定义属性（如 tags、bookmark、alias 等）
+
+## 参数
+- id: 要查询的块ID
+
+## 返回
+- 返回一个对象，键为属性名，值为属性值。
+
+## 对文档块返回的常见属性
+- icon: 文档图标
+- id: 文档 id
+- tags: 文档标签，多个标签使用逗号分隔
+- type: 文档类型（'d' 表示文档）
+- update: 更新时间戳或时间字符串
+- bookmark: 书签标识（如存在）
+- alias: 文档别名
+- name: 文档命名，可与title不同
+- title: 文档标题
+- memo: 备注
+
+## 普通块不包含的属性
+- icon
+- tags
+- title
+`,
+            parameters: {
+                type: 'object',
+                properties: {
+                    id: {
+                        type: 'string',
+                        description: '要获取属性的块ID',
+                    },
+                },
+                required: ['id'],
+            },
+        },
+    },
+
+    // 设置块属性工具
+    {
+        type: 'function',
+        function: {
+            name: 'siyuan_set_block_attrs',
+            description: `设置指定块的属性。
+
+## 使用场景
+- 修改或添加块属性（如 tags、bookmark、alias 等）
+
+## 参数
+- id: 要设置属性的块ID
+- attrs: 属性对象，键为属性名，值为属性值（字符串）
+
+## 示例
+\`\`\`js
+{
+  id: '20251217195359-2kjwv0x',
+  attrs: { tags: '1,3', bookmark: '✨' }
+}
+\`\`\`
+
+## 注意事项
+- 如果要设置标签需要先获取已有标签，然后根据用户需求是增加新标签还是直接覆盖标签，如果标签为空则直接覆盖
+`,
+    parameters: {
+        type: 'object',
+        properties: {
+            id: {
+                type: 'string',
+                description: '要设置属性的块ID',
+            },
+            attrs: {
+                type: 'object',
+                description: '属性对象，键为属性名，值为字符串',
+            },
+        },
+        required: ['id', 'attrs'],
+    },
+        },
+    },
 ];
 
 // ==================== 工具实现 ====================
@@ -953,6 +1042,32 @@ export async function siyuan_move_documents(
 }
 
 /**
+ * 获取块属性
+ */
+export async function siyuan_get_block_attrs(id: string): Promise<{ [key: string]: string } | any> {
+    try {
+        const res = await getBlockAttrs(id);
+        return res;
+    } catch (error) {
+        console.error('Get block attrs error:', error);
+        throw new Error(`获取块属性失败: ${(error as Error).message}`);
+    }
+}
+
+/**
+ * 设置块属性
+ */
+export async function siyuan_set_block_attrs(id: string, attrs: { [key: string]: string }): Promise<any> {
+    try {
+        const result = await setBlockAttrs(id, attrs);
+        return result;
+    } catch (error) {
+        console.error('Set block attrs error:', error);
+        throw new Error(`设置块属性失败: ${(error as Error).message}`);
+    }
+}
+
+/**
  * 执行工具调用
  */
 export async function executeToolCall(toolCall: ToolCall): Promise<string> {
@@ -995,6 +1110,18 @@ export async function executeToolCall(toolCall: ToolCall): Promise<string> {
             case 'siyuan_create_notebook':
                 const notebook = await siyuan_create_notebook(args.name);
                 return JSON.stringify(notebook, null, 2);
+
+            case 'siyuan_get_block_attrs':
+                {
+                    const attrs = await siyuan_get_block_attrs(args.id);
+                    return JSON.stringify(attrs, null, 2);
+                }
+
+            case 'siyuan_set_block_attrs':
+                {
+                    const setRes = await siyuan_set_block_attrs(args.id, args.attrs);
+                    return JSON.stringify(setRes, null, 2);
+                }
 
             case 'siyuan_rename_document':
                 const renameResult = await siyuan_rename_document(args.id, args.title);
