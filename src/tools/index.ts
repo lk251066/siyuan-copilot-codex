@@ -939,7 +939,9 @@ siyuan_move_documents({
 - itemID: 行ID (v3.3.1+使用itemID)
 - valueType: 值类型 (text/number/select/mSelect等)
 - value: 属性值对象
+**返回值**
 
+为null
 **示例:**
 \`\`\`json
 {
@@ -963,6 +965,10 @@ siyuan_move_documents({
   - keyID: 列ID
   - rowID: 行ID
   - value: 属性值对象
+
+**返回值**
+
+为null
 
 **示例:**
 \`\`\`json
@@ -1041,7 +1047,9 @@ siyuan_move_documents({
 - keyType: 列类型 (text/number/select/mSelect/block/date/url/email/phone等)
 - previousKeyID: 前一列的ID，用于指定新列的位置
 - keyIcon: 可选，列图标，默认为空字符串，unicode字符，比如2728，1f4cc
+**返回值**
 
+为null
 **示例:**
 \`\`\`json
 {
