@@ -78,6 +78,41 @@
     let draggedModelIndex: number | null = null;
     let dropModelIndicatorIndex: number | null = null;
 
+    // 模型搜索筛选
+    let modelSearchQuery = '';
+
+    type AvailableModel = {
+        provider: string;
+        modelId: string;
+        modelName: string;
+        providerName: string;
+        supportsThinking: boolean;
+    };
+
+    // 响应式过滤后的模型列表（支持空格分隔的 AND 搜索）
+    let filteredModels: AvailableModel[] = [];
+    // 确保当 `providers` 变化时也会重新计算 filteredModels
+    $: {
+        // 引用 providers 以触发依赖
+        const _providers_ref = providers;
+        const q = modelSearchQuery.trim().toLowerCase();
+        const all = getAllAvailableModels();
+        if (!q) {
+            filteredModels = all;
+        } else {
+            const terms = q.split(/\s+/).filter(Boolean);
+            filteredModels = all.filter(m => {
+                const hay = (
+                    (m.modelName || '') + ' ' +
+                    (m.modelId || '') + ' ' +
+                    (m.providerName || '') + ' ' +
+                    (m.provider || '')
+                ).toLowerCase();
+                return terms.every(term => hay.includes(term));
+            });
+        }
+    }
+
     // 获取当前模型配置
     function getCurrentModelConfig() {
         if (!currentProvider || !currentModelId) return null;
@@ -1267,7 +1302,20 @@
 
                             <!-- 模型选择下拉框 -->
                             <div class="model-settings-model-list">
-                                {#each getAllAvailableModels() as model}
+                                <div class="model-settings-search">
+                                    <input
+                                        type="text"
+                                        class="b3-text-field"
+                                        placeholder={t('aiSidebar.modelSettings.searchModels') || '搜索模型'}
+                                        bind:value={modelSearchQuery}
+                                    />
+                                </div>
+
+                                {#if modelSearchQuery.trim() && filteredModels.length === 0}
+                                    <div class="model-settings-no-results">{t('aiSidebar.modelSettings.noResults') || '无匹配结果'}</div>
+                                {/if}
+
+                                {#each filteredModels as model}
                                     <div class="model-settings-model-item">
                                         <div class="model-settings-model-item-main">
                                             <input
@@ -1696,6 +1744,23 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
+    }
+
+    .model-settings-search {
+        display: flex;
+        padding: 6px 0;
+    }
+
+    .model-settings-search .b3-text-field {
+        width: 100%;
+        padding: 6px 8px;
+        font-size: 12px;
+    }
+
+    .model-settings-no-results {
+        padding: 8px;
+        color: var(--b3-theme-on-surface-light);
+        font-size: 12px;
     }
 
     .model-settings-model-item {

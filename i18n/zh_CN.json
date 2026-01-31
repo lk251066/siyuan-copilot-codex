@@ -236,7 +236,9 @@
             "presetMenu": "预设管理",
             "enableThinking": "思考",
             "createNewPreset": "新建预设",
-            "editPreset": "编辑预设"
+            "editPreset": "编辑预设",
+            "searchModels": "搜索模型",
+            "noResults": "无匹配结果"
         },
         "input": {
             "placeholder": "输入消息... (可拖入文档、块或粘贴图片)"
