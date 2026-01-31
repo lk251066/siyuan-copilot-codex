@@ -1695,6 +1695,8 @@
         autoScroll = true;
         isAborted = false; // 重置中断标志
 
+        await scrollToBottom(true);
+
         // 如果是第一条用户消息且没有会话ID，立即创建会话
         // 只有在非重新生成的情况下才执行
         if (!isRegenerate) {
@@ -2489,6 +2491,8 @@
         isThinkingPhase = false;
         hasUnsavedChanges = true;
         autoScroll = true; // 发送新消息时启用自动滚动
+
+        await scrollToBottom(true);
 
         // 如果是第一条用户消息且没有会话ID，立即创建会话
         const userMessages = messages.filter(m => m.role === 'user');
@@ -8022,7 +8026,7 @@
             </div>
         {/each}
 
-        {#if isLoading && (streamingMessage || streamingThinking)}
+        {#if isLoading && !(enableMultiModel && chatMode === 'ask' && selectedMultiModels.length > 0)}
             <div
                 class="ai-message ai-message--assistant ai-message--streaming"
                 on:contextmenu={e => {
@@ -8072,6 +8076,16 @@
                         style={messageFontSize ? `font-size: ${messageFontSize}px;` : ''}
                     >
                         {@html formatMessage(streamingMessage)}
+                    </div>
+                {:else if !streamingThinking}
+                    <div class="ai-message__content b3-typography">
+                        <div class="ai-message__waiting-placeholder">
+                            <span class="jumping-dots">
+                                <span class="dot"></span>
+                                <span class="dot"></span>
+                                <span class="dot"></span>
+                            </span>
+                        </div>
                     </div>
                 {/if}
             </div>
@@ -10023,6 +10037,13 @@
         user-select: text; // 允许鼠标选择文本进行复制
         cursor: text; // 显示文本选择光标
         box-shadow: 0 0 0 1px var(--b3-border-color);
+    }
+
+    .ai-message__waiting-placeholder {
+        display: flex;
+        align-items: center;
+        height: 24px;
+        padding: 2px 0;
     }
 
     .ai-message--user {
