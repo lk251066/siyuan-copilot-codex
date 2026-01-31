@@ -18,6 +18,7 @@ export interface MessageAttachment {
     name: string;
     data: string; // base64 或 URL
     mimeType?: string;
+    path?: string; // 插件内存储的资源路径
 }
 
 export interface MessageContent {
@@ -48,37 +49,38 @@ export interface ContextDocument {
 }
 
 export interface Message {
-  role: "user" | "assistant" | "system" | "tool";
-  content: string | MessageContent[];
-  attachments?: MessageAttachment[];
-  contextDocuments?: ContextDocument[]; // 关联的上下文文档
-  thinking?: string; // 思考过程内容
-  reasoning_content?: string; // DeepSeek 思考模式下的思维链内容
-  editOperations?: EditOperation[]; // 编辑操作
-  tool_calls?: ToolCall[]; // Tool Calls
-  tool_call_id?: string; // Tool 结果的 call_id
-  name?: string; // Tool 的名称
-  finalReply?: string; // Agent模式：工具调用后的最终回复
-  multiModelResponses?: Array<{
-    provider: string;
-    modelId: string;
-    modelName: string;
-    content: string;
-    thinking?: string;
-    isLoading: boolean;
-    error?: string;
-    isSelected?: boolean; // 是否被选择
-    thinkingCollapsed?: boolean; // 思考内容是否折叠
-    thinkingEnabled?: boolean; // 用户是否开启思考模式
-  }>; // 多模型响应
-  generatedImages?: GeneratedImageData[]; // 生成的图片数据（用于多轮生图）
+    role: "user" | "assistant" | "system" | "tool";
+    content: string | MessageContent[];
+    attachments?: MessageAttachment[];
+    contextDocuments?: ContextDocument[]; // 关联的上下文文档
+    thinking?: string; // 思考过程内容
+    reasoning_content?: string; // DeepSeek 思考模式下的思维链内容
+    editOperations?: EditOperation[]; // 编辑操作
+    tool_calls?: ToolCall[]; // Tool Calls
+    tool_call_id?: string; // Tool 结果的 call_id
+    name?: string; // Tool 的名称
+    finalReply?: string; // Agent模式：工具调用后的最终回复
+    multiModelResponses?: Array<{
+        provider: string;
+        modelId: string;
+        modelName: string;
+        content: string;
+        thinking?: string;
+        isLoading: boolean;
+        error?: string;
+        isSelected?: boolean; // 是否被选择
+        thinkingCollapsed?: boolean; // 思考内容是否折叠
+        thinkingEnabled?: boolean; // 用户是否开启思考模式
+    }>; // 多模型响应
+    generatedImages?: GeneratedImageData[]; // 生成的图片数据（用于多轮生图）
 }
 
 // 生成的图片数据接口（用于Gemini多轮生图）
 export interface GeneratedImageData {
-  mimeType: string;
-  data: string; // base64 数据
-  url?: string; // 可选的URL
+    mimeType: string;
+    data: string; // base64 数据
+    url?: string; // 可选的URL
+    path?: string; // 插件内存储的资源路径
 }
 
 // 思考努力程度类型
@@ -464,11 +466,29 @@ async function chatOpenAIFormat(
 
 
     // 转换消息格式以支持多模态和工具调用
-    const formattedMessages = options.messages.map(msg => {
+    const formattedMessages = await Promise.all(options.messages.map(async msg => {
         const formatted: any = {
             role: msg.role,
             content: msg.content
         };
+
+        // 如果是多模态内容，处理 blob URL
+        if (Array.isArray(msg.content)) {
+            const newContent = await Promise.all(msg.content.map(async part => {
+                if (part.type === 'image_url' && part.image_url && part.image_url.url.startsWith('blob:')) {
+                    const base64 = await imageUrlToBase64(part.image_url.url);
+                    // 注意：OpenAI 需要完整的 data:uri
+                    return {
+                        ...part,
+                        image_url: {
+                            url: `data:image/jpeg;base64,${base64}`
+                        }
+                    };
+                }
+                return part;
+            }));
+            formatted.content = newContent;
+        }
 
         // 深度思考模式下需要回传的思维链内容（如 DeepSeek reasoning_content）
         if ((msg as any).reasoning_content) {
@@ -487,7 +507,7 @@ async function chatOpenAIFormat(
         }
 
         return formatted;
-    });
+    }));
 
     const requestBody: any = {
         model: options.model,
@@ -640,9 +660,9 @@ async function chatGeminiFormat(
     const url = `${baseUrl}/v1beta/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
 
     // 转换消息格式
-    const contents = options.messages
+    const contents = await Promise.all(options.messages
         .filter(msg => msg.role !== 'system')
-        .map(msg => {
+        .map(async msg => {
             const role = msg.role === 'assistant' ? 'model' : 'user';
 
             // 处理多模态内容
@@ -666,21 +686,29 @@ async function chatGeminiFormat(
                 // 转换为 Gemini 格式
                 const parts: any[] = [];
 
-                msg.content.forEach(part => {
+                for (const part of msg.content) {
                     if (part.type === 'text' && part.text) {
                         parts.push({ text: part.text });
                     } else if (part.type === 'image_url' && part.image_url) {
                         // Gemini 使用 inline_data 格式
-                        const base64Data = part.image_url.url.replace(/^data:image\/\w+;base64,/, '');
-                        const mimeType = part.image_url.url.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
+                        let base64Data = '';
+                        if (part.image_url.url.startsWith('data:')) {
+                            base64Data = part.image_url.url.replace(/^data:image\/\w+;base64,/, '');
+                        } else {
+                            // 尝试转换为 base64 (支持 blob URL)
+                            base64Data = await imageUrlToBase64(part.image_url.url);
+                        }
+                        const mimeType =
+                            part.image_url.url.match(/^data:(image\/\w+);base64,/)?.[1] ||
+                            'image/jpeg';
                         parts.push({
                             inline_data: {
                                 mime_type: mimeType,
-                                data: base64Data
-                            }
+                                data: base64Data,
+                            },
                         });
                     }
-                });
+                }
 
                 // 如果是assistant消息且有生成的图片，添加inline_data
                 if (msg.role === 'assistant' && msg.generatedImages && msg.generatedImages.length > 0) {
@@ -696,7 +724,7 @@ async function chatGeminiFormat(
 
                 return { role, parts };
             }
-        });
+        }));
 
     const systemInstruction = options.messages.find(msg => msg.role === 'system');
 
@@ -789,6 +817,28 @@ async function chatGeminiFormat(
             options.onError?.(error as Error);
         }
         throw error;
+    }
+}
+
+/**
+ * 将图片 URL（包括 blob URL）转换为 base64 数据（不带前缀）
+ */
+async function imageUrlToBase64(url: string): Promise<string> {
+    try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const result = reader.result as string;
+                resolve(result.replace(/^data:image\/\w+;base64,/, ''));
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    } catch (e) {
+        console.error('Failed to convert image to base64:', url, e);
+        return '';
     }
 }
 

@@ -18,7 +18,8 @@
     interface ChatSession {
         id: string;
         title: string;
-        messages: any[];
+        messages?: any[];
+        messageCount?: number;
         createdAt: number;
         updatedAt: number;
         pinned?: boolean; // 是否钉住
@@ -266,7 +267,7 @@
         const date = `> 创建时间：${new Date(session.createdAt).toLocaleString('zh-CN')}\n`;
         const updateDate = `> 更新时间：${new Date(session.updatedAt).toLocaleString('zh-CN')}\n\n`;
 
-        const messages = session.messages
+        const messages = (session.messages || [])
             .filter(msg => msg.role !== 'system')
             .map(msg => {
                 const role = msg.role === 'user' ? '👤 **用户**' : '🤖 **助手**';
@@ -447,7 +448,11 @@
                                         {formatDate(session.updatedAt)}
                                     </span>
                                     <span class="session-item__count">
-                                        {session.messages.filter(m => m.role !== 'system').length}
+                                        {session.messageCount ||
+                                            (session.messages
+                                                ? session.messages.filter(m => m.role !== 'system')
+                                                      .length
+                                                : 0)}
                                         {t('aiSidebar.messages.messageCount')}
                                     </span>
                                 </div>

@@ -31,7 +31,10 @@
         lsNotebooks,
         searchDocs,
         getHPathByID,
+        putFile,
+        removeFile,
     } from './api';
+    import { saveAsset, loadAsset, base64ToBlob } from './utils/assets';
     import ModelSelector from './components/ModelSelector.svelte';
     import MultiModelSelector from './components/MultiModelSelector.svelte';
     import SessionManager from './components/SessionManager.svelte';
@@ -50,9 +53,10 @@
     interface ChatSession {
         id: string;
         title: string;
-        messages: Message[];
+        messages?: Message[]; // 可选，元数据模式下不包含消息
         createdAt: number;
         updatedAt: number;
+        messageCount?: number; // 消息数量
         pinned?: boolean; // 是否钉住
     }
 
@@ -989,15 +993,18 @@
         try {
             isUploadingFile = true;
 
-            // 将图片转换为 base64
-            const base64 = await fileToBase64(file);
+            // 保存为 SiYuan 资源
+            const assetPath = await saveAsset(file, file.name);
+            // 本地预览使用 Blob URL
+            const blobUrl = URL.createObjectURL(file);
 
             currentAttachments = [
                 ...currentAttachments,
                 {
                     type: 'image',
                     name: file.name,
-                    data: base64,
+                    data: blobUrl,
+                    path: assetPath,
                     mimeType: file.type,
                 },
             ];
@@ -5453,15 +5460,77 @@
         try {
             const data = await plugin.loadData('chat-sessions.json');
             sessions = data?.sessions || [];
+
+            // 检查是否需要迁移
+            if (!settings.dataTransfer?.sessionData) {
+                await migrateSessions();
+            }
         } catch (error) {
             console.error('Load sessions error:', error);
             sessions = [];
         }
     }
 
+    // 迁移旧会话到独立文件
+    async function migrateSessions() {
+        console.log('Starting session storage migration...');
+        // 确保会话目录存在
+        try {
+            await putFile('/data/storage/petal/siyuan-plugin-copilot/sessions', true, null);
+        } catch (e) {
+            // 目录可能已存在
+        }
+        let migratedCount = 0;
+
+        for (let i = 0; i < sessions.length; i++) {
+            const session = sessions[i];
+            // 如果 messages 存在且不为空，说明是旧版全量存储，需要迁移
+            if (session.messages && session.messages.length > 0) {
+                try {
+                    // 保存完整内容到 individual 文件
+                    const path = `/data/storage/petal/siyuan-plugin-copilot/sessions/${session.id}.json`;
+                    const content = JSON.stringify({ messages: session.messages }, null, 2);
+                    const blob = new Blob([content], { type: 'application/json' });
+                    await putFile(path, false, blob);
+
+                    // 更新 metadata
+                    session.messageCount = session.messages.filter(m => m.role !== 'system').length;
+                    delete session.messages;
+                    migratedCount++;
+                } catch (e) {
+                    console.error(`Failed to migrate session ${session.id}:`, e);
+                }
+            }
+        }
+
+        if (migratedCount > 0) {
+            await saveSessions();
+            console.log(`Successfully migrated ${migratedCount} sessions.`);
+        }
+
+        // 更新配置中的迁移标志
+        if (!settings.dataTransfer) {
+            settings.dataTransfer = { sessionData: true };
+        } else {
+            settings.dataTransfer.sessionData = true;
+        }
+        await plugin.saveSettings(settings);
+    }
+
     async function saveSessions() {
         try {
-            await plugin.saveData('chat-sessions.json', { sessions });
+            // 只保存 metadata 到 chat-sessions.json
+            const metadata = sessions.map(s => {
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                const { messages, ...rest } = s;
+                return {
+                    ...rest,
+                    messageCount:
+                        s.messageCount ||
+                        (messages ? messages.filter(m => m.role !== 'system').length : 0),
+                };
+            });
+            await plugin.saveData('chat-sessions.json', { sessions: metadata });
         } catch (error) {
             console.error('Save sessions error:', error);
             pushErrMsg(t('aiSidebar.errors.saveSessionFailed'));
@@ -5494,34 +5563,75 @@
             // 更新现有会话
             const session = sessions.find(s => s.id === currentSessionId);
             if (session) {
-                session.messages = [...messages];
-                // 不再重新生成标题，保留原有标题（可能是默认标题、AI生成的标题或用户手动修改的标题）
                 session.updatedAt = now;
+                session.messageCount = messages.filter(m => m.role !== 'system').length;
+
+                // 1. 保存 metadata 列表
+                await saveSessions();
+
+                // 2. 将消息中的 Blob URL 转换为 path 以便永久存储
+                const messagesToSave = messages.map(msg => ({
+                    ...msg,
+                    attachments: msg.attachments?.map(att => ({
+                        ...att,
+                        data: att.path ? '' : att.data, // 如果有 path，清空 data
+                    })),
+                    generatedImages: msg.generatedImages?.map(img => ({
+                        ...img,
+                        data: '', // 不再这里存 base64
+                    })),
+                }));
+
+                // 3. 保存完整内容到独立文件
+                const sessionPath = `/data/storage/petal/siyuan-plugin-copilot/sessions/${currentSessionId}.json`;
+                const sessionContent = JSON.stringify({ messages: messagesToSave }, null, 2);
+                const sessionBlob = new Blob([sessionContent], { type: 'application/json' });
+                await putFile(sessionPath, false, sessionBlob);
             } else {
-                // 如果会话不存在（可能被其他实例删除），创建为新会话
+                // 如果会话不存在，创建为新会话
+                const userContent = messages.find(m => m.role === 'user')?.content || '';
                 const newSession: ChatSession = {
                     id: currentSessionId,
-                    title: generateSessionTitle(),
-                    messages: [...messages],
+                    title:
+                        typeof userContent === 'string'
+                            ? userContent.substring(0, 30)
+                            : generateSessionTitle(),
+                    messageCount: messages.filter(m => m.role !== 'system').length,
                     createdAt: now,
                     updatedAt: now,
                 };
                 sessions = [newSession, ...sessions];
+                await saveSessions();
+
+                // 保存完整内容
+                const sessionPath = `/data/storage/petal/siyuan-plugin-copilot/sessions/${currentSessionId}.json`;
+                const sessionContent = JSON.stringify({ messages }, null, 2);
+                const sessionBlob = new Blob([sessionContent], { type: 'application/json' });
+                await putFile(sessionPath, false, sessionBlob);
             }
         } else {
             // 创建新会话
+            const userContent = messages.find(m => m.role === 'user')?.content || '';
             const newSession: ChatSession = {
                 id: `session_${now}`,
-                title: generateSessionTitle(),
-                messages: [...messages],
+                title:
+                    typeof userContent === 'string'
+                        ? userContent.substring(0, 30)
+                        : generateSessionTitle(),
+                messageCount: messages.filter(m => m.role !== 'system').length,
                 createdAt: now,
                 updatedAt: now,
             };
             sessions = [newSession, ...sessions];
             currentSessionId = newSession.id;
-        }
+            await saveSessions();
 
-        await saveSessions();
+            // 保存完整内容
+            const sessionPath = `/data/storage/petal/siyuan-plugin-copilot/sessions/${newSession.id}.json`;
+            const sessionContent = JSON.stringify({ messages }, null, 2);
+            const sessionBlob = new Blob([sessionContent], { type: 'application/json' });
+            await putFile(sessionPath, false, sessionBlob);
+        }
         hasUnsavedChanges = false;
 
         if (!silent) {
@@ -5578,31 +5688,64 @@
     }
 
     async function doLoadSession(sessionId: string) {
-        const session = sessions.find(s => s.id === sessionId);
-        if (session) {
-            messages = [...session.messages];
-            // 清空全局上下文文档（上下文现在存储在各个消息中）
-            contextDocuments = [];
-            // 确保系统提示词存在且是最新的
-            if (settings.aiSystemPrompt) {
-                const systemMsgIndex = messages.findIndex(m => m.role === 'system');
-                if (systemMsgIndex >= 0) {
-                    messages[systemMsgIndex].content = settings.aiSystemPrompt;
-                } else {
-                    messages.unshift({ role: 'system', content: settings.aiSystemPrompt });
+        const sessionMetadata = sessions.find(s => s.id === sessionId);
+        if (sessionMetadata) {
+            try {
+                // 加载完整内容 (使用 getFileBlob 因为 saveData 路径不一致，或者由于前缀问题)
+                // 或者继续使用 loadData 但它是相对的。
+                // 如果我们用 putFile 存了，我们也应该用对应的 read 方式。
+                const path = `/data/storage/petal/siyuan-plugin-copilot/sessions/${sessionId}.json`;
+                const blob = await getFileBlob(path);
+                if (!blob) throw new Error('File not found');
+                const text = await blob.text();
+                const sessionData = JSON.parse(text);
+                const loadedMessages = sessionData?.messages || [];
+
+                // 还原图片数据 (从 path 还原为 blob url)
+                for (const msg of loadedMessages) {
+                    if (msg.attachments) {
+                        for (const att of msg.attachments) {
+                            if (att.type === 'image' && att.path) {
+                                att.data = (await loadAsset(att.path)) || '';
+                            }
+                        }
+                    }
+                    if (msg.generatedImages) {
+                        for (const img of msg.generatedImages) {
+                            if (img.path) {
+                                img.previewUrl = (await loadAsset(img.path)) || '';
+                            }
+                        }
+                    }
                 }
+
+                messages = [...loadedMessages];
+                // 清空全局上下文文档（上下文现在存储在各个消息中）
+                contextDocuments = [];
+                // 确保系统提示词存在且是最新的
+                if (settings.aiSystemPrompt) {
+                    const systemMsgIndex = messages.findIndex(m => m.role === 'system');
+                    if (systemMsgIndex >= 0) {
+                        messages[systemMsgIndex].content = settings.aiSystemPrompt;
+                    } else {
+                        messages.unshift({ role: 'system', content: settings.aiSystemPrompt });
+                    }
+                }
+                currentSessionId = sessionId;
+                hasUnsavedChanges = false;
+
+                // 清除多模型状态
+                multiModelResponses = [];
+                isWaitingForAnswerSelection = false;
+                selectedAnswerIndex = null;
+                selectedTabIndex = 0;
+
+                // 切换到历史会话时默认显示最开头（最早消息）而不是底部
+                await scrollToTop();
+            } catch (e) {
+                console.error('Failed to load session content:', e);
+                pushErrMsg('加载会话失败');
             }
-            currentSessionId = sessionId;
-            hasUnsavedChanges = false;
-
-            // 清除多模型状态
-            multiModelResponses = [];
-            isWaitingForAnswerSelection = false;
-            selectedAnswerIndex = null;
-            selectedTabIndex = 0;
-
-            // 切换到历史会话时默认显示最开头（最早消息）而不是底部
-            await scrollToTop();
         }
     }
 
@@ -5669,6 +5812,15 @@
                 sessions = sessions.filter(s => s.id !== sessionId);
                 await saveSessions();
 
+                // 删除独立会话文件 (SiYuan removeFile 路径相对于 workspace root)
+                try {
+                    await removeFile(
+                        `/data/storage/petal/siyuan-plugin-copilot/sessions/${sessionId}.json`
+                    );
+                } catch (e) {
+                    // 忽略错误
+                }
+
                 if (currentSessionId === sessionId) {
                     doNewSession();
                 }
@@ -5693,6 +5845,17 @@
                 // 过滤掉要删除的会话
                 sessions = sessions.filter(s => !sessionIds.includes(s.id));
                 await saveSessions();
+
+                // 批量删除独立会话文件
+                for (const id of sessionIds) {
+                    try {
+                        await removeFile(
+                            `/data/storage/petal/siyuan-plugin-copilot/sessions/${id}.json`
+                        );
+                    } catch (e) {
+                        // 忽略错误
+                    }
+                }
 
                 // 如果当前会话被删除，创建新会话
                 if (sessionIds.includes(currentSessionId)) {
@@ -7237,12 +7400,40 @@
 
                         // 如果有生成的图片，保存到消息中
                         if (generatedImages.length > 0) {
-                            assistantMessage.generatedImages = generatedImages;
+                            // 先异步保存所有图片到 SiYuan 资源文件夹
+                            const processedImages = await Promise.all(
+                                generatedImages.map(async (img, idx) => {
+                                    const blob = base64ToBlob(
+                                        img.data,
+                                        img.mimeType || 'image/png'
+                                    );
+                                    const name = `generated-image-${idx + 1}.${
+                                        img.mimeType?.split('/')[1] || 'png'
+                                    }`;
+                                    const assetPath = await saveAsset(blob, name);
+                                    return {
+                                        ...img,
+                                        path: assetPath,
+                                        // 给前端显示用的 blob url
+                                        previewUrl: URL.createObjectURL(blob),
+                                    };
+                                })
+                            );
+
+                            assistantMessage.generatedImages = processedImages.map(img => ({
+                                mimeType: img.mimeType,
+                                data: '', // 不再这里存数据
+                                path: img.path,
+                            }));
+
                             // 同时添加为附件以便显示
-                            assistantMessage.attachments = generatedImages.map((img, idx) => ({
+                            assistantMessage.attachments = processedImages.map((img, idx) => ({
                                 type: 'image' as const,
-                                name: `generated-image-${idx + 1}.${img.mimeType?.split('/')[1] || 'png'}`,
-                                data: `data:${img.mimeType || 'image/png'};base64,${img.data}`,
+                                name: `generated-image-${idx + 1}.${
+                                    img.mimeType?.split('/')[1] || 'png'
+                                }`,
+                                data: img.previewUrl,
+                                path: img.path,
                                 mimeType: img.mimeType || 'image/png',
                             }));
                         }
