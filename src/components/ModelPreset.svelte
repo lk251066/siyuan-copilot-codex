@@ -1013,13 +1013,20 @@
                                                                         model =>
                                                                             model.id === m.modelId
                                                                     );
-                                                                const modelName = model?.name || m.modelId;
-                                                                modelCounts[modelName] = (modelCounts[modelName] || 0) + 1;
+                                                                const modelName =
+                                                                    model?.name || m.modelId;
+                                                                modelCounts[modelName] =
+                                                                    (modelCounts[modelName] || 0) +
+                                                                    1;
                                                             });
 
                                                             // 格式化显示：模型名 × 次数
                                                             return Object.entries(modelCounts)
-                                                                .map(([name, count]) => count > 1 ? `${name} × ${count}` : name)
+                                                                .map(([name, count]) =>
+                                                                    count > 1
+                                                                        ? `${name} × ${count}`
+                                                                        : name
+                                                                )
                                                                 .join(', ');
                                                         })()}
                                                     </span>

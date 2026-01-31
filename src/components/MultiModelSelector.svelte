@@ -109,11 +109,12 @@
                     config: {
                         ...provider.config,
                         models: provider.config.models.filter(model => {
-                            const modelText = `${model.name} ${model.id} ${provider.name}`.toLowerCase();
+                            const modelText =
+                                `${model.name} ${model.id} ${provider.name}`.toLowerCase();
                             // 所有搜索词都必须匹配（AND逻辑）
                             return searchTerms.every(term => modelText.includes(term));
-                        })
-                    }
+                        }),
+                    },
                 }))
                 .filter(provider => provider.config.models.length > 0);
         }
