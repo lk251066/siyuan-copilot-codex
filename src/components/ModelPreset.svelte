@@ -675,7 +675,14 @@
         }
 
         // 计算水平位置
-        presetListLeft = rect.left;
+        // 如果按钮右侧空间不足以放下弹窗，则右对齐；否则左对齐
+        if (rect.left + dropdownWidth > window.innerWidth - 8) {
+            // 右对齐：弹窗右边缘与按钮右边缘对齐
+            presetListLeft = rect.right - dropdownWidth;
+        } else {
+            // 左对齐：弹窗左边缘与按钮左边缘对齐
+            presetListLeft = rect.left;
+        }
 
         // 确保不超出视口右边界
         if (presetListLeft + dropdownWidth > window.innerWidth - 8) {
@@ -709,7 +716,14 @@
         }
 
         // 计算水平位置
-        settingsLeft = rect.left;
+        // 如果按钮右侧空间不足以放下弹窗，则右对齐；否则左对齐
+        if (rect.left + dropdownWidth > window.innerWidth - 8) {
+            // 右对齐：弹窗右边缘与按钮右边缘对齐
+            settingsLeft = rect.right - dropdownWidth;
+        } else {
+            // 左对齐：弹窗左边缘与按钮左边缘对齐
+            settingsLeft = rect.left;
+        }
 
         // 确保不超出视口右边界
         if (settingsLeft + dropdownWidth > window.innerWidth - 8) {
@@ -991,6 +1005,7 @@
                         <input
                             type="text"
                             bind:value={newPresetName}
+                            on:input={applySettings}
                             class="b3-text-field"
                             placeholder={t('aiSidebar.modelSettings.enterPresetName')}
                         />

@@ -1,6 +1,7 @@
 /**
  * AI Chat API 调用模块
  * 支持多个AI平台的API调用和流式输出
+ * 支持图片生成功能
  */
 
 export interface ToolCall {
@@ -70,6 +71,14 @@ export interface Message {
     thinkingCollapsed?: boolean; // 思考内容是否折叠
     thinkingEnabled?: boolean; // 用户是否开启思考模式
   }>; // 多模型响应
+  generatedImages?: GeneratedImageData[]; // 生成的图片数据（用于多轮生图）
+}
+
+// 生成的图片数据接口（用于Gemini多轮生图）
+export interface GeneratedImageData {
+  mimeType: string;
+  data: string; // base64 数据
+  url?: string; // 可选的URL
 }
 
 // 思考努力程度类型
@@ -95,6 +104,8 @@ export interface ChatOptions {
     onToolCall?: (toolCall: ToolCall) => void; // Tool Call 回调
     onToolCallComplete?: (toolCalls: ToolCall[]) => void; // Tool Calls 完成回调
     customBody?: any; // 自定义请求体参数
+    enableImageGeneration?: boolean; // 是否启用图片生成
+    onImageGenerated?: (images: GeneratedImageData[]) => void; // 图片生成回调
 }
 
 export interface ModelInfo {
@@ -636,31 +647,62 @@ async function chatGeminiFormat(
 
             // 处理多模态内容
             if (typeof msg.content === 'string') {
-                return { role, parts: [{ text: msg.content }] };
+                const parts: any[] = [{ text: msg.content }];
+
+                // 如果是assistant消息且有生成的图片，添加inline_data
+                if (msg.role === 'assistant' && msg.generatedImages && msg.generatedImages.length > 0) {
+                    msg.generatedImages.forEach(img => {
+                        parts.push({
+                            inline_data: {
+                                mime_type: img.mimeType,
+                                data: img.data
+                            }
+                        });
+                    });
+                }
+
+                return { role, parts };
             } else {
                 // 转换为 Gemini 格式
-                const parts = msg.content.map(part => {
+                const parts: any[] = [];
+
+                msg.content.forEach(part => {
                     if (part.type === 'text' && part.text) {
-                        return { text: part.text };
+                        parts.push({ text: part.text });
                     } else if (part.type === 'image_url' && part.image_url) {
                         // Gemini 使用 inline_data 格式
                         const base64Data = part.image_url.url.replace(/^data:image\/\w+;base64,/, '');
                         const mimeType = part.image_url.url.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
-                        return {
+                        parts.push({
                             inline_data: {
                                 mime_type: mimeType,
                                 data: base64Data
                             }
-                        };
+                        });
                     }
-                    return null;
-                }).filter(Boolean);
+                });
+
+                // 如果是assistant消息且有生成的图片，添加inline_data
+                if (msg.role === 'assistant' && msg.generatedImages && msg.generatedImages.length > 0) {
+                    msg.generatedImages.forEach(img => {
+                        parts.push({
+                            inline_data: {
+                                mime_type: img.mimeType,
+                                data: img.data
+                            }
+                        });
+                    });
+                }
 
                 return { role, parts };
             }
         });
 
     const systemInstruction = options.messages.find(msg => msg.role === 'system');
+
+    // 检查是否需要启用图片生成（通过customBody或enableImageGeneration）
+    const enableImageGen = options.enableImageGeneration ||
+        options.customBody?.generationConfig?.responseModalities?.includes('IMAGE');
 
     const requestBody: any = {
         contents,
@@ -670,6 +712,16 @@ async function chatGeminiFormat(
         },
         ...options.customBody // 合并自定义参数
     };
+
+    // 如果启用了图片生成，确保responseModalities包含IMAGE
+    if (enableImageGen) {
+        if (!requestBody.generationConfig) {
+            requestBody.generationConfig = {};
+        }
+        if (!requestBody.generationConfig.responseModalities) {
+            requestBody.generationConfig.responseModalities = ['TEXT', 'IMAGE'];
+        }
+    }
 
     // 处理思考模式：界面控制优先
     // 如果界面未启用思考模式，删除自定义参数中可能存在的思考模式设置
@@ -889,6 +941,7 @@ async function handleGeminiStreamResponse(
     let thinkingText = '';
     let buffer = '';
     let isThinkingPhase = false;
+    const generatedImages: GeneratedImageData[] = [];
 
     try {
         while (true) {
@@ -913,6 +966,16 @@ async function handleGeminiStreamResponse(
 
                     if (parts && Array.isArray(parts)) {
                         for (const part of parts) {
+                            // 处理生成的图片 (inline_data)
+                            if (part.inline_data) {
+                                const imageData: GeneratedImageData = {
+                                    mimeType: part.inline_data.mime_type || 'image/png',
+                                    data: part.inline_data.data
+                                };
+                                generatedImages.push(imageData);
+                                continue;
+                            }
+
                             if (!part.text) continue;
 
                             // part.thought 是布尔值，表示这个 part 是否是思考内容
@@ -942,6 +1005,11 @@ async function handleGeminiStreamResponse(
         // 如果结束时还在思考阶段，调用思考完成回调
         if (isThinkingPhase && options.onThinkingComplete) {
             options.onThinkingComplete(thinkingText);
+        }
+
+        // 如果有生成的图片，调用回调
+        if (generatedImages.length > 0 && options.onImageGenerated) {
+            options.onImageGenerated(generatedImages);
         }
 
         options.onComplete?.(fullText);
@@ -1035,4 +1103,175 @@ export function calculateTotalTokens(messages: Message[]): number {
             }, 0);
         }
     }, 0);
+}
+
+// ==================== 图片生成接口 ====================
+
+export interface ImageGenerationOptions {
+    apiKey: string;
+    model: string;
+    prompt: string;
+    negativePrompt?: string;
+    size?: string; // 例如: "1024x1024", "512x512"
+    quality?: 'standard' | 'hd';
+    style?: 'vivid' | 'natural';
+    n?: number; // 生成图片数量，默认1
+    signal?: AbortSignal;
+}
+
+export interface GeneratedImage {
+    url?: string;
+    b64_json?: string;
+    revised_prompt?: string; // 实际使用的提示词
+}
+
+export interface ImageGenerationResult {
+    images: GeneratedImage[];
+    total: number;
+}
+
+/**
+ * 图片生成 API 接口
+ * 使用 /v1/image/generations 接口
+ */
+export async function generateImage(
+    provider: string,
+    options: ImageGenerationOptions,
+    customApiUrl?: string,
+    advancedConfig?: { customModelsUrl?: string; customChatUrl?: string }
+): Promise<ImageGenerationResult> {
+    const isBuiltIn = ['gemini', 'deepseek', 'openai', 'moonshot', 'volcano', 'v3'].includes(provider);
+    const config = isBuiltIn ? PROVIDER_CONFIGS[provider as AIProvider] : PROVIDER_CONFIGS.custom;
+
+    // 构建图片生成 API 的 URL
+    let baseUrl: string;
+    if (customApiUrl) {
+        const { baseUrl: url } = getBaseUrlAndEndpoint(customApiUrl, '/v1/image/generations');
+        baseUrl = url;
+    } else {
+        if (!isBuiltIn) {
+            throw new Error('Custom provider requires API URL');
+        }
+        baseUrl = config.baseUrl;
+    }
+
+    const url = `${baseUrl}/v1/image/generations`;
+
+    const requestBody: any = {
+        model: options.model,
+        prompt: options.prompt,
+        n: options.n || 1,
+        size: options.size || '1024x1024',
+    };
+
+    // 添加可选参数
+    if (options.quality) {
+        requestBody.quality = options.quality;
+    }
+    if (options.style) {
+        requestBody.style = options.style;
+    }
+    if (options.negativePrompt) {
+        // 某些平台支持 negative_prompt
+        requestBody.negative_prompt = options.negativePrompt;
+    }
+
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${options.apiKey}`
+    };
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(requestBody),
+            signal: options.signal
+        });
+
+        if (!response.ok) {
+            let errorMessage = `Image generation failed: ${response.status} ${response.statusText}`;
+            try {
+                const errorData = await response.json();
+                const detailMsg = errorData.error?.message || errorData.message || errorData.error || JSON.stringify(errorData);
+                errorMessage += `\n\n${detailMsg}`;
+            } catch (e) {
+                try {
+                    const errorText = await response.text();
+                    if (errorText) {
+                        errorMessage += `\n\n${errorText}`;
+                    }
+                } catch (textError) {
+                    // 忽略文本读取错误
+                }
+            }
+            throw new Error(errorMessage);
+        }
+
+        const data = await response.json();
+
+        // 处理响应数据
+        // OpenAI 格式: { data: [{ url: string, b64_json: string, revised_prompt: string }] }
+        // 某些平台可能返回不同格式
+        let images: GeneratedImage[] = [];
+
+        if (data.data && Array.isArray(data.data)) {
+            images = data.data.map((item: any) => ({
+                url: item.url,
+                b64_json: item.b64_json,
+                revised_prompt: item.revised_prompt
+            }));
+        } else if (Array.isArray(data)) {
+            // 某些平台可能直接返回数组
+            images = data.map((item: any) => ({
+                url: item.url,
+                b64_json: item.b64_json,
+                revised_prompt: item.revised_prompt
+            }));
+        } else if (data.url || data.b64_json) {
+            // 单个图片对象
+            images = [{
+                url: data.url,
+                b64_json: data.b64_json,
+                revised_prompt: data.revised_prompt
+            }];
+        }
+
+        return {
+            images,
+            total: images.length
+        };
+    } catch (error) {
+        if ((error as Error).name === 'AbortError') {
+            console.log('Image generation was aborted by user');
+            throw new Error('Image generation aborted');
+        } else {
+            console.error('Image generation error:', error);
+            throw error;
+        }
+    }
+}
+
+/**
+ * 检查模型是否支持图片生成
+ */
+export function isImageGenerationSupported(provider: string, modelId: string): boolean {
+    // 常见的生图模型
+    const supportedModels = [
+        'dall-e',
+        'dall-e-2',
+        'dall-e-3',
+        'midjourney',
+        'stable-diffusion',
+        'flux',
+        'ideogram',
+        'recraft',
+        'kling',
+        'cogview',
+        'wanx',
+        'image-generation'
+    ];
+
+    const lowerModelId = modelId.toLowerCase();
+    return supportedModels.some(m => lowerModelId.includes(m));
 }

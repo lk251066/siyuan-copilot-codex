@@ -1803,6 +1803,7 @@
         lastUserMessage: Message
     ) {
         // 过滤掉空的 assistant 消息，防止某些 Provider（例如 Kimi）报错
+        // 但保留有生图的 assistant 消息
         let messagesToSend = messages
             .filter(msg => {
                 if (msg.role === 'system') return false;
@@ -1813,8 +1814,9 @@
                             : getMessageText(msg.content || []);
                     const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
                     const hasReasoning = !!msg.reasoning_content;
-                    // 保留有 tool_calls 或 reasoning_content 的 assistant 消息，即便正文为空
-                    return (text && text.toString().trim() !== '') || hasToolCalls || hasReasoning;
+                    const hasGeneratedImages = msg.generatedImages && msg.generatedImages.length > 0;
+                    // 保留有 tool_calls、reasoning_content 或 generatedImages 的 assistant 消息，即便正文为空
+                    return (text && text.toString().trim() !== '') || hasToolCalls || hasReasoning || hasGeneratedImages;
                 }
                 return true;
             })
@@ -1915,7 +1917,38 @@
             if (lastMessage.role === 'user') {
                 const hasImages = lastUserMessage.attachments?.some(att => att.type === 'image');
 
-                if (hasImages) {
+                // 查找上一条assistant消息是否有生成的图片（用于图片编辑）
+                let previousGeneratedImages: any[] = [];
+                const lastAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
+                if (lastAssistantMsg) {
+                    // 检查generatedImages或attachments中的图片
+                    if (lastAssistantMsg.generatedImages && lastAssistantMsg.generatedImages.length > 0) {
+                        previousGeneratedImages = lastAssistantMsg.generatedImages.map(img => ({
+                            type: 'image_url',
+                            image_url: { url: `data:${img.mimeType || 'image/png'};base64,${img.data}` }
+                        }));
+                    } else if (lastAssistantMsg.attachments && lastAssistantMsg.attachments.length > 0) {
+                        previousGeneratedImages = lastAssistantMsg.attachments
+                            .filter(att => att.type === 'image')
+                            .map(att => ({
+                                type: 'image_url',
+                                image_url: { url: att.data }
+                            }));
+                    } else if (typeof lastAssistantMsg.content === 'string') {
+                        // 从Markdown内容中提取图片URL ![image](url)
+                        const imageRegex = /!\[.*?\]\((https?:\/\/[^\s)]+)\)/g;
+                        const content = lastAssistantMsg.content;
+                        let match;
+                        while ((match = imageRegex.exec(content)) !== null) {
+                            previousGeneratedImages.push({
+                                type: 'image_url',
+                                image_url: { url: match[1] }
+                            });
+                        }
+                    }
+                }
+
+                if (hasImages || previousGeneratedImages.length > 0) {
                     const contentParts: any[] = [];
                     let textContent = userContent;
 
@@ -1943,6 +1976,7 @@
 
                     contentParts.push({ type: 'text', text: textContent });
 
+                    // 添加用户上传的图片附件
                     lastUserMessage.attachments?.forEach(att => {
                         if (att.type === 'image') {
                             contentParts.push({
@@ -1950,6 +1984,11 @@
                                 image_url: { url: att.data },
                             });
                         }
+                    });
+
+                    // 添加上一次生成的图片（用于图片编辑）
+                    previousGeneratedImages.forEach(img => {
+                        contentParts.push(img);
                     });
 
                     const fileTexts = lastUserMessage.attachments
@@ -2528,8 +2567,39 @@
                 const lastUserMessage = messages[messages.length - 1];
                 const hasImages = lastUserMessage.attachments?.some(att => att.type === 'image');
 
-                // 如果有图片附件，使用多模态格式
-                if (hasImages) {
+                // 查找上一条assistant消息是否有生成的图片（用于图片编辑）
+                let previousGeneratedImages: any[] = [];
+                const lastAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
+                if (lastAssistantMsg) {
+                    // 检查generatedImages或attachments中的图片
+                    if (lastAssistantMsg.generatedImages && lastAssistantMsg.generatedImages.length > 0) {
+                        previousGeneratedImages = lastAssistantMsg.generatedImages.map(img => ({
+                            type: 'image_url' as const,
+                            image_url: { url: `data:${img.mimeType || 'image/png'};base64,${img.data}` }
+                        }));
+                    } else if (lastAssistantMsg.attachments && lastAssistantMsg.attachments.length > 0) {
+                        previousGeneratedImages = lastAssistantMsg.attachments
+                            .filter(att => att.type === 'image')
+                            .map(att => ({
+                                type: 'image_url' as const,
+                                image_url: { url: att.data }
+                            }));
+                    } else if (typeof lastAssistantMsg.content === 'string') {
+                        // 从Markdown内容中提取图片URL ![image](url)
+                        const imageRegex = /!\[.*?\]\((https?:\/\/[^\s)]+)\)/g;
+                        const content = lastAssistantMsg.content;
+                        let match;
+                        while ((match = imageRegex.exec(content)) !== null) {
+                            previousGeneratedImages.push({
+                                type: 'image_url' as const,
+                                image_url: { url: match[1] }
+                            });
+                        }
+                    }
+                }
+
+                // 如果有图片附件或上一条有生成的图片，使用多模态格式
+                if (hasImages || previousGeneratedImages.length > 0) {
                     const contentParts: any[] = [];
 
                     // 先添加用户输入
@@ -2560,7 +2630,7 @@
 
                     contentParts.push({ type: 'text', text: textContent });
 
-                    // 添加图片
+                    // 添加用户上传的图片
                     lastUserMessage.attachments?.forEach(att => {
                         if (att.type === 'image') {
                             contentParts.push({
@@ -2568,6 +2638,11 @@
                                 image_url: { url: att.data },
                             });
                         }
+                    });
+
+                    // 添加上一次生成的图片（用于图片编辑）
+                    previousGeneratedImages.forEach(img => {
+                        contentParts.push(img);
                     });
 
                     // 添加文本文件内容
@@ -6725,8 +6800,39 @@
                 const lastUserMessage = messages[messages.length - 1];
                 const hasImages = lastUserMessage.attachments?.some(att => att.type === 'image');
 
-                // 如果有图片附件，使用多模态格式
-                if (hasImages) {
+                // 查找上一条assistant消息是否有生成的图片（用于图片编辑）
+                let previousGeneratedImages: any[] = [];
+                const lastAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
+                if (lastAssistantMsg) {
+                    // 检查generatedImages或attachments中的图片
+                    if (lastAssistantMsg.generatedImages && lastAssistantMsg.generatedImages.length > 0) {
+                        previousGeneratedImages = lastAssistantMsg.generatedImages.map(img => ({
+                            type: 'image_url' as const,
+                            image_url: { url: `data:${img.mimeType || 'image/png'};base64,${img.data}` }
+                        }));
+                    } else if (lastAssistantMsg.attachments && lastAssistantMsg.attachments.length > 0) {
+                        previousGeneratedImages = lastAssistantMsg.attachments
+                            .filter(att => att.type === 'image')
+                            .map(att => ({
+                                type: 'image_url' as const,
+                                image_url: { url: att.data }
+                            }));
+                    } else if (typeof lastAssistantMsg.content === 'string') {
+                        // 从Markdown内容中提取图片URL ![image](url)
+                        const imageRegex = /!\[.*?\]\((https?:\/\/[^\s)]+)\)/g;
+                        const content = lastAssistantMsg.content;
+                        let match;
+                        while ((match = imageRegex.exec(content)) !== null) {
+                            previousGeneratedImages.push({
+                                type: 'image_url' as const,
+                                image_url: { url: match[1] }
+                            });
+                        }
+                    }
+                }
+
+                // 如果有图片附件或上一条有生成的图片，使用多模态格式
+                if (hasImages || previousGeneratedImages.length > 0) {
                     const contentParts: any[] = [];
 
                     // 先添加用户输入
@@ -6748,7 +6854,7 @@
 
                     contentParts.push({ type: 'text', text: textContent });
 
-                    // 添加图片
+                    // 添加用户上传的图片
                     lastUserMessage.attachments?.forEach(att => {
                         if (att.type === 'image') {
                             contentParts.push({
@@ -6756,6 +6862,11 @@
                                 image_url: { url: att.data },
                             });
                         }
+                    });
+
+                    // 添加上一次生成的图片（用于图片编辑）
+                    previousGeneratedImages.forEach(img => {
+                        contentParts.push(img);
                     });
 
                     // 添加文本文件内容
@@ -6856,6 +6967,12 @@
             const enableThinking =
                 modelConfig.capabilities?.thinking && (modelConfig.thinkingEnabled || false);
 
+            // 检查是否启用图片生成
+            const enableImageGeneration = modelConfig.capabilities?.imageGeneration || false;
+
+            // 用于保存生成的图片
+            let generatedImages: any[] = [];
+
             await chat(
                 currentProvider,
                 {
@@ -6871,6 +6988,7 @@
                     customBody,
                     enableThinking,
                     reasoningEffort: modelConfig.thinkingEffort || 'medium',
+                    enableImageGeneration,
                     onThinkingChunk: enableThinking
                         ? async (chunk: string) => {
                               isThinkingPhase = true;
@@ -6884,6 +7002,9 @@
                               thinkingCollapsed[messages.length] = true;
                           }
                         : undefined,
+                    onImageGenerated: (images: any[]) => {
+                        generatedImages = images;
+                    },
                     onChunk: async (chunk: string) => {
                         streamingMessage += chunk;
                         await scrollToBottom();
@@ -6904,6 +7025,18 @@
 
                         if (enableThinking && streamingThinking) {
                             assistantMessage.thinking = streamingThinking;
+                        }
+
+                        // 如果有生成的图片，保存到消息中
+                        if (generatedImages.length > 0) {
+                            assistantMessage.generatedImages = generatedImages;
+                            // 同时添加为附件以便显示
+                            assistantMessage.attachments = generatedImages.map((img, idx) => ({
+                                type: 'image' as const,
+                                name: `generated-image-${idx + 1}.${img.mimeType?.split('/')[1] || 'png'}`,
+                                data: `data:${img.mimeType || 'image/png'};base64,${img.data}`,
+                                mimeType: img.mimeType || 'image/png'
+                            }));
                         }
 
                         messages = [...messages, assistantMessage];
@@ -7689,7 +7822,13 @@
             >
                 <div class="ai-message__header">
                     <span class="ai-message__role">🤖 AI</span>
-                    <span class="ai-message__streaming-indicator">●</span>
+                    <span class="ai-message__streaming-indicator">
+                        <span class="jumping-dots">
+                            <span class="dot"></span>
+                            <span class="dot"></span>
+                            <span class="dot"></span>
+                        </span>
+                    </span>
                 </div>
 
                 <!-- 显示流式思考过程 -->
@@ -7878,7 +8017,11 @@
                                         {@html formatMessage(response.content)}
                                     {:else if response.isLoading}
                                         <div class="ai-sidebar__multi-model-card-loading">
-                                            {t('multiModel.loading')}
+                                            <span class="jumping-dots">
+                                                <span class="dot"></span>
+                                                <span class="dot"></span>
+                                                <span class="dot"></span>
+                                            </span>
                                         </div>
                                     {/if}
                                 </div>
@@ -7909,7 +8052,11 @@
                                         <span
                                             class="ai-sidebar__multi-model-tab-status ai-sidebar__multi-model-tab-status--loading"
                                         >
-                                            ⏳
+                                            <span class="jumping-dots jumping-dots--small">
+                                                <span class="dot"></span>
+                                                <span class="dot"></span>
+                                                <span class="dot"></span>
+                                            </span>
                                         </span>
                                     {:else if response.error}
                                         <span
@@ -7943,7 +8090,11 @@
                                                 <span
                                                     class="ai-sidebar__multi-model-tab-panel-status ai-sidebar__multi-model-tab-panel-status--loading"
                                                 >
-                                                    ⏳ {t('multiModel.loading')}
+                                                    <span class="jumping-dots jumping-dots--small">
+                                                        <span class="dot"></span>
+                                                        <span class="dot"></span>
+                                                        <span class="dot"></span>
+                                                    </span>
                                                 </span>
                                             {:else if response.error}
                                                 <span
@@ -9354,16 +9505,59 @@
 
     .ai-message__streaming-indicator {
         color: var(--b3-theme-primary);
-        animation: pulse 1.5s ease-in-out infinite;
+        display: inline-flex;
+        align-items: center;
     }
 
-    @keyframes pulse {
+    // 三个点跳动动画
+    .jumping-dots {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        height: 16px;
+    }
+
+    .jumping-dots .dot {
+        width: 6px;
+        height: 6px;
+        background-color: var(--b3-theme-primary);
+        border-radius: 50%;
+        animation: jumping-dot 1.4s ease-in-out infinite both;
+    }
+
+    .jumping-dots .dot:nth-child(1) {
+        animation-delay: -0.32s;
+    }
+
+    .jumping-dots .dot:nth-child(2) {
+        animation-delay: -0.16s;
+    }
+
+    .jumping-dots .dot:nth-child(3) {
+        animation-delay: 0s;
+    }
+
+    // 小型跳动点（用于标签页等紧凑空间）
+    .jumping-dots--small {
+        height: 12px;
+        gap: 2px;
+    }
+
+    .jumping-dots--small .dot {
+        width: 4px;
+        height: 4px;
+    }
+
+    @keyframes jumping-dot {
         0%,
+        80%,
         100% {
-            opacity: 1;
+            transform: scale(0.6);
+            opacity: 0.4;
         }
-        50% {
-            opacity: 0.3;
+        40% {
+            transform: scale(1);
+            opacity: 1;
         }
     }
 
