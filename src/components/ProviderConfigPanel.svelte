@@ -661,6 +661,23 @@
                                     />
                                     <span class="capability-label">{t('models.vision')}</span>
                                 </label>
+                                <label class="">
+                                    <input
+                                        type="checkbox"
+                                        class="b3-switch"
+                                        checked={model.capabilities?.imageGeneration || false}
+                                        on:change={e => {
+                                            if (!model.capabilities) model.capabilities = {};
+                                            model.capabilities.imageGeneration = e.currentTarget.checked;
+                                            updateModel(
+                                                model.id,
+                                                'capabilities',
+                                                model.capabilities
+                                            );
+                                        }}
+                                    />
+                                    <span class="capability-label">{t('models.imageGeneration')}</span>
+                                </label>
                             </div>
                         </div>
                     </div>
@@ -944,7 +961,6 @@
 
     .model-capabilities {
         display: flex;
-        flex-direction: column;
         gap: 8px;
         margin-top: 4px;
 
