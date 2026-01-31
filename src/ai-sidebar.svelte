@@ -441,7 +441,7 @@
                     signal: localAbort.signal,
                     customBody,
                     enableThinking: modelConfig.capabilities?.thinking || false,
-                    reasoningEffort: modelConfig.thinkingEffort || 'medium',
+                    reasoningEffort: modelConfig.thinkingEffort || 'low',
                     onThinkingChunk: async (chunk: string) => {
                         thinking += chunk;
                         if (multiModelResponses[index]) {
@@ -633,7 +633,7 @@
                     enableThinking:
                         modelConfig.capabilities?.thinking &&
                         (modelConfig.thinkingEnabled || false),
-                    reasoningEffort: modelConfig.thinkingEffort || 'medium',
+                    reasoningEffort: modelConfig.thinkingEffort || 'low',
                     onThinkingChunk: async (chunk: string) => {
                         thinking += chunk;
                         msg.multiModelResponses[responseIndex].thinking = thinking;
@@ -1451,7 +1451,7 @@
     // 当前思考程度设置
     $: currentThinkingEffort = (() => {
         if (!currentProvider || !currentModelId) {
-            return 'medium' as ThinkingEffort;
+            return 'low' as ThinkingEffort;
         }
 
         const providerConfig = (() => {
@@ -1478,11 +1478,11 @@
         })();
 
         if (!providerConfig) {
-            return 'medium' as ThinkingEffort;
+            return 'low' as ThinkingEffort;
         }
 
         const modelConfig = providerConfig.models?.find((m: any) => m.id === currentModelId);
-        return (modelConfig?.thinkingEffort || 'medium') as ThinkingEffort;
+        return (modelConfig?.thinkingEffort || 'low') as ThinkingEffort;
     })();
 
     // 更新思考程度
@@ -1838,7 +1838,7 @@
                         enableThinking:
                             modelConfig.capabilities?.thinking &&
                             (modelConfig.thinkingEnabled || false),
-                        reasoningEffort: modelConfig.thinkingEffort || 'medium',
+                        reasoningEffort: modelConfig.thinkingEffort || 'low',
                         customBody, // 传递自定义参数
                         onThinkingChunk: async (chunk: string) => {
                             thinking += chunk;
@@ -3122,7 +3122,7 @@
                             stream: true,
                             signal: abortController.signal,
                             enableThinking,
-                            reasoningEffort: modelConfig.thinkingEffort || 'medium',
+                            reasoningEffort: modelConfig.thinkingEffort || 'low',
                             tools: toolsForAgent,
                             customBody, // 传递自定义参数
                             onThinkingChunk: enableThinking
@@ -3395,7 +3395,7 @@
                         stream: true,
                         signal: abortController.signal,
                         enableThinking,
-                        reasoningEffort: modelConfig.thinkingEffort || 'medium',
+                        reasoningEffort: modelConfig.thinkingEffort || 'low',
                         customBody, // 传递自定义参数
                         onThinkingChunk: enableThinking
                             ? async (chunk: string) => {
@@ -7457,7 +7457,7 @@
                     signal: abortController.signal,
                     customBody,
                     enableThinking,
-                    reasoningEffort: modelConfig.thinkingEffort || 'medium',
+                    reasoningEffort: modelConfig.thinkingEffort || 'low',
                     enableImageGeneration,
                     onThinkingChunk: enableThinking
                         ? async (chunk: string) => {

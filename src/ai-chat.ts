@@ -537,7 +537,7 @@ async function chatOpenAIFormat(
     } else {
         // 如果启用思考模式，添加相关参数
         // 注意：这里在自定义参数之后设置，确保界面控制的思考模式优先级最高
-        const reasoningEffort = options.reasoningEffort || 'medium';
+        const reasoningEffort = options.reasoningEffort || 'low';
 
         // 检查是否是 Claude 模型（通过 OpenAI 兼容 API）
         if (isSupportedThinkingClaudeModel(options.model)) {
@@ -558,7 +558,7 @@ async function chatOpenAIFormat(
             // Gemini 3 系列使用 reasoning_effort 参数
             // https://ai.google.dev/gemini-api/docs/gemini-3?thinking=high#openai_compatibility
             if (isGemini3Model(options.model)) {
-                requestBody.reasoning_effort = reasoningEffort === 'auto' ? 'medium' : reasoningEffort;
+                requestBody.reasoning_effort = reasoningEffort === 'auto' ? 'low' : reasoningEffort;
             } else {
                 // Gemini 2.5 等使用 google.thinking_config
                 // 根据 reasoningEffort 计算 thinkingBudget
