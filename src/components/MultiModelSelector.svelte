@@ -9,6 +9,7 @@
     export let enableMultiModel = false; // 是否启用多模型模式
     export let currentProvider = ''; // 单选模式当前选中的提供商
     export let currentModelId = ''; // 单选模式当前选中的模型
+    export let chatMode: 'ask' | 'edit' | 'agent' = 'ask'; // 聊天模式
 
     const dispatch = createEventDispatcher();
 
@@ -545,6 +546,7 @@
                             class="b3-switch"
                             bind:checked={enableMultiModel}
                             on:change={toggleEnableMultiModel}
+                            disabled={chatMode === 'agent'}
                         />
                         <span class="multi-model-selector__toggle-label">
                             {t('multiModel.enable')}

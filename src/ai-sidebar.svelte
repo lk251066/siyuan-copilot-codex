@@ -8872,6 +8872,7 @@
                         {providers}
                         {currentProvider}
                         {currentModelId}
+                        {chatMode}
                         bind:selectedModels={selectedMultiModels}
                         bind:enableMultiModel
                         on:select={handleModelSelect}
@@ -8916,6 +8917,7 @@
                         {providers}
                         {currentProvider}
                         {currentModelId}
+                        {chatMode}
                         selectedModels={[]}
                         enableMultiModel={false}
                         on:select={handleModelSelect}
