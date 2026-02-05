@@ -3,6 +3,7 @@
     import { t } from '../utils/i18n';
     import { pushMsg } from '@/api';
     import { confirm } from 'siyuan';
+    import MultiModelSelector from './MultiModelSelector.svelte';
 
     export let providers: Record<string, any> = {};
     export let currentProvider = '';
@@ -74,49 +75,63 @@
     let dragOverIndex: number | null = null;
     let dragDirection: 'above' | 'below' | null = null;
 
-    // 拖拽排序相关（模型列表）
-    let draggedModelIndex: number | null = null;
-    let dropModelIndicatorIndex: number | null = null;
-
-    // 模型搜索筛选
-    let modelSearchQuery = '';
+    // MultiModelSelector 打开状态
+    let isModelSelectorOpen = false;
 
     // 预设搜索筛选
     let presetSearchQuery = '';
 
-    type AvailableModel = {
-        provider: string;
-        modelId: string;
-        modelName: string;
-        providerName: string;
-        supportsThinking: boolean;
+    // 保存初始状态，用于检测是否有未保存的更改
+    let initialState = {
+        presetName: '',
+        contextCount: 10,
+        temperature: 0.7,
+        temperatureEnabled: true,
+        systemPrompt: '',
+        modelSelectionEnabled: false,
+        selectedModels: [] as Array<{ provider: string; modelId: string }>,
+        enableMultiModel: false,
+        chatMode: 'ask' as 'ask' | 'edit' | 'agent',
+        modelThinkingSettings: {} as Record<string, boolean>,
     };
 
-    // 响应式过滤后的模型列表（支持空格分隔的 AND 搜索）
-    let filteredModels: AvailableModel[] = [];
-    // 确保当 `providers` 变化时也会重新计算 filteredModels
-    $: {
-        // 引用 providers 以触发依赖
-        const _providers_ref = providers;
-        const q = modelSearchQuery.trim().toLowerCase();
-        const all = getAllAvailableModels();
-        if (!q) {
-            filteredModels = all;
-        } else {
-            const terms = q.split(/\s+/).filter(Boolean);
-            filteredModels = all.filter(m => {
-                const hay = (
-                    (m.modelName || '') +
-                    ' ' +
-                    (m.modelId || '') +
-                    ' ' +
-                    (m.providerName || '') +
-                    ' ' +
-                    (m.provider || '')
-                ).toLowerCase();
-                return terms.every(term => hay.includes(term));
-            });
+    // 处理MultiModelSelector的选择事件（单模型模式）
+    function handleModelSelect(event: CustomEvent<{ provider: string; modelId: string }>) {
+        const { provider, modelId } = event.detail;
+        tempSelectedModels = [{ provider, modelId }];
+        applySettings();
+        isModelSelectorOpen = false;
+    }
+
+    // 处理MultiModelSelector的变化事件（多模型模式）
+    function handleModelsChange(event: CustomEvent<Array<{ provider: string; modelId: string }>>) {
+        tempSelectedModels = event.detail;
+        applySettings();
+    }
+
+    // 处理MultiModelSelector的多模型开关事件
+    function handleToggleMultiModel(event: CustomEvent<boolean>) {
+        tempEnableMultiModel = event.detail;
+        if (!tempEnableMultiModel && tempSelectedModels.length > 1) {
+            tempSelectedModels = [];
         }
+        applySettings();
+    }
+
+    // 处理MultiModelSelector的思考模式切换
+    function handleToggleThinking(
+        event: CustomEvent<{ provider: string; modelId: string; enabled: boolean }>
+    ) {
+        const { provider, modelId, enabled } = event.detail;
+        const key = `${provider}:${modelId}`;
+        tempModelThinkingSettings = {
+            ...tempModelThinkingSettings,
+            [key]: enabled,
+        };
+        applySettings();
+
+        // 同步到 providers 配置
+        dispatch('toggleThinking', { provider, modelId, enabled });
     }
 
     // 响应式过滤后的预设列表（支持空格分隔的 AND 搜索）
@@ -159,31 +174,6 @@
         return providerConfig.models.find((m: any) => m.id === currentModelId);
     }
 
-    // 获取提供商显示名称
-    function getProviderDisplayName(providerId: string): string {
-        const builtInNames: Record<string, string> = {
-            gemini: 'Gemini',
-            deepseek: 'DeepSeek',
-            openai: 'OpenAI',
-            claude: 'Claude',
-            volcano: 'Volcano',
-        };
-
-        if (builtInNames[providerId]) {
-            return builtInNames[providerId];
-        }
-
-        // 查找自定义提供商
-        if (providers.customProviders && Array.isArray(providers.customProviders)) {
-            const customProvider = providers.customProviders.find((p: any) => p.id === providerId);
-            if (customProvider) {
-                return customProvider.name;
-            }
-        }
-
-        return providerId;
-    }
-
     // 获取模型显示名称
     function getModelDisplayName(provider: string, modelId: string): string {
         let providerConfig: any = null;
@@ -204,63 +194,35 @@
         return modelId;
     }
 
-    // 获取所有可用模型
-    function getAllAvailableModels(): Array<{
-        provider: string;
-        modelId: string;
-        modelName: string;
-        providerName: string;
-        supportsThinking: boolean;
-    }> {
-        const models: Array<{
-            provider: string;
-            modelId: string;
-            modelName: string;
-            providerName: string;
-            supportsThinking: boolean;
-        }> = [];
-
-        // 遍历内置提供商
-        for (const [providerId, providerConfig] of Object.entries(providers)) {
-            if (
-                providerId === 'customProviders' ||
-                !providerConfig ||
-                Array.isArray(providerConfig)
-            )
-                continue;
-
-            const providerName = providerId;
-            if (providerConfig.models && Array.isArray(providerConfig.models)) {
-                for (const model of providerConfig.models) {
-                    models.push({
-                        provider: providerId,
-                        modelId: model.id,
-                        modelName: model.name || model.id,
-                        providerName: providerName,
-                        supportsThinking: model.capabilities?.thinking || false,
-                    });
-                }
-            }
+    // 获取当前模型提供商和模型ID的helper函数（单模型模式使用）
+    function getCurrentModelSelection(): { provider: string; modelId: string } {
+        if (tempSelectedModels.length > 0) {
+            return {
+                provider: tempSelectedModels[0].provider,
+                modelId: tempSelectedModels[0].modelId,
+            };
         }
+        return { provider: currentProvider, modelId: currentModelId };
+    }
 
-        // 遍历自定义提供商
-        if (providers.customProviders && Array.isArray(providers.customProviders)) {
-            for (const provider of providers.customProviders) {
-                if (provider.models && Array.isArray(provider.models)) {
-                    for (const model of provider.models) {
-                        models.push({
-                            provider: provider.id,
-                            modelId: model.id,
-                            modelName: model.name || model.id,
-                            providerName: provider.name,
-                            supportsThinking: model.capabilities?.thinking || false,
-                        });
-                    }
-                }
-            }
-        }
+    // 格式化预设的模型列表显示
+    function formatPresetModels(
+        selectedModels: Array<{ provider: string; modelId: string }>
+    ): string {
+        const modelCounts: Record<string, number> = {};
+        selectedModels.forEach(m => {
+            const provider =
+                providers[m.provider] ||
+                providers.customProviders?.find(p => p.id === m.provider);
+            const model = provider?.models?.find(model => model.id === m.modelId);
+            const modelName = model?.name || m.modelId;
+            modelCounts[modelName] = (modelCounts[modelName] || 0) + 1;
+        });
 
-        return models;
+        // 格式化显示：模型名 × 次数
+        return Object.entries(modelCounts)
+            .map(([name, count]) => (count > 1 ? `${name} × ${count}` : name))
+            .join(', ');
     }
 
     // 加载预设
@@ -377,6 +339,9 @@
         tempChatMode = preset.chatMode || 'ask';
         tempModelThinkingSettings = { ...(preset.modelThinkingSettings || {}) };
 
+        // 保存初始状态
+        saveInitialState();
+
         // 关闭预设列表，打开设置面板
         isPresetListOpen = false;
         openSettings();
@@ -479,99 +444,6 @@
         dragDirection = null;
         const els = document.querySelectorAll('.model-settings-preset-list-item.dragging');
         els.forEach(el => el.classList.remove('dragging'));
-    }
-
-    // 模型拖拽开始
-    function handleModelDragStart(event: DragEvent, index: number) {
-        event.stopPropagation();
-        draggedModelIndex = index;
-        if (event.dataTransfer) {
-            event.dataTransfer.effectAllowed = 'move';
-            event.dataTransfer.setData('application/model-sort', 'true');
-        }
-    }
-
-    // 模型拖拽经过
-    function handleModelDragOver(event: DragEvent, index: number) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.dataTransfer) {
-            event.dataTransfer.dropEffect = 'move';
-        }
-
-        if (draggedModelIndex !== null && draggedModelIndex !== index) {
-            const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-            const y = event.clientY - rect.top;
-            const height = rect.height;
-
-            if (y < height / 2) {
-                dropModelIndicatorIndex = index;
-            } else {
-                dropModelIndicatorIndex = index + 1;
-            }
-        }
-    }
-
-    // 模型拖拽放置
-    function handleModelDrop(event: DragEvent, dropIndex: number) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (draggedModelIndex !== null) {
-            let targetIndex = dropModelIndicatorIndex;
-
-            if (targetIndex === null) {
-                targetIndex = dropIndex;
-            }
-
-            if (
-                targetIndex !== null &&
-                targetIndex !== draggedModelIndex &&
-                targetIndex !== draggedModelIndex + 1
-            ) {
-                const newModels = [...tempSelectedModels];
-                const [draggedItem] = newModels.splice(draggedModelIndex, 1);
-
-                let adjustedTargetIndex = targetIndex;
-                if (targetIndex > draggedModelIndex) {
-                    adjustedTargetIndex -= 1;
-                }
-
-                newModels.splice(adjustedTargetIndex, 0, draggedItem);
-                tempSelectedModels = newModels;
-            }
-        }
-        draggedModelIndex = null;
-        dropModelIndicatorIndex = null;
-    }
-
-    // 模型拖拽结束
-    function handleModelDragEnd() {
-        draggedModelIndex = null;
-        dropModelIndicatorIndex = null;
-    }
-
-    // 上移模型
-    function moveModelUp(index: number) {
-        if (index > 0) {
-            const newModels = [...tempSelectedModels];
-            [newModels[index - 1], newModels[index]] = [newModels[index], newModels[index - 1]];
-            tempSelectedModels = newModels;
-        }
-    }
-
-    // 下移模型
-    function moveModelDown(index: number) {
-        if (index < tempSelectedModels.length - 1) {
-            const newModels = [...tempSelectedModels];
-            [newModels[index], newModels[index + 1]] = [newModels[index + 1], newModels[index]];
-            tempSelectedModels = newModels;
-        }
-    }
-
-    // 移除选中的模型
-    function removeSelectedModel(index: number) {
-        const newModels = tempSelectedModels.filter((_, i) => i !== index);
-        tempSelectedModels = newModels;
     }
 
     // 实时应用设置
@@ -700,6 +572,8 @@
         selectedPresetId = '';
         newPresetName = ''; // 重置预设名称为空
         await saveSelectedPresetId('');
+        // 保存初始状态
+        saveInitialState();
     }
 
     // 打开预设列表
@@ -717,6 +591,81 @@
     function openSettings() {
         isSettingsOpen = true;
         updateSettingsPosition();
+    }
+
+    // 保存初始状态
+    function saveInitialState() {
+        initialState = {
+            presetName: newPresetName,
+            contextCount: tempContextCount,
+            temperature: tempTemperature,
+            temperatureEnabled: tempTemperatureEnabled,
+            systemPrompt: tempSystemPrompt,
+            modelSelectionEnabled: tempModelSelectionEnabled,
+            selectedModels: [...tempSelectedModels],
+            enableMultiModel: tempEnableMultiModel,
+            chatMode: tempChatMode,
+            modelThinkingSettings: { ...tempModelThinkingSettings },
+        };
+    }
+
+    // 检查是否有未保存的更改
+    function hasUnsavedChanges(): boolean {
+        if (newPresetName !== initialState.presetName) return true;
+        if (tempContextCount !== initialState.contextCount) return true;
+        if (tempTemperature !== initialState.temperature) return true;
+        if (tempTemperatureEnabled !== initialState.temperatureEnabled) return true;
+        if (tempSystemPrompt !== initialState.systemPrompt) return true;
+        if (tempModelSelectionEnabled !== initialState.modelSelectionEnabled) return true;
+        if (tempEnableMultiModel !== initialState.enableMultiModel) return true;
+        if (tempChatMode !== initialState.chatMode) return true;
+        if (!areModelsEqual(tempSelectedModels, initialState.selectedModels)) return true;
+        if (!areThinkingSettingsEqual(tempModelThinkingSettings, initialState.modelThinkingSettings))
+            return true;
+        return false;
+    }
+
+    // 安全关闭设置面板（带未保存更改确认）
+    async function safeCloseSettings() {
+        if (!hasUnsavedChanges()) {
+            isSettingsOpen = false;
+            openPresetList();
+            return;
+        }
+
+        // 临时移除外部点击监听器
+        document.removeEventListener('click', closeOnOutsideClick);
+
+        confirm(
+            t('aiSidebar.modelSettings.unsavedChanges') || '未保存的更改',
+            t('aiSidebar.modelSettings.confirmClose') ||
+                '您有未保存的更改，是否保存预设？',
+            async () => {
+                // 用户选择保存
+                if (editingPresetId) {
+                    await updatePreset(editingPresetId);
+                } else {
+                    await saveAsPreset();
+                }
+                // 重新添加外部点击监听器
+                setTimeout(() => {
+                    if (isPresetListOpen) {
+                        document.addEventListener('click', closeOnOutsideClick);
+                    }
+                }, 0);
+            },
+            () => {
+                // 用户选择不保存，直接关闭
+                isSettingsOpen = false;
+                openPresetList();
+                // 重新添加外部点击监听器
+                setTimeout(() => {
+                    if (isPresetListOpen) {
+                        document.addEventListener('click', closeOnOutsideClick);
+                    }
+                }, 0);
+            }
+        );
     }
 
     // 关闭所有弹窗
@@ -809,12 +758,28 @@
     }
 
     // 关闭下拉菜单
-    function closeOnOutsideClick(event: MouseEvent) {
+    async function closeOnOutsideClick(event: MouseEvent) {
         const target = event.target as HTMLElement;
         if (!target.closest('.model-settings-button')) {
+            // 如果设置面板打开，检查未保存的更改
+            if (isSettingsOpen && hasUnsavedChanges()) {
+                event.preventDefault();
+                event.stopPropagation();
+                await safeCloseSettings();
+                return;
+            }
             isPresetListOpen = false;
             isSettingsOpen = false;
             document.removeEventListener('click', closeOnOutsideClick);
+        }
+    }
+
+    // 处理设置面板内的点击，关闭模型选择器（如果点击的不是选择器区域）
+    function handleSettingsPanelClick(event: MouseEvent) {
+        const target = event.target as HTMLElement;
+        // 如果点击的不是 MultiModelSelector 区域，则关闭选择器
+        if (isModelSelectorOpen && !target.closest('.multi-model-selector')) {
+            isModelSelectorOpen = false;
         }
     }
 
@@ -999,36 +964,7 @@
                                                             {t('aiSidebar.modelSettings.model') ||
                                                                 '模型'}:
                                                         {/if}
-                                                        {(() => {
-                                                            // 计算每个模型的出现次数
-                                                            const modelCounts = {};
-                                                            preset.selectedModels.forEach(m => {
-                                                                const provider =
-                                                                    providers[m.provider] ||
-                                                                    providers.customProviders?.find(
-                                                                        p => p.id === m.provider
-                                                                    );
-                                                                const model =
-                                                                    provider?.models?.find(
-                                                                        model =>
-                                                                            model.id === m.modelId
-                                                                    );
-                                                                const modelName =
-                                                                    model?.name || m.modelId;
-                                                                modelCounts[modelName] =
-                                                                    (modelCounts[modelName] || 0) +
-                                                                    1;
-                                                            });
-
-                                                            // 格式化显示：模型名 × 次数
-                                                            return Object.entries(modelCounts)
-                                                                .map(([name, count]) =>
-                                                                    count > 1
-                                                                        ? `${name} × ${count}`
-                                                                        : name
-                                                                )
-                                                                .join(', ');
-                                                        })()}
+                                                        {formatPresetModels(preset.selectedModels)}
                                                     </span>
                                                 {/if}
                                             </div>
@@ -1082,7 +1018,7 @@
             bind:this={settingsElement}
             class="model-settings-dropdown"
             style="top: {settingsTop}px; left: {settingsLeft}px;"
-            on:click|stopPropagation
+            on:click|stopPropagation={handleSettingsPanelClick}
         >
             <div class="model-settings-header">
                 <div class="model-settings-header-left">
@@ -1107,20 +1043,14 @@
                 <div class="model-settings-header-actions">
                     <button
                         class="b3-button b3-button--text"
-                        on:click={() => {
-                            isSettingsOpen = false;
-                            openPresetList();
-                        }}
+                        on:click={safeCloseSettings}
                         title={t('common.back') || '返回'}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconBack"></use></svg>
                     </button>
                     <button
                         class="b3-button b3-button--text"
-                        on:click={() => {
-                            isSettingsOpen = false;
-                            openPresetList();
-                        }}
+                        on:click={safeCloseSettings}
                         title={t('common.close')}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
@@ -1258,242 +1188,20 @@
 
                     {#if tempModelSelectionEnabled}
                         <div class="model-settings-model-selector">
-                            <!-- 已选模型列表 -->
-                            {#if tempSelectedModels.length > 0}
-                                <div class="model-settings-selected-models-header">
-                                    <div class="model-settings-selected-models-title">已选模型</div>
-                                </div>
-
-                                <div class="model-settings-selected-models-list">
-                                    {#each tempSelectedModels as model, index}
-                                        {#if dropModelIndicatorIndex === index}
-                                            <div
-                                                class="model-settings-drop-indicator model-settings-drop-indicator--active"
-                                            ></div>
-                                        {/if}
-
-                                        <div
-                                            class="model-settings-selected-model"
-                                            draggable={tempEnableMultiModel}
-                                            role="button"
-                                            tabindex="0"
-                                            on:dragstart={e =>
-                                                tempEnableMultiModel &&
-                                                handleModelDragStart(e, index)}
-                                            on:dragover={e =>
-                                                tempEnableMultiModel &&
-                                                handleModelDragOver(e, index)}
-                                            on:drop={e =>
-                                                tempEnableMultiModel && handleModelDrop(e, index)}
-                                            on:dragend={tempEnableMultiModel && handleModelDragEnd}
-                                        >
-                                            <div class="model-settings-selected-model-content">
-                                                {#if tempEnableMultiModel}
-                                                    <div class="model-settings-drag-handle">
-                                                        <svg class="model-settings-drag-icon">
-                                                            <use xlink:href="#iconDrag"></use>
-                                                        </svg>
-                                                    </div>
-                                                {/if}
-                                                <div class="model-settings-selected-model-info">
-                                                    <span
-                                                        class="model-settings-selected-model-name"
-                                                    >
-                                                        {getModelDisplayName(
-                                                            model.provider,
-                                                            model.modelId
-                                                        )}
-                                                    </span>
-                                                    <span
-                                                        class="model-settings-selected-model-provider"
-                                                    >
-                                                        {getProviderDisplayName(model.provider)}
-                                                    </span>
-                                                </div>
-                                                <div class="model-settings-selected-model-actions">
-                                                    {#if tempEnableMultiModel}
-                                                        <button
-                                                            class="model-settings-move-btn"
-                                                            disabled={index === 0}
-                                                            on:click|stopPropagation={() =>
-                                                                moveModelUp(index)}
-                                                            title={t('multiModel.moveUp') || '上移'}
-                                                        >
-                                                            <svg class="model-settings-move-icon">
-                                                                <use xlink:href="#iconUp"></use>
-                                                            </svg>
-                                                        </button>
-                                                        <button
-                                                            class="model-settings-move-btn"
-                                                            disabled={index ===
-                                                                tempSelectedModels.length - 1}
-                                                            on:click|stopPropagation={() =>
-                                                                moveModelDown(index)}
-                                                            title={t('multiModel.moveDown') ||
-                                                                '下移'}
-                                                        >
-                                                            <svg class="model-settings-move-icon">
-                                                                <use xlink:href="#iconDown"></use>
-                                                            </svg>
-                                                        </button>
-                                                    {/if}
-                                                    <button
-                                                        class="model-settings-remove-btn"
-                                                        on:click|stopPropagation={() =>
-                                                            removeSelectedModel(index)}
-                                                        title={t('multiModel.remove') || '移除'}
-                                                    >
-                                                        <svg class="model-settings-remove-icon">
-                                                            <use xlink:href="#iconClose"></use>
-                                                        </svg>
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    {/each}
-
-                                    {#if dropModelIndicatorIndex === tempSelectedModels.length}
-                                        <div
-                                            class="model-settings-drop-indicator model-settings-drop-indicator--active"
-                                        ></div>
-                                    {/if}
-                                </div>
-                            {/if}
-
-                            <!-- 多模型模式开关 -->
-                            <div class="model-settings-checkbox">
-                                <input
-                                    type="checkbox"
-                                    id="enable-multi-model"
-                                    bind:checked={tempEnableMultiModel}
-                                    class="b3-switch"
-                                    disabled={tempChatMode !== 'ask'}
-                                    on:change={() => {
-                                        if (
-                                            !tempEnableMultiModel &&
-                                            tempSelectedModels.length > 1
-                                        ) {
-                                            tempSelectedModels = [];
-                                        }
-                                        applySettings();
-                                    }}
-                                />
-                                <label
-                                    for="enable-multi-model"
-                                    class:disabled={tempChatMode !== 'ask'}
-                                >
-                                    {t('aiSidebar.modelSettings.enableMultiModel') || '多模型模式'}
-                                    {#if tempChatMode !== 'ask'}
-                                        <span class="model-settings-disabled-hint">
-                                            ({t('aiSidebar.modelSettings.onlyAskMode') ||
-                                                '仅问答模式可用'})
-                                        </span>
-                                    {/if}
-                                </label>
-                            </div>
-
-                            <!-- 模型选择下拉框 -->
-                            <div class="model-settings-model-list">
-                                <div class="model-settings-search">
-                                    <input
-                                        type="text"
-                                        class="b3-text-field"
-                                        placeholder={t('aiSidebar.modelSettings.searchModels') ||
-                                            '搜索模型'}
-                                        bind:value={modelSearchQuery}
-                                    />
-                                </div>
-
-                                {#if modelSearchQuery.trim() && filteredModels.length === 0}
-                                    <div class="model-settings-no-results">
-                                        {t('aiSidebar.modelSettings.noResults') || '无匹配结果'}
-                                    </div>
-                                {/if}
-
-                                {#each filteredModels as model}
-                                    <div class="model-settings-model-item">
-                                        <div class="model-settings-model-item-main">
-                                            {#if tempEnableMultiModel}
-                                                <!-- 多模型模式：使用+按钮 -->
-                                                <button
-                                                    class="model-settings-add-button"
-                                                    type="button"
-                                                    on:click={() => {
-                                                        tempSelectedModels = [
-                                                            ...tempSelectedModels,
-                                                            {
-                                                                provider: model.provider,
-                                                                modelId: model.modelId,
-                                                            },
-                                                        ];
-                                                        applySettings();
-                                                    }}
-                                                    title="添加此模型"
-                                                >
-                                                    <svg class="model-settings-add-icon">
-                                                        <use xlink:href="#iconAdd"></use>
-                                                    </svg>
-                                                </button>
-                                            {:else}
-                                                <!-- 单模型模式：使用radio按钮 -->
-                                                <input
-                                                    type="radio"
-                                                    id="model-{model.provider}-{model.modelId}"
-                                                    name="preset-model-selection"
-                                                    checked={tempSelectedModels.some(
-                                                        m =>
-                                                            m.provider === model.provider &&
-                                                            m.modelId === model.modelId
-                                                    )}
-                                                    on:change={() => {
-                                                        tempSelectedModels = [
-                                                            {
-                                                                provider: model.provider,
-                                                                modelId: model.modelId,
-                                                            },
-                                                        ];
-                                                        applySettings();
-                                                    }}
-                                                />
-                                            {/if}
-                                            <label for="model-{model.provider}-{model.modelId}">
-                                                <span class="model-provider-name">
-                                                    {model.providerName}
-                                                </span>
-                                                <span class="model-name">{model.modelName}</span>
-                                            </label>
-                                        </div>
-
-                                        {#if model.supportsThinking}
-                                            <div class="model-settings-thinking-checkbox">
-                                                <input
-                                                    type="checkbox"
-                                                    id="thinking-{model.provider}-{model.modelId}"
-                                                    class="b3-switch b3-switch--small"
-                                                    checked={tempModelThinkingSettings[
-                                                        `${model.provider}:${model.modelId}`
-                                                    ] ?? false}
-                                                    on:change={e => {
-                                                        const key = `${model.provider}:${model.modelId}`;
-                                                        tempModelThinkingSettings = {
-                                                            ...tempModelThinkingSettings,
-                                                            [key]: e.currentTarget.checked,
-                                                        };
-                                                        applySettings();
-                                                    }}
-                                                />
-                                                <label
-                                                    for="thinking-{model.provider}-{model.modelId}"
-                                                    class="thinking-label"
-                                                >
-                                                    {t('aiSidebar.modelSettings.enableThinking') ||
-                                                        '思考'}
-                                                </label>
-                                            </div>
-                                        {/if}
-                                    </div>
-                                {/each}
-                            </div>
+                            <!-- 使用 MultiModelSelector 组件 -->
+                            <MultiModelSelector
+                                {providers}
+                                selectedModels={tempSelectedModels}
+                                bind:isOpen={isModelSelectorOpen}
+                                enableMultiModel={tempEnableMultiModel}
+                                currentProvider={getCurrentModelSelection().provider}
+                                currentModelId={getCurrentModelSelection().modelId}
+                                chatMode={tempChatMode}
+                                on:select={handleModelSelect}
+                                on:change={handleModelsChange}
+                                on:toggleEnable={handleToggleMultiModel}
+                                on:toggleThinking={handleToggleThinking}
+                            />
                         </div>
                     {/if}
 
@@ -1797,36 +1505,6 @@
         }
     }
 
-    .model-settings-add-button {
-        flex-shrink: 0;
-        width: 24px;
-        height: 24px;
-        border-radius: 50%;
-        background: var(--b3-theme-primary);
-        border: none;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        transition: all 0.2s;
-        margin-right: 8px;
-
-        &:hover {
-            background: var(--b3-theme-primary-light);
-            transform: scale(1.1);
-        }
-
-        &:active {
-            transform: scale(0.95);
-        }
-    }
-
-    .model-settings-add-icon {
-        width: 14px;
-        height: 14px;
-        fill: white;
-    }
-
     .model-settings-textarea {
         resize: vertical;
         min-height: 60px;
@@ -1849,36 +1527,9 @@
 
     .model-settings-model-selector {
         margin-top: 12px;
-        padding: 12px;
-        background: var(--b3-theme-surface);
-        border-radius: 4px;
-        border: 1px solid var(--b3-border-color);
-    }
-
-    .model-settings-model-list {
-        margin-top: 12px;
-        max-height: 500px;
-        overflow-y: auto;
         display: flex;
         flex-direction: column;
         gap: 8px;
-    }
-
-    .model-settings-search {
-        display: flex;
-        padding: 6px 0;
-    }
-
-    .model-settings-search .b3-text-field {
-        width: 100%;
-        padding: 6px 8px;
-        font-size: 12px;
-    }
-
-    .model-settings-no-results {
-        padding: 8px;
-        color: var(--b3-theme-on-surface-light);
-        font-size: 12px;
     }
 
     .model-settings-preset-search {
@@ -1892,212 +1543,10 @@
         font-size: 12px;
     }
 
-    .model-settings-model-item {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        padding: 6px 8px;
-        background: var(--b3-theme-background);
-        border-radius: 4px;
-        border: 1px solid var(--b3-border-color);
-        transition: all 0.2s;
-
-        &:hover {
-            background: var(--b3-theme-surface);
-            border-color: var(--b3-theme-primary-light);
-        }
-
-        input[type='checkbox'],
-        input[type='radio'] {
-            flex-shrink: 0;
-        }
-
-        label {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            cursor: pointer;
-            font-size: 12px;
-            margin: 0;
-        }
-
-        .model-provider-name {
-            color: var(--b3-theme-on-surface-light);
-            font-size: 11px;
-            padding: 2px 6px;
-            background: var(--b3-theme-surface);
-            border-radius: 3px;
-        }
-
-        .model-name {
-            color: var(--b3-theme-on-surface);
-            font-weight: 500;
-        }
-    }
-
-    .model-settings-model-item-main {
-        flex: 1;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .model-settings-thinking-checkbox {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        padding-left: 8px;
-        border-left: 1px solid var(--b3-border-color);
-
-        input[type='checkbox'] {
-            flex-shrink: 0;
-        }
-
-        .thinking-label {
-            font-size: 11px;
-            color: var(--b3-theme-on-surface-light);
-            cursor: pointer;
-            margin: 0;
-            white-space: nowrap;
-        }
-    }
-
     .model-settings-disabled-hint {
         font-size: 11px;
         color: var(--b3-theme-on-surface-light);
         font-weight: normal;
-    }
-
-    // 已选模型列表样式
-    .model-settings-selected-models-header {
-        border-bottom: 1px solid var(--b3-border-color);
-    }
-
-    .model-settings-selected-models-title {
-        font-size: 12px;
-        font-weight: 600;
-        color: var(--b3-theme-on-background);
-        margin-bottom: 4px;
-    }
-
-    .model-settings-selected-models-list {
-        max-height: 200px;
-        overflow-y: auto;
-    }
-
-    .model-settings-drop-indicator {
-        height: 2px;
-        background: var(--b3-theme-primary);
-        border-radius: 1px;
-        margin: 2px 8px;
-        opacity: 0;
-        transition: opacity 0.2s ease;
-
-        &--active {
-            opacity: 1;
-        }
-    }
-
-    .model-settings-selected-model {
-        margin: 4px 0;
-        background: var(--b3-theme-background);
-        border: 1px solid var(--b3-border-color);
-        border-radius: 4px;
-        cursor: move;
-        transition: all 0.2s;
-
-        &:hover {
-            background: var(--b3-theme-surface);
-            border-color: var(--b3-theme-primary-light);
-        }
-
-        &:active {
-            transform: scale(0.98);
-        }
-    }
-
-    .model-settings-selected-model-content {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 8px;
-        min-width: 0;
-    }
-
-    .model-settings-drag-handle {
-        flex-shrink: 0;
-        cursor: grab;
-        color: var(--b3-theme-on-surface-light);
-
-        &:active {
-            cursor: grabbing;
-        }
-    }
-
-    .model-settings-drag-icon {
-        width: 14px;
-        height: 14px;
-    }
-
-    .model-settings-selected-model-info {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        min-width: 0;
-    }
-
-    .model-settings-selected-model-name {
-        font-size: 12px;
-        font-weight: 500;
-        color: var(--b3-theme-on-background);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .model-settings-selected-model-provider {
-        font-size: 10px;
-        color: var(--b3-theme-on-surface-light);
-    }
-
-    .model-settings-selected-model-actions {
-        display: flex;
-        gap: 2px;
-        flex-shrink: 0;
-    }
-
-    .model-settings-move-btn,
-    .model-settings-remove-btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 20px;
-        height: 20px;
-        border: none;
-        background: transparent;
-        border-radius: 3px;
-        cursor: pointer;
-        color: var(--b3-theme-on-surface-light);
-        transition: all 0.2s;
-
-        &:hover:not(:disabled) {
-            background: var(--b3-theme-surface);
-            color: var(--b3-theme-on-background);
-        }
-
-        &:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-    }
-
-    .model-settings-move-icon,
-    .model-settings-remove-icon {
-        width: 12px;
-        height: 12px;
     }
 
     .model-settings-preset-selected-icon {

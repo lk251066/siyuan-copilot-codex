@@ -237,7 +237,12 @@
             "presetMenu": "Preset Menu",
             "enableThinking": "Thinking",
             "createNewPreset": "New Preset",
-            "editPreset": "Edit Preset"
+            "editPreset": "Edit Preset",
+            "searchModels": "Search Models",
+            "searchPresets": "Search Presets",
+            "noResults": "No matching results",
+            "unsavedChanges": "Unsaved Changes",
+            "confirmClose": "You have unsaved changes. Do you want to save the preset?"
         },
         "input": {
             "placeholder": "Type a message... (drag docs, blocks or paste images)"

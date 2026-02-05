@@ -239,7 +239,9 @@
             "editPreset": "编辑预设",
             "searchModels": "搜索模型",
             "searchPresets": "搜索预设",
-            "noResults": "无匹配结果"
+            "noResults": "无匹配结果",
+            "unsavedChanges": "未保存的更改",
+            "confirmClose": "您有未保存的更改，是否保存预设？"
         },
         "input": {
             "placeholder": "输入消息... (可拖入文档、块或粘贴图片)"
