@@ -212,8 +212,7 @@
         const modelCounts: Record<string, number> = {};
         selectedModels.forEach(m => {
             const provider =
-                providers[m.provider] ||
-                providers.customProviders?.find(p => p.id === m.provider);
+                providers[m.provider] || providers.customProviders?.find(p => p.id === m.provider);
             const model = provider?.models?.find(model => model.id === m.modelId);
             const modelName = model?.name || m.modelId;
             modelCounts[modelName] = (modelCounts[modelName] || 0) + 1;
@@ -620,7 +619,9 @@
         if (tempEnableMultiModel !== initialState.enableMultiModel) return true;
         if (tempChatMode !== initialState.chatMode) return true;
         if (!areModelsEqual(tempSelectedModels, initialState.selectedModels)) return true;
-        if (!areThinkingSettingsEqual(tempModelThinkingSettings, initialState.modelThinkingSettings))
+        if (
+            !areThinkingSettingsEqual(tempModelThinkingSettings, initialState.modelThinkingSettings)
+        )
             return true;
         return false;
     }
@@ -638,8 +639,7 @@
 
         confirm(
             t('aiSidebar.modelSettings.unsavedChanges') || '未保存的更改',
-            t('aiSidebar.modelSettings.confirmClose') ||
-                '您有未保存的更改，是否保存预设？',
+            t('aiSidebar.modelSettings.confirmClose') || '您有未保存的更改，是否保存预设？',
             async () => {
                 // 用户选择保存
                 if (editingPresetId) {
