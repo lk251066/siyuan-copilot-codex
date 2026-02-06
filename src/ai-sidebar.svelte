@@ -1519,9 +1519,7 @@
         : false;
 
     // 当前模型是否是 Gemini 3 系列（用于限制思考程度选项）
-    $: isCurrentModelGemini3 = currentModelId
-        ? isGemini3Model(currentModelId)
-        : false;
+    $: isCurrentModelGemini3 = currentModelId ? isGemini3Model(currentModelId) : false;
 
     // 当前思考程度设置
     $: currentThinkingEffort = (() => {
@@ -9646,7 +9644,9 @@
                                     {/if}
                                     <option value="low">{t('thinking.effort.low')}</option>
                                     {#if !isCurrentModelGemini3}
-                                        <option value="medium">{t('thinking.effort.medium')}</option>
+                                        <option value="medium">
+                                            {t('thinking.effort.medium')}
+                                        </option>
                                     {/if}
                                     <option value="high">{t('thinking.effort.high')}</option>
                                 </select>
@@ -9693,7 +9693,9 @@
                                     {/if}
                                     <option value="low">{t('thinking.effort.low')}</option>
                                     {#if !isCurrentModelGemini3}
-                                        <option value="medium">{t('thinking.effort.medium')}</option>
+                                        <option value="medium">
+                                            {t('thinking.effort.medium')}
+                                        </option>
                                     {/if}
                                     <option value="high">{t('thinking.effort.high')}</option>
                                 </select>
