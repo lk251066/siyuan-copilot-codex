@@ -4,6 +4,7 @@
     import { pushMsg, pushErrMsg } from '../api';
     import type { ProviderConfig, ModelConfig } from '../defaultSettings';
     import { t } from '../utils/i18n';
+    import { getModelCapabilities } from '../utils/modelCapabilities';
 
     export let providerId: string;
     export let providerName: string;
@@ -203,11 +204,17 @@
             return;
         }
 
+        // 自动检测模型能力
+        const capabilities = getModelCapabilities(modelId);
+
         const newModel: ModelConfig = {
             id: modelId,
             name: modelName,
             temperature: 1,
             maxTokens: -1,
+            capabilities: capabilities,
+            thinkingEnabled: false, // 默认不开启思考模式
+            thinkingEffort: 'medium', // 默认思考强度
         };
 
         config.models = [...config.models, newModel];
@@ -248,6 +255,16 @@
         config.models = config.models.filter(m => m.id !== modelId);
         dispatch('change');
         pushMsg('已删除模型');
+    }
+
+    // 切换模型添加/删除状态
+    function toggleModel(modelId: string, modelName: string) {
+        const isAdded = config.models.some(m => m.id === modelId);
+        if (isAdded) {
+            removeModel(modelId);
+        } else {
+            addModel(modelId, modelName);
+        }
     }
 
     // 更新模型配置
@@ -301,6 +318,21 @@
     // 同步 providerName 的变化
     $: if (!isEditingName) {
         editingName = providerName;
+    }
+
+    // 获取模型能力的 emoji 字符串
+    function getModelCapabilitiesEmoji(modelId: string): string {
+        const capabilities = getModelCapabilities(modelId);
+        if (!capabilities || Object.keys(capabilities).length === 0) return '';
+
+        const emojis: string[] = [];
+        if (capabilities.thinking) emojis.push('💡');
+        if (capabilities.vision) emojis.push('👀');
+        if (capabilities.imageGeneration) emojis.push('🖼️');
+        if (capabilities.toolCalling) emojis.push('🛠️');
+        if (capabilities.webSearch) emojis.push('🌐');
+
+        return emojis.length > 0 ? ' ' + emojis.join(' ') : '';
     }
 </script>
 
@@ -528,16 +560,23 @@
                             {#each filteredModels.slice(0, 200) as model}
                                 <div class="model-search-item">
                                     <div class="model-search-item__info">
-                                        <span class="model-search-item__name">{model.name}</span>
+                                        <span class="model-search-item__name">
+                                            {model.name}{getModelCapabilitiesEmoji(model.id)}
+                                        </span>
                                         <span class="model-search-item__id">{model.id}</span>
                                     </div>
                                     <button
-                                        class="b3-button b3-button--text"
-                                        on:click={() => addModel(model.id, model.name)}
-                                        disabled={config.models.some(m => m.id === model.id)}
+                                        class="b3-button"
+                                        class:b3-button--text={!config.models.some(
+                                            m => m.id === model.id
+                                        )}
+                                        class:b3-button--cancel={config.models.some(
+                                            m => m.id === model.id
+                                        )}
+                                        on:click={() => toggleModel(model.id, model.name)}
                                     >
                                         {config.models.some(m => m.id === model.id)
-                                            ? t('models.alreadyAdded')
+                                            ? t('models.remove') || '移除'
                                             : t('models.add')}
                                     </button>
                                 </div>
