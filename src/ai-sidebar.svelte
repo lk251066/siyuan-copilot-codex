@@ -3246,10 +3246,10 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
             messages = [...messages, assistantMessage];
         }
 
-        // 清除多模型状态
+        // 清除多模型状态（全局多模型响应清除），但记录已选索引用于UI
         multiModelResponses = [];
         isWaitingForAnswerSelection = false;
-        selectedAnswerIndex = null;
+        selectedAnswerIndex = index;
         hasUnsavedChanges = true;
 
         // 自动保存会话
@@ -8299,6 +8299,9 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
             if (selectedIndex !== -1) {
                 // 更新被选中模型的内容
                 message.multiModelResponses[selectedIndex].content = newContent;
+                // 记录用户对该模型答案的手动编辑，便于切换时保留改动
+                if (!message._editedSelections) message._editedSelections = {};
+                message._editedSelections[selectedIndex] = newContent;
             }
             // 同时更新主 content 字段（用于显示和其他操作）
             message.content = newContent;
@@ -8313,6 +8316,36 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         editingMessageIndex = null;
         editingMessageContent = '';
         isEditDialogOpen = false;
+    }
+
+    // 在历史消息的多模型响应中选择某个模型的答案（支持切换并保留手动编辑）
+    function selectHistoryMultiModelAnswer(absMessageIndex: number, responseIndex: number) {
+        const msg = messages[absMessageIndex];
+        if (!msg || !msg.multiModelResponses || msg.multiModelResponses.length === 0) return;
+
+        const prevSelected = msg.multiModelResponses.findIndex(r => r.isSelected);
+        if (prevSelected === responseIndex) return;
+
+        // 保存当前显示内容到编辑缓存（如果有）
+        msg._editedSelections = msg._editedSelections || {};
+        if (prevSelected !== -1) {
+            msg._editedSelections[prevSelected] = msg.content;
+        }
+
+        // 更新选中标记并优化名称显示
+        msg.multiModelResponses = msg.multiModelResponses.map((r, i) => {
+            const cleanName = (r.modelName || '').toString().replace(/^ ✅/, '');
+            return { ...r, isSelected: i === responseIndex, modelName: i === responseIndex ? ' ✅' + cleanName : cleanName };
+        });
+
+        // 如果之前对目标答案有手动编辑，则恢复编辑内容，否则使用模型原始内容
+        const edited = msg._editedSelections[responseIndex];
+        msg.content = edited ?? msg.multiModelResponses[responseIndex].content;
+
+        messages = [...messages];
+        hasUnsavedChanges = true;
+        // 保存会话状态
+        saveCurrentSession(true);
     }
 
     // 删除消息
@@ -9317,14 +9350,14 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                                                     <div
                                                         class="ai-sidebar__multi-model-card-actions"
                                                     >
-                                                        {#if !response.error && response.content}
+                                                    {#if !response.error && response.content}
                                                             <button
                                                                 class="b3-button b3-button--text"
-                                                                on:click={() =>
-                                                                    regenerateHistoryModelResponse(
-                                                                        messageIndex + msgIndex,
-                                                                        index
-                                                                    )}
+                                                            on:click={() =>
+                                                                regenerateHistoryModelResponse(
+                                                                    messageIndex + msgIndex,
+                                                                    index
+                                                                )}
                                                                 title={t(
                                                                     'aiSidebar.actions.regenerate'
                                                                 )}
@@ -9351,6 +9384,16 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                                                                     ></use>
                                                                 </svg>
                                                             </button>
+                                                        <button
+                                                            class="b3-button b3-button--primary ai-sidebar__multi-model-select-btn"
+                                                            on:click={() =>
+                                                                selectHistoryMultiModelAnswer(
+                                                                    messageIndex + msgIndex,
+                                                                    index
+                                                                )}
+                                                        >
+                                                            {response.isSelected ? t('multiModel.answerSelected') : t('multiModel.selectAnswer')}
+                                                        </button>
                                                         {/if}
                                                     </div>
                                                 </div>
