@@ -8335,7 +8335,11 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         // 更新选中标记并优化名称显示
         msg.multiModelResponses = msg.multiModelResponses.map((r, i) => {
             const cleanName = (r.modelName || '').toString().replace(/^ ✅/, '');
-            return { ...r, isSelected: i === responseIndex, modelName: i === responseIndex ? ' ✅' + cleanName : cleanName };
+            return {
+                ...r,
+                isSelected: i === responseIndex,
+                modelName: i === responseIndex ? ' ✅' + cleanName : cleanName,
+            };
         });
 
         // 如果之前对目标答案有手动编辑，则恢复编辑内容，否则使用模型原始内容
@@ -9350,14 +9354,14 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                                                     <div
                                                         class="ai-sidebar__multi-model-card-actions"
                                                     >
-                                                    {#if !response.error && response.content}
+                                                        {#if !response.error && response.content}
                                                             <button
                                                                 class="b3-button b3-button--text"
-                                                            on:click={() =>
-                                                                regenerateHistoryModelResponse(
-                                                                    messageIndex + msgIndex,
-                                                                    index
-                                                                )}
+                                                                on:click={() =>
+                                                                    regenerateHistoryModelResponse(
+                                                                        messageIndex + msgIndex,
+                                                                        index
+                                                                    )}
                                                                 title={t(
                                                                     'aiSidebar.actions.regenerate'
                                                                 )}
@@ -9384,16 +9388,18 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                                                                     ></use>
                                                                 </svg>
                                                             </button>
-                                                        <button
-                                                            class="b3-button b3-button--primary ai-sidebar__multi-model-select-btn"
-                                                            on:click={() =>
-                                                                selectHistoryMultiModelAnswer(
-                                                                    messageIndex + msgIndex,
-                                                                    index
-                                                                )}
-                                                        >
-                                                            {response.isSelected ? t('multiModel.answerSelected') : t('multiModel.selectAnswer')}
-                                                        </button>
+                                                            <button
+                                                                class="b3-button b3-button--primary ai-sidebar__multi-model-select-btn"
+                                                                on:click={() =>
+                                                                    selectHistoryMultiModelAnswer(
+                                                                        messageIndex + msgIndex,
+                                                                        index
+                                                                    )}
+                                                            >
+                                                                {response.isSelected
+                                                                    ? t('multiModel.answerSelected')
+                                                                    : t('multiModel.selectAnswer')}
+                                                            </button>
                                                         {/if}
                                                     </div>
                                                 </div>
