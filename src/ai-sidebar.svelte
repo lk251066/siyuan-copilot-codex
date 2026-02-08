@@ -10204,7 +10204,8 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                                             </button>
                                             <button
                                                 class="b3-button b3-button--primary ai-sidebar__multi-model-select-btn"
-                                                class:ai-sidebar__multi-model-select-btn--selected={selectedAnswerIndex === index}
+                                                class:ai-sidebar__multi-model-select-btn--selected={selectedAnswerIndex ===
+                                                    index}
                                                 on:click={() => selectMultiModelAnswer(index)}
                                             >
                                                 {selectedAnswerIndex === index
@@ -10379,7 +10380,8 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
                                                 </button>
                                                 <button
                                                     class="b3-button b3-button--primary ai-sidebar__multi-model-select-btn"
-                                                    class:ai-sidebar__multi-model-select-btn--selected={selectedAnswerIndex === selectedTabIndex}
+                                                    class:ai-sidebar__multi-model-select-btn--selected={selectedAnswerIndex ===
+                                                        selectedTabIndex}
                                                     on:click={() =>
                                                         selectMultiModelAnswer(selectedTabIndex)}
                                                 >
@@ -14173,7 +14175,6 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
         background-color: var(--b3-theme-success) !important;
         border-color: var(--b3-theme-success) !important;
     }
-
 
     .ai-sidebar__multi-model-card-content {
         flex: 1;
