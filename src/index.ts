@@ -661,7 +661,7 @@ export default class PluginSample extends Plugin {
                                 (async () => {
                                     try {
                                         const iconId = await pluginInstance.getOrCreateIconForDomain(selected.url);
-                                        try { if (this.tab) (this.tab as any).icon = iconId; } catch(e){}
+                                        try { if (this.tab) (this.tab as any).icon = iconId; } catch (e) { }
                                         // DOM 回退：根据标签标题查找并替换 svg use
                                         try {
                                             const headers = document.querySelectorAll('li[data-type="tab-header"]');
@@ -692,7 +692,7 @@ export default class PluginSample extends Plugin {
                                     (async () => {
                                         try {
                                             const iconId = await pluginInstance.getOrCreateIconForDomain(url);
-                                            try { if (this.tab) (this.tab as any).icon = iconId; } catch(e){}
+                                            try { if (this.tab) (this.tab as any).icon = iconId; } catch (e) { }
                                             try {
                                                 const headers = document.querySelectorAll('li[data-type="tab-header"]');
                                                 for (const h of Array.from(headers)) {
@@ -884,7 +884,7 @@ export default class PluginSample extends Plugin {
                         (async () => {
                             try {
                                 const iconId = await pluginInstance.getOrCreateIconForDomain(newUrl);
-                                try { if (this.tab) (this.tab as any).icon = iconId; } catch(e){}
+                                try { if (this.tab) (this.tab as any).icon = iconId; } catch (e) { }
                                 try {
                                     // 根据当前标签页标题尝试更新 tab header 的 svg
                                     const titleText = (this.tab && this.tab.title) ? this.tab.title : '';
@@ -1135,8 +1135,8 @@ export default class PluginSample extends Plugin {
                                                     console.warn('注册本地缓存 favicon 失败:', e);
                                                 }
                                                 try {
-                                                    tabPromise.then((tp: any) => { try { tp.icon = pluginInstance.getWebAppIconId(domain); } catch (e) {} });
-                                                } catch (e) {}
+                                                    tabPromise.then((tp: any) => { try { tp.icon = pluginInstance.getWebAppIconId(domain); } catch (e) { } });
+                                                } catch (e) { }
                                             }
                                         } catch (e) {
                                             // 忽略错误
@@ -1390,8 +1390,8 @@ export default class PluginSample extends Plugin {
                                         console.warn('注册本地缓存 favicon 失败:', e);
                                     }
                                     try {
-                                        tabPromise.then((tp: any) => { try { tp.icon = this.getWebAppIconId(domain); } catch (e) {} });
-                                    } catch (e) {}
+                                        tabPromise.then((tp: any) => { try { tp.icon = this.getWebAppIconId(domain); } catch (e) { } });
+                                    } catch (e) { }
                                 }
                             } catch (e) {
                                 // 忽略错误，不影响打开体验
