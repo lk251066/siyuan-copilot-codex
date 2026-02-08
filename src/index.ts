@@ -248,6 +248,7 @@ export default class PluginSample extends Plugin {
                     urlInput.className = 'b3-text-field';
                     urlInput.style.flex = '1';
                     urlInput.style.fontSize = '13px';
+                    urlInput.spellcheck = false;
 
                     urlInput.addEventListener('keydown', (e: KeyboardEvent) => {
                         // 阻止冒泡，防止触发全局快捷键
