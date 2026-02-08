@@ -657,6 +657,25 @@ export default class PluginSample extends Plugin {
                                 redirectCount = 0;
                                 lastUrl = selected.url;
                                 webview.src = selected.url;
+                                // 尝试更新标签图标
+                                (async () => {
+                                    try {
+                                        const iconId = await pluginInstance.getOrCreateIconForDomain(selected.url);
+                                        try { if (this.tab) (this.tab as any).icon = iconId; } catch(e){}
+                                        // DOM 回退：根据标签标题查找并替换 svg use
+                                        try {
+                                            const headers = document.querySelectorAll('li[data-type="tab-header"]');
+                                            for (const h of Array.from(headers)) {
+                                                const textEl = h.querySelector('.item__text');
+                                                if (textEl && textEl.textContent && textEl.textContent.indexOf(initialTitle) !== -1) {
+                                                    const useEl = h.querySelector('svg use');
+                                                    if (useEl) useEl.setAttribute('xlink:href', `#${iconId}`);
+                                                    break;
+                                                }
+                                            }
+                                        } catch (e) { }
+                                    } catch (e) { }
+                                })();
                                 urlInput.blur();
                             } else {
                                 // 否则使用输入的内容
@@ -669,6 +688,24 @@ export default class PluginSample extends Plugin {
                                     redirectCount = 0;
                                     lastUrl = url;
                                     webview.src = url;
+                                    // 更新标签图标
+                                    (async () => {
+                                        try {
+                                            const iconId = await pluginInstance.getOrCreateIconForDomain(url);
+                                            try { if (this.tab) (this.tab as any).icon = iconId; } catch(e){}
+                                            try {
+                                                const headers = document.querySelectorAll('li[data-type="tab-header"]');
+                                                for (const h of Array.from(headers)) {
+                                                    const textEl = h.querySelector('.item__text');
+                                                    if (textEl && textEl.textContent && textEl.textContent.indexOf(initialTitle) !== -1) {
+                                                        const useEl = h.querySelector('svg use');
+                                                        if (useEl) useEl.setAttribute('xlink:href', `#${iconId}`);
+                                                        break;
+                                                    }
+                                                }
+                                            } catch (e) { }
+                                        } catch (e) { }
+                                    })();
                                     urlInput.blur();
                                 }
                             }
@@ -842,6 +879,27 @@ export default class PluginSample extends Plugin {
 
                         // 添加到历史记录（先使用 URL 作为标题，等标题更新时再更新）
                         pluginInstance.addToWebViewHistory(newUrl, newUrl);
+
+                        // 导航后尝试更新标签图标（域名发生变化时）
+                        (async () => {
+                            try {
+                                const iconId = await pluginInstance.getOrCreateIconForDomain(newUrl);
+                                try { if (this.tab) (this.tab as any).icon = iconId; } catch(e){}
+                                try {
+                                    // 根据当前标签页标题尝试更新 tab header 的 svg
+                                    const titleText = (this.tab && this.tab.title) ? this.tab.title : '';
+                                    const headers = document.querySelectorAll('li[data-type="tab-header"]');
+                                    for (const h of Array.from(headers)) {
+                                        const textEl = h.querySelector('.item__text');
+                                        if (textEl && textEl.textContent && titleText && textEl.textContent.indexOf(titleText) !== -1) {
+                                            const useEl = h.querySelector('svg use');
+                                            if (useEl) useEl.setAttribute('xlink:href', `#${iconId}`);
+                                            break;
+                                        }
+                                    }
+                                } catch (e) { }
+                            } catch (e) { }
+                        })();
                     });
 
                     webview.addEventListener('did-navigate-in-page', (event: any) => {
@@ -1048,40 +1106,42 @@ export default class PluginSample extends Plugin {
 
                                 // 异步获取域名图标（会缓存），获取失败则回退默认图标
                                 try {
-                                    pluginInstance.getOrCreateIconForDomain(url).then((iconId) => {
-                                        openTab({
-                                            app: pluginInstance.app,
-                                            custom: {
-                                                icon: iconId,
-                                                title: initialTitle,
-                                                data: {
-                                                    app: {
-                                                        url: url,
-                                                        name: initialTitle,
-                                                        id: "weblink_" + Date.now()
-                                                    }
-                                                },
-                                                id: pluginInstance.name + WEBAPP_TAB_TYPE
-                                            }
-                                        });
-                                    }).catch((err) => {
-                                        console.warn('获取域名图标失败，使用默认图标:', err);
-                                        openTab({
-                                            app: pluginInstance.app,
-                                            custom: {
-                                                icon: "iconCopilotWebApp",
-                                                title: initialTitle,
-                                                data: {
-                                                    app: {
-                                                        url: url,
-                                                        name: initialTitle,
-                                                        id: "weblink_" + Date.now()
-                                                    }
-                                                },
-                                                id: pluginInstance.name + WEBAPP_TAB_TYPE
-                                            }
-                                        });
+                                    // 立即打开标签页，避免等待网络请求。后台异步检查本地缓存并更新图标（如果存在）
+                                    const tabPromise = openTab({
+                                        app: pluginInstance.app,
+                                        custom: {
+                                            icon: "iconCopilotWebApp",
+                                            title: initialTitle,
+                                            data: {
+                                                app: {
+                                                    url: url,
+                                                    name: initialTitle,
+                                                    id: "weblink_" + Date.now()
+                                                }
+                                            },
+                                            id: pluginInstance.name + WEBAPP_TAB_TYPE
+                                        }
                                     });
+
+                                    (async () => {
+                                        try {
+                                            const domain = pluginInstance.getDomainFromUrl(url);
+                                            if (!domain) return;
+                                            const cache = (await pluginInstance.loadData(FAVICON_CACHE_FILE)) || {};
+                                            if (cache && cache[domain]) {
+                                                try {
+                                                    pluginInstance.registerWebAppIcon(domain, cache[domain]);
+                                                } catch (e) {
+                                                    console.warn('注册本地缓存 favicon 失败:', e);
+                                                }
+                                                try {
+                                                    tabPromise.then((tp: any) => { try { tp.icon = pluginInstance.getWebAppIconId(domain); } catch (e) {} });
+                                                } catch (e) {}
+                                            }
+                                        } catch (e) {
+                                            // 忽略错误
+                                        }
+                                    })();
                                 } catch (e) {
                                     console.warn('打开外部链接时图标获取异常，使用默认图标:', e);
                                     openTab({
@@ -1304,34 +1364,39 @@ export default class PluginSample extends Plugin {
                         // 存储到待打开列表
                         this.webApps.set(appData.id, appData);
 
-                        // 先获取或创建与域名对应的图标（会缓存到 settings）
-                        try {
-                            const iconId = await this.getOrCreateIconForDomain(href);
-                            openTab({
-                                app: this.app,
-                                custom: {
-                                    icon: iconId,
-                                    title: appData.name,
-                                    data: {
-                                        app: appData
-                                    },
-                                    id: this.name + WEBAPP_TAB_TYPE
+                        // 立即打开标签页，避免等待网络请求。后台异步检查本地缓存并更新图标（如果存在）
+                        const tabPromise = openTab({
+                            app: this.app,
+                            custom: {
+                                icon: "iconCopilotWebApp",
+                                title: appData.name,
+                                data: {
+                                    app: appData
+                                },
+                                id: this.name + WEBAPP_TAB_TYPE
+                            }
+                        });
+
+                        // 后台检查本地 favicon 缓存（不触发网络请求）；若存在则注册并更新标签图标
+                        (async () => {
+                            try {
+                                const domain = this.getDomainFromUrl(href);
+                                if (!domain) return;
+                                const cache = (await this.loadData(FAVICON_CACHE_FILE)) || {};
+                                if (cache && cache[domain]) {
+                                    try {
+                                        this.registerWebAppIcon(domain, cache[domain]);
+                                    } catch (e) {
+                                        console.warn('注册本地缓存 favicon 失败:', e);
+                                    }
+                                    try {
+                                        tabPromise.then((tp: any) => { try { tp.icon = this.getWebAppIconId(domain); } catch (e) {} });
+                                    } catch (e) {}
                                 }
-                            });
-                        } catch (e) {
-                            console.warn('打开 webapp 时获取图标失败，使用默认图标:', e);
-                            openTab({
-                                app: this.app,
-                                custom: {
-                                    icon: "iconCopilotWebApp",
-                                    title: appData.name,
-                                    data: {
-                                        app: appData
-                                    },
-                                    id: this.name + WEBAPP_TAB_TYPE
-                                }
-                            });
-                        }
+                            } catch (e) {
+                                // 忽略错误，不影响打开体验
+                            }
+                        })();
 
                         return false;
                     }
