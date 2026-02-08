@@ -198,6 +198,9 @@ export default class PluginSample extends Plugin {
                                 if (!/^https?:\/\//i.test(url)) {
                                     url = 'https://' + url;
                                 }
+                                // 手动导航时重置重定向计数器
+                                redirectCount = 0;
+                                lastUrl = url;
                                 webview.src = url;
                                 urlInput.blur();
                             }
@@ -233,8 +236,17 @@ export default class PluginSample extends Plugin {
                     webview.style.width = '100%';
                     webview.style.height = '100%';
                     webview.style.border = 'none';
-                    // 允许弹出窗口（target="_blank" 等）
+                    
+                    // 配置 webview 属性
                     webview.setAttribute('allowpopups', 'true');
+                    // 为每个 webapp 设置独立的 partition，确保会话隔离
+                    webview.setAttribute('partition', `persist:webapp-${app.id}`);
+                    // 禁用 node integration 以提高安全性
+                    webview.setAttribute('nodeintegration', 'false');
+                    // 设置 User-Agent，避免某些网站因为检测到 Electron 而限制功能
+                    webview.setAttribute('useragent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+                    // 允许跨域请求（某些 webapp 需要）
+                    webview.setAttribute('webpreferences', 'allowRunningInsecureContent');
 
                     webviewWrapper.appendChild(webview);
                     container.appendChild(webviewWrapper);
@@ -242,6 +254,10 @@ export default class PluginSample extends Plugin {
 
                     // webview 是否已准备好
                     let webviewReady = false;
+                    // 重定向计数器，防止无限重定向
+                    let redirectCount = 0;
+                    let lastUrl = app.url;
+                    const MAX_REDIRECTS = 20; // 最大重定向次数
 
                     // 更新导航按钮状态
                     const updateNavigationButtons = () => {
@@ -260,6 +276,8 @@ export default class PluginSample extends Plugin {
                     backBtn.addEventListener('click', () => {
                         try {
                             if (webview.canGoBack()) {
+                                // 后退时重置重定向计数器
+                                redirectCount = 0;
                                 webview.goBack();
                             }
                         } catch (err) {
@@ -271,6 +289,8 @@ export default class PluginSample extends Plugin {
                     forwardBtn.addEventListener('click', () => {
                         try {
                             if (webview.canGoForward()) {
+                                // 前进时重置重定向计数器
+                                redirectCount = 0;
                                 webview.goForward();
                             }
                         } catch (err) {
@@ -281,6 +301,8 @@ export default class PluginSample extends Plugin {
                     // 刷新按钮点击事件
                     refreshBtn.addEventListener('click', () => {
                         try {
+                            // 刷新时重置重定向计数器
+                            redirectCount = 0;
                             webview.reload();
                         } catch (err) {
                             console.warn('刷新失败:', err);
@@ -289,12 +311,29 @@ export default class PluginSample extends Plugin {
 
                     // 监听 webview 导航事件
                     webview.addEventListener('did-navigate', (event: any) => {
-                        urlInput.value = event.url || webview.getURL();
+                        const newUrl = event.url || webview.getURL();
+                        
+                        // 检测重定向循环
+                        if (newUrl === lastUrl) {
+                            redirectCount++;
+                            if (redirectCount > MAX_REDIRECTS) {
+                                console.error('检测到重定向循环，停止加载:', newUrl);
+                                webview.stop();
+                                pushErrMsg(`页面重定向次数过多，可能存在循环重定向问题`);
+                                return;
+                            }
+                        } else {
+                            redirectCount = 0;
+                            lastUrl = newUrl;
+                        }
+                        
+                        urlInput.value = newUrl;
                         updateNavigationButtons();
                     });
 
                     webview.addEventListener('did-navigate-in-page', (event: any) => {
-                        urlInput.value = event.url || webview.getURL();
+                        const newUrl = event.url || webview.getURL();
+                        urlInput.value = newUrl;
                         updateNavigationButtons();
                     });
 
@@ -303,7 +342,18 @@ export default class PluginSample extends Plugin {
                     });
 
                     webview.addEventListener('did-stop-loading', () => {
+                        // 加载完成后重置重定向计数器
+                        redirectCount = 0;
                         updateNavigationButtons();
+                    });
+                    
+                    // 监听加载失败事件
+                    webview.addEventListener('did-fail-load', (event: any) => {
+                        // errorCode -3 是 ERR_ABORTED，通常是正常的页面跳转，不需要报错
+                        if (event.errorCode !== -3 && event.errorCode !== 0) {
+                            console.error('Webview 加载失败:', event);
+                            pushErrMsg(`页面加载失败 (错误代码: ${event.errorCode}): ${event.errorDescription || '未知错误'}`);
+                        }
                     });
 
                     // 监听页面标题更新事件，动态更新标签页标题
