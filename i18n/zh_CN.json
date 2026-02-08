@@ -447,7 +447,7 @@
             "moonshot": "月之暗面 (Kimi)",
             "openai": "OpenAI",
             "volcano": "火山引擎",
-            "Achuan": "Achuan-2 API",
+            "Achuan": "A API",
             "AchuanDescription": "为您提供稳定可靠的Openai ChatGPT、Gemini、Claude、Deepseek、Grok等API直连中转服务，支持nanobanana生图模型（gemini-3-pro-image-preview）。人民币:美刀=0.6:1，注册即送$0.2试用额度。"
         },
         "select": "请选择平台",

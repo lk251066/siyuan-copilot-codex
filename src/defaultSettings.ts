@@ -132,7 +132,7 @@ Translate the above text enclosed with <translate_input> into {outputLanguage} w
     webApps: [
         {
             "id": "builtin-achuan",
-            "name": "Achuan API",
+            "name": "A API",
             "url": "https://gpt.achuan-2.top/register?aff=ZndO",
             "createdAt": 1770447043461,
             "updatedAt": 1770449770236,
