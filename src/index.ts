@@ -783,7 +783,8 @@ export default class PluginSample extends Plugin {
                     const devtoolsBtn = document.createElement('button');
                     devtoolsBtn.className = 'b3-button b3-button--text';
                     devtoolsBtn.title = '打开开发者工具';
-                    devtoolsBtn.textContent = 'DevTools';
+                    devtoolsBtn.innerHTML = '<svg class="b3-button__icon"><use xlink:href="#iconCode"></use></svg>';
+
                     devtoolsBtn.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
