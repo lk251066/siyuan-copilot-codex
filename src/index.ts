@@ -705,7 +705,7 @@ export default class PluginSample extends Plugin {
                     searchBar.style.borderRadius = '0 0 4px 4px';
                     searchBar.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
                     searchBar.style.zIndex = '100';
-                    searchBar.style.display = 'none'; 
+                    searchBar.style.display = 'none';
                     searchBar.style.alignItems = 'center';
                     searchBar.style.padding = '4px 8px';
                     searchBar.style.gap = '4px';
@@ -717,7 +717,7 @@ export default class PluginSample extends Plugin {
                     searchInput.style.padding = '2px 4px';
                     searchInput.style.width = '160px';
                     searchInput.style.height = '24px';
-                    
+
                     const searchCount = document.createElement('span');
                     searchCount.style.fontSize = '12px';
                     searchCount.style.color = 'var(--b3-theme-on-surface-light)';
@@ -745,7 +745,7 @@ export default class PluginSample extends Plugin {
                     searchBar.appendChild(prevBtn);
                     searchBar.appendChild(nextBtn);
                     searchBar.appendChild(closeSearchBtn);
-                    
+
                     webviewWrapper.appendChild(searchBar);
                     // ----------------- 搜索栏结束 -----------------
 
@@ -970,9 +970,9 @@ export default class PluginSample extends Plugin {
                         searchInput.select();
                         // 延迟一下再搜索，确保 UI 渲染完成
                         setTimeout(() => {
-                           if (searchInput.value) {
-                               performSearch(true, false);
-                           }
+                            if (searchInput.value) {
+                                performSearch(true, false);
+                            }
                         }, 50);
                     };
 
@@ -1008,11 +1008,11 @@ export default class PluginSample extends Plugin {
 
                     // 绑定容器的 Ctrl+F (当焦点在 webview 外部时)
                     container.addEventListener('keydown', (e: KeyboardEvent) => {
-                         if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
-                             e.preventDefault();
-                             e.stopPropagation();
-                             showSearchBar();
-                         }
+                        if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            showSearchBar();
+                        }
                     });
                     // ----------------- 搜索功能逻辑结束 -----------------
 
