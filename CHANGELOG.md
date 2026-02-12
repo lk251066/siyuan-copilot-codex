@@ -1,3 +1,8 @@
+## v1.6.25 / 20260212
+- 🛠️ 右键菜单再修复：事件总线注册改为多总线并行（`plugin.eventBus` / `app.eventBus` / `window.siyuan.eventBus`）
+- 🛡️ 新增 DOM 兜底注入：当菜单事件在特定环境不触发时，仍可在右键菜单显示“提交给 Codex”
+- 🎯 兜底行为支持：选中文本、块、文档树选中项自动识别并注入 Codex 引用
+
 ## v1.6.24 / 20260212
 - 🏷️ 插件标识调整：`name` 改为 `siyuan-copilot-codex`
 - 👤 作者信息调整：`author` 更新为 `lk251066`

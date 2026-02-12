@@ -81,6 +81,11 @@ export default class PluginSample extends Plugin {
     private webViewHistory: WebViewHistory[] = []; // WebView 历史记录
     private domainIconMap: Map<string, string> = new Map(); // 缓存域名与图标文件名的映射
     private menuEventBus: any = null;
+    private menuEventBuses: any[] = [];
+    private menuDomObserver: MutationObserver | null = null;
+    private lastContextMenuTarget: EventTarget | null = null;
+    private lastContextMenuAt = 0;
+    private readonly domMenuItemDataAttr = "data-codex-submit-menu-item";
 
     private getMenuEventDetail(eventOrDetail: any) {
         if (!eventOrDetail) return null;
@@ -237,6 +242,179 @@ export default class PluginSample extends Plugin {
             showMessage(t("toolbar.submitToCodexSuccess"));
         });
     };
+    private readonly onDocumentContextMenu = (event: MouseEvent) => {
+        this.lastContextMenuTarget = event.target;
+        this.lastContextMenuAt = Date.now();
+        setTimeout(() => this.injectDomFallbackMenuItem(), 0);
+    };
+
+    private normalizeTargetElement(target: EventTarget | null): HTMLElement | null {
+        if (!target) return null;
+        if (target instanceof HTMLElement) return target;
+        if (target instanceof Text) return target.parentElement;
+        return null;
+    }
+
+    private collectDocTreeSelectedIds(): string[] {
+        const selectors = [
+            ".file-tree li[data-node-id].b3-list-item--focus",
+            ".file-tree li[data-node-id][aria-selected='true']",
+            ".file-tree li[data-node-id].b3-list-item--select",
+        ];
+        const ids = new Set<string>();
+        for (const selector of selectors) {
+            const nodes = Array.from(document.querySelectorAll(selector)) as HTMLElement[];
+            for (const node of nodes) {
+                const id = this.pickValidBlockId([
+                    node.getAttribute("data-node-id"),
+                    node.getAttribute("data-id"),
+                ]);
+                if (id) {
+                    ids.add(id);
+                }
+            }
+        }
+        return Array.from(ids);
+    }
+
+    private getContextFromLatestDomState(): {
+        markdown?: string;
+        plainText?: string;
+        blockId?: string;
+        docIds?: string[];
+    } {
+        const context: {
+            markdown?: string;
+            plainText?: string;
+            blockId?: string;
+            docIds?: string[];
+        } = {};
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            if (!range.collapsed) {
+                const { markdown, plainText } = this.extractRangeContent(range.cloneRange());
+                if ((markdown || plainText || "").trim()) {
+                    context.markdown = markdown;
+                    context.plainText = plainText;
+                    return context;
+                }
+            }
+        }
+        const targetElement = this.normalizeTargetElement(this.lastContextMenuTarget);
+        if (targetElement) {
+            const blockId = this.extractBlockIdFromElement(targetElement);
+            if (blockId) {
+                context.blockId = blockId;
+                return context;
+            }
+        }
+        const docIds = this.collectDocTreeSelectedIds();
+        if (docIds.length > 0) {
+            context.docIds = docIds;
+        }
+        return context;
+    }
+
+    private submitContextFromDomFallback() {
+        const context = this.getContextFromLatestDomState();
+        if (context.markdown || context.plainText) {
+            const content = (context.markdown || context.plainText || "").trim();
+            if (!content) {
+                showMessage(t("toolbar.submitToCodexEmpty"));
+                return;
+            }
+            this.dispatchAddChatContext({
+                kind: "selection",
+                markdown: content,
+                plainText: context.plainText,
+                source: "dom-fallback-selection",
+            });
+            showMessage(t("toolbar.submitToCodexSuccess"));
+            return;
+        }
+        if (context.blockId) {
+            this.dispatchAddChatContext({
+                kind: "block",
+                blockId: context.blockId,
+                source: "dom-fallback-block",
+            });
+            showMessage(t("toolbar.submitToCodexSuccess"));
+            return;
+        }
+        if (context.docIds && context.docIds.length > 0) {
+            for (const docId of context.docIds) {
+                this.dispatchAddChatContext({
+                    kind: "doc",
+                    docId,
+                    source: "dom-fallback-doctree",
+                });
+            }
+            showMessage(t("toolbar.submitToCodexSuccess"));
+            return;
+        }
+        showMessage(t("toolbar.submitToCodexEmpty"));
+    }
+
+    private createDomFallbackMenuItem(): HTMLButtonElement {
+        const button = document.createElement("button");
+        button.className = "b3-menu__item";
+        button.setAttribute(this.domMenuItemDataAttr, "1");
+        button.type = "button";
+        const label = t("toolbar.submitToCodex") || "提交给 Codex";
+        const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        icon.setAttribute("class", "b3-menu__icon");
+        const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+        use.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "#iconCopilot");
+        icon.appendChild(use);
+        const span = document.createElement("span");
+        span.className = "b3-menu__label";
+        span.textContent = label;
+        button.appendChild(icon);
+        button.appendChild(span);
+        button.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.submitContextFromDomFallback();
+        });
+        return button;
+    }
+
+    private injectDomFallbackMenuItem() {
+        if (Date.now() - this.lastContextMenuAt > 1500) return;
+        const menus = Array.from(document.querySelectorAll(".b3-menu")) as HTMLElement[];
+        if (menus.length === 0) return;
+        const context = this.getContextFromLatestDomState();
+        const hasContext =
+            !!(context.markdown || context.plainText || context.blockId) ||
+            !!(context.docIds && context.docIds.length > 0);
+        if (!hasContext) return;
+        const label = (t("toolbar.submitToCodex") || "提交给 Codex").trim();
+        for (const menu of menus) {
+            const hasExistingLabel = Array.from(menu.querySelectorAll(".b3-menu__label")).some((el) => {
+                return (el.textContent || "").trim() === label;
+            });
+            if (menu.querySelector(`[${this.domMenuItemDataAttr}]`) || hasExistingLabel) continue;
+            menu.appendChild(this.createDomFallbackMenuItem());
+        }
+    }
+
+    private setupDomMenuFallback() {
+        document.addEventListener("contextmenu", this.onDocumentContextMenu, true);
+        if (this.menuDomObserver) return;
+        this.menuDomObserver = new MutationObserver(() => {
+            this.injectDomFallbackMenuItem();
+        });
+        this.menuDomObserver.observe(document.body, { childList: true, subtree: true });
+    }
+
+    private teardownDomMenuFallback() {
+        document.removeEventListener("contextmenu", this.onDocumentContextMenu, true);
+        if (this.menuDomObserver) {
+            this.menuDomObserver.disconnect();
+            this.menuDomObserver = null;
+        }
+    }
 
     private isValidBlockId(id: string | null | undefined): id is string {
         return typeof id === "string" && /^\d{14}-[a-z0-9]{7}$/i.test(id.trim());
@@ -305,6 +483,7 @@ export default class PluginSample extends Plugin {
         menu.addItem({
             icon: "iconCopilot",
             label: t("toolbar.submitToCodex") || "提交给 Codex",
+            id: "copilot-submit-codex",
             click: () => {
                 onClick();
                 return false;
@@ -313,27 +492,40 @@ export default class PluginSample extends Plugin {
     }
 
     private registerAddChatContextMenuHandlers() {
-        if (this.menuEventBus) return;
-        const bus = (this as any).eventBus || (this.app as any)?.eventBus;
-        if (!bus) return;
-        this.menuEventBus = bus;
-        bus.on("open-menu-content", this.onOpenMenuContent);
-        bus.on("open-menu-doctree", this.onOpenMenuDocTree);
-        bus.on("open-menu-blockref", this.onOpenMenuBlockRef);
-        bus.on("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
-        bus.on("click-blockicon", this.onClickBlockIcon);
-        bus.on("click-editortitleicon", this.onClickEditorTitleIcon);
+        const candidates = [
+            (this as any).eventBus,
+            (this.app as any)?.eventBus,
+            (window as any)?.siyuan?.eventBus,
+        ].filter(Boolean);
+        const uniqueBuses: any[] = [];
+        for (const bus of candidates) {
+            if (!bus || typeof bus.on !== "function" || typeof bus.off !== "function") continue;
+            if (uniqueBuses.includes(bus)) continue;
+            uniqueBuses.push(bus);
+        }
+        if (uniqueBuses.length === 0) return;
+        this.menuEventBuses = uniqueBuses;
+        this.menuEventBus = uniqueBuses[0];
+        for (const bus of uniqueBuses) {
+            bus.on("open-menu-content", this.onOpenMenuContent);
+            bus.on("open-menu-doctree", this.onOpenMenuDocTree);
+            bus.on("open-menu-blockref", this.onOpenMenuBlockRef);
+            bus.on("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
+            bus.on("click-blockicon", this.onClickBlockIcon);
+            bus.on("click-editortitleicon", this.onClickEditorTitleIcon);
+        }
     }
 
     private unregisterAddChatContextMenuHandlers() {
-        const bus = this.menuEventBus;
-        if (!bus) return;
-        bus.off("open-menu-content", this.onOpenMenuContent);
-        bus.off("open-menu-doctree", this.onOpenMenuDocTree);
-        bus.off("open-menu-blockref", this.onOpenMenuBlockRef);
-        bus.off("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
-        bus.off("click-blockicon", this.onClickBlockIcon);
-        bus.off("click-editortitleicon", this.onClickEditorTitleIcon);
+        for (const bus of this.menuEventBuses) {
+            bus.off("open-menu-content", this.onOpenMenuContent);
+            bus.off("open-menu-doctree", this.onOpenMenuDocTree);
+            bus.off("open-menu-blockref", this.onOpenMenuBlockRef);
+            bus.off("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
+            bus.off("click-blockicon", this.onClickBlockIcon);
+            bus.off("click-editortitleicon", this.onClickEditorTitleIcon);
+        }
+        this.menuEventBuses = [];
         this.menuEventBus = null;
     }
 
@@ -693,6 +885,7 @@ export default class PluginSample extends Plugin {
         // 设置i18n插件实例
         setPluginInstance(this);
         this.registerAddChatContextMenuHandlers();
+        this.setupDomMenuFallback();
 
 
 
@@ -1835,6 +2028,7 @@ export default class PluginSample extends Plugin {
     async onLayoutReady() {
         //布局加载完成的时候,会自动调用这个函数
         this.registerAddChatContextMenuHandlers();
+        this.setupDomMenuFallback();
         // 注册AI侧栏
         this.addDock({
             config: {
@@ -2100,6 +2294,7 @@ export default class PluginSample extends Plugin {
     async onunload() {
         //当插件被禁用的时候，会自动调用这个函数
         this.unregisterAddChatContextMenuHandlers();
+        this.teardownDomMenuFallback();
         console.log("Copilot onunload");
     }
 
