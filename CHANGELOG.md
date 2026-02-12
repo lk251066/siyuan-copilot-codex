@@ -1,4 +1,4 @@
-## v1.6.27 / 20260212
+## v1.6.28 / 20260212
 - 🔄 Codex 模型列表来源切换为本地配置：读取 `~/.codex/config.toml` 与工作目录 `.codex/config.toml`，不再依赖远端模型接口
 - ✨ 新增 Codex “思考长度”配置：支持 `low / medium / high / xhigh`，并在运行时透传 `model_reasoning_effort`
 - 🛠️ 顶部模式/模型/思考长度改为持久化：选择后写入设置，重启插件后保持上次值
