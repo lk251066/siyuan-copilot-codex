@@ -1,154 +1,103 @@
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118224558-e1kdo6x.png" />
+# SiYuan Copilot（Codex 版）
 
-插件GitHub地址：[https://github.com/Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot)
+> 基于原项目 [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) 的 Codex-only 分支。  
+> 目标：在思源笔记中稳定使用 Codex CLI，不再维护多模型并行、小程序、翻译等旧入口。
 
-## 📝开发背景
+## 项目定位
 
-思源笔记自带的AI功能比较弱，我经常需要向AI咨询各种问题，每次需要用AI根据我的笔记内容做出解答，总是要复制粘贴到其他AI软件，并且一个AI的回答往往不能令我满意，所以我经常会把同一个问题复制粘贴去询问不同AI模型，非常麻烦。
+- 仅保留 Codex 工作流，界面和设置都围绕 Codex 使用场景简化。
+- 系统提示词可与工作目录下 `AGENTS.md` 同步，方便按项目管理规则。
+- 使用“平台管理 -> OpenAI”的 API Key 拉取 Codex 模型列表。
+- 保留会话管理、拖拽上下文、附件上传、工具自检等高频能力。
 
-于是我自己在思源笔记里开发了一个AI插件
+## 当前主要功能
 
-- 支持直接拖动笔记内容询问AI，还支持多模型同时问答功能，省去繁琐的复制粘贴操作。
-- 支持保存不同预设，针对不同场景（写论文、写博客、写代码）切换模型和prompt
-- 支持edit模式和agent模式，支持让AI对笔记内容进行查询和修改
+- Codex 聊天：`ask`、`agent` 两种模式。
+- 会话能力：自动生成标题、手动重命名、历史会话管理。
+- 思考展示优化：默认更紧凑，支持展开查看，修复字面量 `\\n` 的换行显示。
+- 模型选择优化：设置页和聊天栏均为下拉框，不再使用搜索输入。
+- MCP 工具自检：可直接查看当前挂载工具，便于排查连通性。
+- 系统提示词文件同步：与 `codexWorkingDir/AGENTS.md` 双向同步（仅当前工作目录）。
 
-## 📝更新日志
+## 快速开始
 
-见[CHANGELOG.md](https://cdn.jsdelivr.net/gh/Achuan-2/siyuan-plugin-copilot@main/CHANGELOG.md)
+### 1. 前置条件
 
-博客
-- [思源笔记 Copilot 插件用法分享：多模型同时回答](https://zhuanlan.zhihu.com/p/1972794055470633397)
-- [思源笔记 Copilot 插件 v0.7.0：支持会话重命名标题，AI 自动生成标题](https://zhuanlan.zhihu.com/p/1983095685197873937)
-- [思源笔记 Copilot 插件 v0.8.0：预设支持选择模型，支持根据场景快速切换模型](https://zhuanlan.zhihu.com/p/1983121374013842503)
-- [思源笔记 Copilot 插件 v1.2.0：支持nanobanana生图和编辑图片](https://zhuanlan.zhihu.com/p/2000977023364011834)
-- [思源笔记 Copilot 插件如何使用Achuan-2 API](https://zhuanlan.zhihu.com/p/2002765436090093989)
-- [思源笔记 Copilot 插件 v1.6.0：新增网页小程序、快捷翻译对话框](https://zhuanlan.zhihu.com/p/2003514802849485761)
+- 已安装思源笔记。
+- 已安装 Codex CLI，并可在终端执行 `codex`。
+- 已在插件“平台管理 -> OpenAI”填写可用 API Key。
 
-## ✨主要功能介绍
+### 2. 安装插件
 
-### AI模型添加
+- 方式一：在思源插件市场安装（若已发布该分支版本）。
+- 方式二：手动安装：将构建产物放入 `data/plugins/siyuan-plugin-copilot`。
 
-多平台AI支持
+### 3. 推荐配置
 
-- 插件内置常见平台（OpenAI、Google Gemini、DeepSeek、火山引擎）
-- 也支持添加任意兼容 OpenAI API 的平台，灵活切换聊天模型
+在插件设置的 `Codex CLI` 分组中：
 
-模型设置
+- `启用 Codex CLI`：开启。
+- `Codex 路径`：填写 `codex` 或绝对路径（可点“自动探测”）。
+- `工作目录（--cd）`：设为你的实际项目目录。
+- `执行权限`：建议先用 `read_only`，确认稳定后再改更高权限。
+- `模型覆盖（可选）`：可留空；需要固定模型时再选择。
+- `系统提示词`：建议开启与 `AGENTS.md` 同步。
 
-- 支持独立配置每个模型的参数（温度、最大 tokens）
-- 标识模型特殊能力（思考模式、视觉支持）
+### 4. 聊天区使用
 
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260204180535-27ex0wd.png" />
+- 顶部可直接切换聊天模式和模型。
+- 右上有“拉取模型”“工具自检”“设置”入口。
+- 发送按钮在右下角；生成中会自动切换为“终止”状态。
 
+## MCP 与工具自检
 
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118225029-2f5k1mt.png" />
+工具自检用于快速确认插件内 MCP 是否可调用。
 
+- 点击聊天区顶部“工具自检”。
+- 成功时会返回当前工具清单。
+若失败，优先检查：
+- `Codex 路径` 是否正确。
+- 插件目录下 `mcp/siyuan-mcp/index.cjs` 是否存在。
+- 工作目录和权限模式是否与当前任务匹配。
 
-### 多模态支持
+## 常见问题
 
-- 思源笔记内容：可通过拖拽块、拖拽页签、拖拽文档树的文档实现笔记内容一键发送给AI。拖动标题有特殊优化，是把标题下的所有内容发送给AI
-- 图片上传：支持粘贴、上传图片，还支持拖动图片块直接上传
-- 文件上传（支持 Markdown、文本文件等）
+### 模型列表为空或拉取失败
 
-### 三种聊天模式切换：ask、edit、agent三种聊天模式切换
+- 确认已在“平台管理 -> OpenAI”填写 API Key。
+- 模型列表接口为 `https://www.right.codes/codex/v1/models`。
+- 网络异常时可稍后重试“拉取模型”。
 
-- ask 模式：日常问答，支持选择多个模型同时回复，选择满意回答
+### 聊天区显示异常（空白过多、思考换行不正确）
 
-  直接拖拽笔记内容进行多模型问答
+- 已在本分支做过对应修复。
+- 如未生效，请重载插件并确认插件目录已更新为最新构建产物。
 
-  <img alt="拖拽标题询问" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/拖拽标题询问-20260118231116-9olhf3h.gif" />
+### Codex 无法调用工具
 
-  多模型回答结果
+- 先跑一次“工具自检”。
+- 再检查工作目录是否有访问权限，以及执行权限模式是否过低。
 
-  <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118231241-74cd19k.png" />
-- edit 模式：编辑修改笔记，支持编辑查看差异、撤回
-
-  比如我让AI把表格的某一列批量设置为红色字体
-
-  <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118231401-xvkxsz2.png" />
-- agent 模式：提供工具，让AI实现自助查询笔记内容、编辑笔记、创建文档等功能
-
-  agent模式可以选择AI可以使用的工具
-
-  <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118231449-4pdqcll.png" style="width: 498px;" />
-
-  比如之前在[用Kimi K2 Thinking写了一个钙成像配准软件](https://mp.weixin.qq.com/s/R8GBAdzL5p3QnTVfud_GtQ)，就用这个插件，帮我这里整合关于钙成像配准的零散笔记，成功写一个python钙成像配准模块出来
-
-  <img alt="PixPin_2025-11-08_19-45-58" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/PixPin_2025-11-08_19-45-58-20251108194601-4mks3of.png" style="width: 388px;" />
-
-### 会话管理
-
-- 支持保存对话历史，支持对历史记录进行置顶和删除
-- 支持复制对话为Markdown
-- 支持保存对话为文档
-
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118231854-tf2zh9n.png" />
-
-### 预设管理
-
-- 预设支持
-
-  - 设置上下文消息数
-  - Temperature
-  - 临时系统提示词
-  - 指定聊天模式
-  - 选择特点模型
-
-  <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118232101-zf7zy42.png" />
-- 支持保存预设，快速切换预设
-
-  <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118232042-1g4kam2.png" style="width: 396px;" />
-
-  <img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118232314-3qj0h1p.png" style="width: 366px;" />
-
-### 提示词管理
-
-支持把常用提示词进行保存
-
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118232429-ymzcjdg.png" />
-
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/image-20260118232510-3e5duhz.png" />
-
-## **注意事项**
-
-使用本插件需要自备 AI 平台的 API 密钥，插件本身不提供 AI 服务。请遵守各平台的使用条款和隐私政策，以及法律法规。
-
-
-## 🔧 开发相关
-
-如何打包插件
+## 开发与打包
 
 ```bash
-pnpm install
-pnpm run dev
+npm install
+npm run dev
+npm run build
 ```
 
-## 📄 许可证
+构建产物在 `dist/`，可直接覆盖到思源插件目录。
 
-GPL3 License
+## 更新日志
 
-## 🙏 致谢
+- 详细版本记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
-- 基于 [plugin-sample-vite-svelte](https://github.com/siyuan-note/plugin-sample-vite-svelte/) 模板开发
-- 参考了[sy-f-misc](https://github.com/frostime/sy-f-misc)的GPT对话功能实现
-- 参考了[cherry studio](https://github.com/CherryHQ/cherry-studio)的功能设计和交互设计
+## 许可证
 
-## ❤️项目贡献者
+- GPL-3.0
 
-<a href="https://github.com/Achuan-2/siyuan-plugin-copilot/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Achuan-2/siyuan-plugin-copilot" />
-</a>
+## 致谢
 
-Made with [contrib.rocks](https://contrib.rocks).
-
-## ❤️用爱发电
-
-如果喜欢我的插件，欢迎给GitHub仓库点star和微信赞赏，这会激励我继续完善此插件和开发新插件。
-
-维护插件费时费力，个人时间和精力有限，开源只是分享，不等于我要浪费我的时间免费帮用户实现ta需要的功能，
-
-我需要的功能我会慢慢改进（打赏可以催更），有些我觉得可以改进、但是现阶段不必要的功能需要打赏才改进（会标注打赏标签和需要打赏金额），而不需要的功能、实现很麻烦的功能会直接关闭issue不考虑实现
-
-累积赞赏50元的朋友如果想加我微信和进粉丝交流群，可以在赞赏的时候备注微信号，或者发邮件到achuan-2@outlook.com来进行好友申请
-
-<img alt="image" src="https://assets.b3logfile.com/siyuan/1610205759005/assets/network-asset-image-20250614123558-fuhir5v.png" />
+- [plugin-sample-vite-svelte](https://github.com/siyuan-note/plugin-sample-vite-svelte)
+- [sy-f-misc](https://github.com/frostime/sy-f-misc)
+- [Cherry Studio](https://github.com/CherryHQ/cherry-studio)
