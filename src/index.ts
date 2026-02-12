@@ -196,6 +196,47 @@ export default class PluginSample extends Plugin {
             showMessage(t("toolbar.submitToCodexSuccess"));
         });
     };
+    private readonly onClickBlockIcon = (eventOrDetail: any) => {
+        const detail = this.getMenuEventDetail(eventOrDetail);
+        const menu = detail?.menu;
+        if (!menu) return;
+        this.addSubmitToCodexMenu(menu, () => {
+            const blockElements = Array.from((detail?.blockElements || []) as HTMLElement[]);
+            const blockIds = Array.from(
+                new Set(blockElements.map(el => this.extractBlockIdFromElement(el)).filter(Boolean))
+            ) as string[];
+            if (blockIds.length === 0) {
+                showMessage(t("toolbar.submitToCodexEmpty"));
+                return;
+            }
+            for (const blockId of blockIds) {
+                this.dispatchAddChatContext({
+                    kind: "block",
+                    blockId,
+                    source: "click-blockicon",
+                });
+            }
+            showMessage(t("toolbar.submitToCodexSuccess"));
+        });
+    };
+    private readonly onClickEditorTitleIcon = (eventOrDetail: any) => {
+        const detail = this.getMenuEventDetail(eventOrDetail);
+        const menu = detail?.menu;
+        if (!menu) return;
+        this.addSubmitToCodexMenu(menu, () => {
+            const docId = this.pickValidBlockId([detail?.data?.id, detail?.data?.rootID]);
+            if (!docId) {
+                showMessage(t("toolbar.submitToCodexEmpty"));
+                return;
+            }
+            this.dispatchAddChatContext({
+                kind: "doc",
+                docId,
+                source: "click-editortitleicon",
+            });
+            showMessage(t("toolbar.submitToCodexSuccess"));
+        });
+    };
 
     private isValidBlockId(id: string | null | undefined): id is string {
         return typeof id === "string" && /^\d{14}-[a-z0-9]{7}$/i.test(id.trim());
@@ -280,6 +321,8 @@ export default class PluginSample extends Plugin {
         bus.on("open-menu-doctree", this.onOpenMenuDocTree);
         bus.on("open-menu-blockref", this.onOpenMenuBlockRef);
         bus.on("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
+        bus.on("click-blockicon", this.onClickBlockIcon);
+        bus.on("click-editortitleicon", this.onClickEditorTitleIcon);
     }
 
     private unregisterAddChatContextMenuHandlers() {
@@ -289,6 +332,8 @@ export default class PluginSample extends Plugin {
         bus.off("open-menu-doctree", this.onOpenMenuDocTree);
         bus.off("open-menu-blockref", this.onOpenMenuBlockRef);
         bus.off("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
+        bus.off("click-blockicon", this.onClickBlockIcon);
+        bus.off("click-editortitleicon", this.onClickEditorTitleIcon);
         this.menuEventBus = null;
     }
 
