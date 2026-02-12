@@ -55,6 +55,30 @@
     export let initialMessage: string = ''; // 初始消息
     export let mode: 'sidebar' | 'dialog' = 'sidebar'; // 使用模式：sidebar或dialog
 
+    const ADD_CHAT_CONTEXT_EVENT = 'siyuan-copilot:add-chat-context';
+    const addChatContextHandledRequests = new Set<string>();
+
+    type AddChatContextEventDetail =
+        | {
+              kind: 'selection';
+              requestId: string;
+              markdown: string;
+              plainText?: string;
+              source?: string;
+          }
+        | {
+              kind: 'doc';
+              requestId: string;
+              docId: string;
+              source?: string;
+          }
+        | {
+              kind: 'block';
+              requestId: string;
+              blockId: string;
+              source?: string;
+          };
+
     interface ChatSession {
         id: string;
         title: string;
@@ -1151,6 +1175,81 @@
         }
     }
 
+    function formatContextSelectionFileName() {
+        const now = new Date();
+        const pad = (value: number) => value.toString().padStart(2, '0');
+        const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+        return `selection-${ts}.md`;
+    }
+
+    function markAddChatContextHandled(requestId: string): boolean {
+        if (!requestId) return false;
+        if (addChatContextHandledRequests.has(requestId)) return false;
+        addChatContextHandledRequests.add(requestId);
+        if (addChatContextHandledRequests.size > 200) {
+            const oldestKey = addChatContextHandledRequests.values().next().value;
+            if (oldestKey) {
+                addChatContextHandledRequests.delete(oldestKey);
+            }
+        }
+        return true;
+    }
+
+    async function handleAddChatContextEvent(event: Event) {
+        const detail = (event as CustomEvent<AddChatContextEventDetail | undefined>).detail;
+        if (!detail || !markAddChatContextHandled(detail.requestId)) {
+            return;
+        }
+
+        try {
+            if (detail.kind === 'selection') {
+                const content = (detail.markdown || detail.plainText || '').replace(/\r\n?/g, '\n').trim();
+                if (!content) {
+                    pushErrMsg(t('aiSidebar.errors.addSelectionFailed'));
+                    return;
+                }
+                const beforeCount = currentAttachments.length;
+                const fileName = formatContextSelectionFileName();
+                const file = new File([content], fileName, { type: 'text/markdown' });
+                await addFileAttachment(file);
+                if (currentAttachments.length > beforeCount) {
+                    pushMsg(t('aiSidebar.success.submittedToCodex'));
+                }
+                await tick();
+                textareaElement?.focus();
+                return;
+            }
+
+            if (detail.kind === 'doc') {
+                const beforeCount = contextDocuments.length;
+                await addItemByBlockId(detail.docId, false);
+                if (contextDocuments.length > beforeCount) {
+                    pushMsg(t('aiSidebar.success.submittedToCodex'));
+                }
+                await tick();
+                textareaElement?.focus();
+                return;
+            }
+
+            if (detail.kind === 'block') {
+                const beforeCount = contextDocuments.length;
+                await addItemByBlockId(detail.blockId, false);
+                if (contextDocuments.length > beforeCount) {
+                    pushMsg(t('aiSidebar.success.submittedToCodex'));
+                }
+                await tick();
+                textareaElement?.focus();
+            }
+        } catch (error) {
+            console.error('Add chat context event error:', error);
+            pushErrMsg(t('aiSidebar.errors.addToCodexContextFailed'));
+        }
+    }
+
+    function onAddChatContextEvent(event: Event) {
+        void handleAddChatContextEvent(event);
+    }
+
     onMount(async () => {
         settings = await plugin.loadSettings();
 
@@ -1294,6 +1393,7 @@
         document.addEventListener('scroll', closeContextMenu, true);
         // 添加全局复制事件监听器
         document.addEventListener('copy', handleCopyEvent);
+        window.addEventListener(ADD_CHAT_CONTEXT_EVENT, onAddChatContextEvent);
     });
 
     onDestroy(async () => {
@@ -1308,6 +1408,7 @@
         document.removeEventListener('scroll', closeContextMenu, true);
         // 移除全局复制事件监听器
         document.removeEventListener('copy', handleCopyEvent);
+        window.removeEventListener(ADD_CHAT_CONTEXT_EVENT, onAddChatContextEvent);
 
         // 保存工具配置
         if (isToolConfigLoaded) {

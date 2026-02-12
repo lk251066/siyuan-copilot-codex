@@ -38,10 +38,32 @@ export const SETTINGS_FILE = "settings.json";
 const WEBVIEW_HISTORY_FILE = "webview-history.json";
 const WEBAPP_ICON_DIR = "/data/storage/petal/siyuan-plugin-copilot/webappIcon";
 const MAX_HISTORY_COUNT = 200;
+const ADD_CHAT_CONTEXT_EVENT = "siyuan-copilot:add-chat-context";
 
 const AI_SIDEBAR_TYPE = "ai-chat-sidebar";
 export const AI_TAB_TYPE = "ai-chat-tab";
 export const WEBAPP_TAB_TYPE = "copilot-webapp";
+
+type AddChatContextEventDetail =
+    | {
+        kind: "selection";
+        requestId: string;
+        markdown: string;
+        plainText?: string;
+        source?: string;
+    }
+    | {
+        kind: "doc";
+        requestId: string;
+        docId: string;
+        source?: string;
+    }
+    | {
+        kind: "block";
+        requestId: string;
+        blockId: string;
+        source?: string;
+    };
 
 interface WebViewHistory {
     url: string;
@@ -58,6 +80,189 @@ export default class PluginSample extends Plugin {
     private webApps: Map<string, any> = new Map(); // 存储待打开的小程序数据
     private webViewHistory: WebViewHistory[] = []; // WebView 历史记录
     private domainIconMap: Map<string, string> = new Map(); // 缓存域名与图标文件名的映射
+    private readonly onOpenMenuContent = (event: CustomEvent<any>) => {
+        const detail = event.detail;
+        const menu = detail?.menu;
+        const range: Range | undefined = detail?.range;
+        const hasSelection = !!range && !range.collapsed;
+        const savedRange = hasSelection ? range!.cloneRange() : null;
+        const blockId =
+            this.extractBlockIdFromElement(detail?.element) ||
+            this.extractBlockIdFromElement(detail?.protyle?.element) ||
+            this.pickValidBlockId([detail?.protyle?.block?.id, detail?.protyle?.options?.blockId]);
+        if (!menu || (!hasSelection && !blockId)) return;
+        this.addSubmitToCodexMenu(menu, () => {
+            if (savedRange) {
+                const { markdown, plainText } = this.extractRangeContent(savedRange);
+                const content = (markdown || plainText || "").trim();
+                if (!content) {
+                    showMessage(t("toolbar.submitToCodexEmpty"));
+                    return;
+                }
+                this.dispatchAddChatContext({
+                    kind: "selection",
+                    markdown: content,
+                    plainText,
+                    source: "open-menu-content",
+                });
+                showMessage(t("toolbar.submitToCodexSuccess"));
+                return;
+            }
+            if (blockId) {
+                this.dispatchAddChatContext({
+                    kind: "block",
+                    blockId,
+                    source: "open-menu-content",
+                });
+                showMessage(t("toolbar.submitToCodexSuccess"));
+            }
+        });
+    };
+    private readonly onOpenMenuDocTree = (event: CustomEvent<any>) => {
+        const detail = event.detail;
+        const menu = detail?.menu;
+        const type = detail?.type;
+        if (!menu || (type !== "doc" && type !== "docs")) return;
+        const elements = Array.from((detail?.elements || []) as NodeListOf<HTMLElement>);
+        const docIds = Array.from(
+            new Set(elements.map(el => this.extractBlockIdFromElement(el)).filter(Boolean))
+        ) as string[];
+        if (docIds.length === 0) return;
+        this.addSubmitToCodexMenu(menu, () => {
+            for (const docId of docIds) {
+                this.dispatchAddChatContext({
+                    kind: "doc",
+                    docId,
+                    source: "open-menu-doctree",
+                });
+            }
+            showMessage(t("toolbar.submitToCodexSuccess"));
+        });
+    };
+    private readonly onOpenMenuBlockRef = (event: CustomEvent<any>) => {
+        const detail = event.detail;
+        const menu = detail?.menu;
+        if (!menu) return;
+        const blockId =
+            this.extractBlockIdFromElement(detail?.element) ||
+            this.extractBlockIdFromElement(detail?.protyle?.element) ||
+            this.pickValidBlockId([detail?.protyle?.block?.id, detail?.protyle?.options?.blockId]);
+        if (!blockId) return;
+        this.addSubmitToCodexMenu(menu, () => {
+            this.dispatchAddChatContext({
+                kind: "block",
+                blockId,
+                source: "open-menu-blockref",
+            });
+            showMessage(t("toolbar.submitToCodexSuccess"));
+        });
+    };
+    private readonly onOpenMenuFileAnnotationRef = (event: CustomEvent<any>) => {
+        const detail = event.detail;
+        const menu = detail?.menu;
+        if (!menu) return;
+        const blockId =
+            this.extractBlockIdFromElement(detail?.element) ||
+            this.extractBlockIdFromElement(detail?.protyle?.element) ||
+            this.pickValidBlockId([detail?.protyle?.block?.id, detail?.protyle?.options?.blockId]);
+        if (!blockId) return;
+        this.addSubmitToCodexMenu(menu, () => {
+            this.dispatchAddChatContext({
+                kind: "block",
+                blockId,
+                source: "open-menu-fileannotationref",
+            });
+            showMessage(t("toolbar.submitToCodexSuccess"));
+        });
+    };
+
+    private isValidBlockId(id: string | null | undefined): id is string {
+        return typeof id === "string" && /^\d{14}-[a-z0-9]{7}$/i.test(id.trim());
+    }
+
+    private pickValidBlockId(candidates: Array<string | null | undefined>): string | null {
+        for (const raw of candidates) {
+            const id = typeof raw === "string" ? raw.trim() : "";
+            if (this.isValidBlockId(id)) {
+                return id;
+            }
+        }
+        return null;
+    }
+
+    private extractBlockIdFromElement(element: HTMLElement | null | undefined): string | null {
+        if (!element) return null;
+        const candidates = [
+            element.getAttribute("data-node-id"),
+            element.getAttribute("data-id"),
+            element.dataset?.nodeId,
+            element.dataset?.id,
+            element.closest<HTMLElement>("[data-node-id]")?.getAttribute("data-node-id"),
+            element.closest<HTMLElement>("[data-id]")?.getAttribute("data-id"),
+        ];
+        const fromAttrs = this.pickValidBlockId(candidates);
+        if (fromAttrs) return fromAttrs;
+        const text = element.textContent || "";
+        const match = text.match(/\d{14}-[a-z0-9]{7}/i);
+        return match ? match[0] : null;
+    }
+
+    private extractRangeContent(range: Range): { markdown: string; plainText: string } {
+        const plainText = range.toString().trim();
+        let markdown = "";
+        try {
+            const div = document.createElement("div");
+            div.appendChild(range.cloneContents());
+            const selectedHtml = div.innerHTML;
+            if (selectedHtml && typeof window !== "undefined" && (window as any).Lute) {
+                const lute = (window as any).Lute.New();
+                markdown = (lute.HTML2Md(selectedHtml) || "").trim();
+            }
+        } catch (e) {
+            console.warn("Extract range markdown failed:", e);
+        }
+        if (!markdown) {
+            markdown = plainText;
+        }
+        return { markdown, plainText };
+    }
+
+    private dispatchAddChatContext(
+        detail: Omit<AddChatContextEventDetail, "requestId">
+    ) {
+        const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        window.dispatchEvent(
+            new CustomEvent<AddChatContextEventDetail>(ADD_CHAT_CONTEXT_EVENT, {
+                detail: { ...detail, requestId } as AddChatContextEventDetail,
+            })
+        );
+    }
+
+    private addSubmitToCodexMenu(menu: any, onClick: () => void) {
+        if (!menu || typeof menu.addItem !== "function") return;
+        menu.addItem({
+            icon: "iconCopilot",
+            label: t("toolbar.submitToCodex"),
+            click: () => {
+                onClick();
+                return false;
+            },
+        });
+    }
+
+    private registerAddChatContextMenuHandlers() {
+        this.eventBus.on("open-menu-content", this.onOpenMenuContent);
+        this.eventBus.on("open-menu-doctree", this.onOpenMenuDocTree);
+        this.eventBus.on("open-menu-blockref", this.onOpenMenuBlockRef);
+        this.eventBus.on("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
+    }
+
+    private unregisterAddChatContextMenuHandlers() {
+        this.eventBus.off("open-menu-content", this.onOpenMenuContent);
+        this.eventBus.off("open-menu-doctree", this.onOpenMenuDocTree);
+        this.eventBus.off("open-menu-blockref", this.onOpenMenuBlockRef);
+        this.eventBus.off("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
+    }
 
     /**
      * 加载 WebView 历史记录
@@ -414,6 +619,7 @@ export default class PluginSample extends Plugin {
         // 插件被启用时会自动调用这个函数
         // 设置i18n插件实例
         setPluginInstance(this);
+        this.registerAddChatContextMenuHandlers();
 
 
 
@@ -1762,19 +1968,8 @@ export default class PluginSample extends Plugin {
             if (selection && selection.rangeCount > 0) {
                 const range = selection.getRangeAt(0);
                 if (!range.collapsed) {
-                    // 如果有选区，获取选中的HTML内容
-                    const div = document.createElement('div');
-                    div.appendChild(range.cloneContents());
-                    const selectedHtml = div.innerHTML;
-
-                    // 使用Lute将HTML转换为Markdown
-                    if (typeof window !== 'undefined' && (window as any).Lute) {
-                        const lute = (window as any).Lute.New();
-                        selectedMarkdown = lute.HTML2Md(selectedHtml);
-                    } else {
-                        // 如果Lute不可用，使用纯文本作为降级方案
-                        selectedMarkdown = selection.toString().trim();
-                    }
+                    const { markdown } = this.extractRangeContent(range);
+                    selectedMarkdown = markdown;
                 }
             }
 
@@ -1830,6 +2025,7 @@ export default class PluginSample extends Plugin {
 
     async onunload() {
         //当插件被禁用的时候，会自动调用这个函数
+        this.unregisterAddChatContextMenuHandlers();
         console.log("Copilot onunload");
     }
 

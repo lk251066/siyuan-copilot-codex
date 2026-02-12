@@ -450,7 +450,9 @@
             "requestFailed": "AI Request Failed",
             "applyEditFailed": "Failed to apply edit",
             "getBlockFailed": "Failed to get block content",
-            "autoUploadImageFailed": "Failed to auto upload image"
+            "autoUploadImageFailed": "Failed to auto upload image",
+            "addSelectionFailed": "No selectable content found",
+            "addToCodexContextFailed": "Failed to submit context to Codex"
         },
         "success": {
             "copySuccess": "Message copied",
@@ -465,7 +467,8 @@
             "applyEditSuccess": "Edit applied successfully",
             "insertBlockSuccess": "New block inserted successfully",
             "rejectEditSuccess": "Edit rejected",
-            "imageAutoUploaded": "Image automatically added as attachment"
+            "imageAutoUploaded": "Image automatically added as attachment",
+            "submittedToCodex": "Added to Codex references"
         },
         "confirm": {
             "clearChat": {
@@ -556,7 +559,10 @@
     },
     "toolbar": {
         "aiChat": "AI Chat",
-        "aiChatDialog": "AI Assistant"
+        "aiChatDialog": "AI Assistant",
+        "submitToCodex": "Send to Codex",
+        "submitToCodexSuccess": "Submitted to Codex references",
+        "submitToCodexEmpty": "No content available to submit"
     },
     "models": {
         "fetchSuccess": "Successfully fetched {count} models",

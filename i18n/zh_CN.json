@@ -449,7 +449,9 @@
             "requestFailed": "AI 请求失败",
             "applyEditFailed": "应用编辑失败",
             "getBlockFailed": "获取块内容失败",
-            "autoUploadImageFailed": "自动上传图片失败"
+            "autoUploadImageFailed": "自动上传图片失败",
+            "addSelectionFailed": "未获取到可提交的选中文本",
+            "addToCodexContextFailed": "提交到 Codex 引用失败"
         },
         "success": {
             "copySuccess": "消息已复制",
@@ -464,7 +466,8 @@
             "applyEditSuccess": "编辑已应用",
             "insertBlockSuccess": "新块已插入",
             "rejectEditSuccess": "已拒绝编辑",
-            "imageAutoUploaded": "图片已自动添加为附件"
+            "imageAutoUploaded": "图片已自动添加为附件",
+            "submittedToCodex": "已添加到 Codex 引用"
         },
         "confirm": {
             "clearChat": {
@@ -556,7 +559,10 @@
     },
     "toolbar": {
         "aiChat": "AI 问答",
-        "aiChatDialog": "AI 助手"
+        "aiChatDialog": "AI 助手",
+        "submitToCodex": "提交给 Codex",
+        "submitToCodexSuccess": "已提交到 Codex 引用",
+        "submitToCodexEmpty": "未找到可提交的内容"
     },
     "models": {
         "fetchSuccess": "成功获取 {count} 个模型",
