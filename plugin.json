@@ -1,7 +1,7 @@
 {
-  "name": "siyuan-plugin-copilot",
-  "author": "Achuan-2",
-  "url": "https://github.com/Achuan-2/siyuan-plugin-copilot",
+  "name": "siyuan-copilot-codex",
+  "author": "lk251066",
+  "url": "https://github.com/lk251066/siyuan-plugin-copilot",
   "version": "1.6.11",
   "minAppVersion": "3.0.12",
   "backends": [
@@ -10,14 +10,14 @@
   "frontends": [
     "all"
   ],
-  "disabledInPublish": true,
+  "disabledInPublish": false,
   "displayName": {
-    "default": "SiYuan Copilot",
-    "zh_CN": "SiYuan Copilot"
+    "default": "SiYuan Copilot Codex",
+    "zh_CN": "SiYuan Copilot Codex"
   },
   "description": {
-    "default": "SiYuan AI Assistant, supports dragging blocks and tabs to get note context, enabling Q&A and editing based on SiYuan note content",
-    "zh_CN": "思源笔记 AI 助手,支持拖动块、页签获取笔记上下文，实现基于思源笔记内容进行问答和编辑"
+    "default": "Personal-use Copilot Codex edition. Updated when possible.",
+    "zh_CN": "个人自用，Copilot 的 Codex 版，随缘更新。"
   },
   "readme": {
     "default": "README_en_US.md",

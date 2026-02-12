@@ -1,3 +1,9 @@
+## v1.6.24 / 20260212
+- 🏷️ 插件标识调整：`name` 改为 `siyuan-copilot-codex`
+- 👤 作者信息调整：`author` 更新为 `lk251066`
+- 📝 插件描述调整为“个人自用，Copilot 的 Codex 版，随缘更新”
+- 🚀 发布开关调整：`disabledInPublish` 改为 `false`（可上架）
+
 ## v1.6.23 / 20260212
 - 🛠️ 右键菜单兼容性修复：菜单事件同时兼容 `event.detail` 与直接 `detail` 结构，避免“提交给 Codex”在部分环境不显示
 - 🛠️ 菜单注册增强：同时兼容 `plugin.eventBus` 与 `app.eventBus`，并在 `onLayoutReady` 再次兜底注册
