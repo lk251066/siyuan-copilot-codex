@@ -1,3 +1,8 @@
+## v1.6.26 / 20260212
+- 🏷️ 版本号与发布对齐：`plugin.json.version` 更新为 `1.6.26`
+- 📝 README 安装路径修正为 `data/plugins/siyuan-copilot-codex`
+- 🌍 重写英文 README，统一为 Codex-only 说明，移除旧版多模型描述
+
 ## v1.6.25 / 20260212
 - 🛠️ 右键菜单再修复：事件总线注册改为多总线并行（`plugin.eventBus` / `app.eventBus` / `window.siyuan.eventBus`）
 - 🛡️ 新增 DOM 兜底注入：当菜单事件在特定环境不触发时，仍可在右键菜单显示“提交给 Codex”

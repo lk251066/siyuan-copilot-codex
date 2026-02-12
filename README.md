@@ -2,6 +2,7 @@
 
 > 基于原项目 [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) 的 Codex-only 分支。  
 > 目标：在思源笔记中稳定使用 Codex CLI，不再维护多模型并行、小程序、翻译等旧入口。
+> 当前仓库：`https://github.com/lk251066/siyuan-plugin-copilot`（仓库重命名后请同步更新 `plugin.json.url`）。
 
 ## 项目定位
 
@@ -30,7 +31,7 @@
 ### 2. 安装插件
 
 - 方式一：在思源插件市场安装（若已发布该分支版本）。
-- 方式二：手动安装：将构建产物放入 `data/plugins/siyuan-plugin-copilot`。
+- 方式二：手动安装：将构建产物放入 `data/plugins/siyuan-copilot-codex`。
 
 ### 3. 推荐配置
 
