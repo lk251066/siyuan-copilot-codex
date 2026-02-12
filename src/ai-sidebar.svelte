@@ -49,7 +49,7 @@
         type CodexExecEvent,
         getDefaultSiyuanMcpScriptPath,
     } from './codex/codex-runner';
-    import { fetchCodexModels, resolveCodexModelApiKeyFromSettings } from './codex/codex-models';
+    import { fetchCodexModels } from './codex/codex-models';
 
     export let plugin: any;
     export let initialMessage: string = ''; // 初始消息
@@ -173,12 +173,13 @@
     let codexModelLoadError = '';
     let codexNativeContextPercent: number | null = null;
     let codexNativeContextSource = '';
-    let lastCodexModelApiKey = '';
+    let lastCodexModelConfigFingerprint = '';
     $: isCodexMode = settings?.codexEnabled === true;
     $: {
-        const key = resolveCodexModelApiKeyFromSettings(settings);
-        if (settings && key !== lastCodexModelApiKey) {
-            lastCodexModelApiKey = key;
+        const workingDir = String(settings?.codexWorkingDir || '').trim();
+        const fingerprint = workingDir || '__default__';
+        if (settings && fingerprint !== lastCodexModelConfigFingerprint) {
+            lastCodexModelConfigFingerprint = fingerprint;
             void refreshCodexModelOptions(false);
         }
     }
@@ -192,6 +193,13 @@
     const CODEX_CHAT_MODES: ChatMode[] = ['ask', 'agent'];
     const normalizeChatModeForCodex = (mode: ChatMode): ChatMode =>
         mode === 'edit' ? 'agent' : mode;
+    const resolveSavedCodexChatMode = (mode: unknown): ChatMode => {
+        const rawMode = String(mode || '').trim();
+        if (rawMode === 'agent' || rawMode === 'edit') {
+            return 'agent';
+        }
+        return 'ask';
+    };
 
     // 模型临时设置
     let tempModelSettings = {
@@ -381,7 +389,7 @@
     }
 
     async function updateCodexInlineSetting(
-        field: 'codexModelOverride',
+        field: 'codexModelOverride' | 'codexReasoningEffort',
         value: string
     ) {
         const nextValue = value.trim();
@@ -391,31 +399,37 @@
         await plugin.saveSettings(settings);
     }
 
+    async function updateChatModeSetting(mode: string) {
+        const nextMode = resolveSavedCodexChatMode(mode);
+        if (chatMode !== nextMode) {
+            chatMode = nextMode;
+        }
+        if (tempModelSettings.chatMode !== nextMode) {
+            tempModelSettings = { ...tempModelSettings, chatMode: nextMode };
+        }
+        const savedMode = resolveSavedCodexChatMode(settings?.codexChatMode);
+        if (savedMode === nextMode && String(settings?.codexChatMode || '').trim() === nextMode) {
+            return;
+        }
+        settings = { ...settings, codexChatMode: nextMode };
+        await plugin.saveSettings(settings);
+    }
+
     async function refreshCodexModelOptions(showToast = false) {
         if (isLoadingCodexModels) return;
         isLoadingCodexModels = true;
         codexModelLoadError = '';
-        const apiKey = resolveCodexModelApiKeyFromSettings(settings);
         try {
-            if (!apiKey) {
-                codexModelOptions = [];
-                if (showToast) {
-                    pushErrMsg('未检测到 OpenAI API Key，请先在“平台管理 -> OpenAI”中配置');
-                }
-                return;
-            }
             codexModelOptions = await fetchCodexModels({
-                apiKey,
+                workingDir: String(settings?.codexWorkingDir || '').trim(),
             });
             if (showToast) {
-                pushMsg(`Codex 模型列表已更新（${codexModelOptions.length}）`);
+                pushMsg(`Codex 本地模型已更新（${codexModelOptions.length}）`);
             }
         } catch (error) {
             codexModelOptions = [];
             codexModelLoadError = (error as Error).message || String(error);
-            const hasApiKey = Boolean(apiKey);
-            const authLikeError = /401|api key|unauthorized|鉴权|缺少/i.test(codexModelLoadError);
-            if (showToast || hasApiKey || !authLikeError) {
+            if (showToast) {
                 pushErrMsg(`拉取 Codex 模型失败：${codexModelLoadError}`);
             }
         } finally {
@@ -1167,8 +1181,16 @@
         selectedMultiModels = [];
         multiModelResponses = [];
         isWaitingForAnswerSelection = false;
-        if (chatMode === 'edit') {
-            chatMode = 'agent';
+        const normalizedChatMode = resolveSavedCodexChatMode(settings?.codexChatMode);
+        if (chatMode !== normalizedChatMode) {
+            chatMode = normalizedChatMode;
+        }
+        if (tempModelSettings.chatMode !== normalizedChatMode) {
+            tempModelSettings = { ...tempModelSettings, chatMode: normalizedChatMode };
+        }
+        if (String(settings?.codexChatMode || '').trim() !== normalizedChatMode) {
+            settings = { ...settings, codexChatMode: normalizedChatMode };
+            changed = true;
         }
         if (changed) {
             await plugin.saveSettings(settings);
@@ -1252,6 +1274,8 @@
 
     onMount(async () => {
         settings = await plugin.loadSettings();
+        chatMode = resolveSavedCodexChatMode(settings?.codexChatMode);
+        tempModelSettings = { ...tempModelSettings, chatMode };
 
         // 迁移旧设置到新结构
         migrateOldSettings();
@@ -1345,6 +1369,13 @@
                 }
                 if (newSettings.currentModelId) {
                     currentModelId = newSettings.currentModelId;
+                }
+                const nextChatMode = resolveSavedCodexChatMode(newSettings.codexChatMode);
+                if (chatMode !== nextChatMode) {
+                    chatMode = nextChatMode;
+                }
+                if (tempModelSettings.chatMode !== nextChatMode) {
+                    tempModelSettings = { ...tempModelSettings, chatMode: nextChatMode };
                 }
 
                 // 更新多模型选择，过滤掉无效的模型
@@ -1915,7 +1946,7 @@
 
         // 应用聊天模式
         if (newSettings.chatMode) {
-            chatMode = nextChatMode;
+            await updateChatModeSetting(nextChatMode);
         }
 
         // 如果启用了模型选择
@@ -3241,88 +3272,178 @@
         }
 
         // 检查是否配置了重命名模型
-        if (!settings.autoRenameProvider || !settings.autoRenameModelId) {
+        if (!settings.autoRenameModelId) {
             console.log('Auto-rename model not configured');
             return;
         }
 
-        // 获取重命名模型配置
-        const config = getProviderAndModelConfig(
-            settings.autoRenameProvider,
-            settings.autoRenameModelId
-        );
-        if (!config) {
-            console.log('Auto-rename model config not found');
+        const workingDir = String(settings.codexWorkingDir || '').trim();
+        if (!workingDir) {
+            console.log('Auto-rename codex workingDir not configured');
             return;
         }
 
-        const { providerConfig, modelConfig } = config;
-        if (!providerConfig.apiKey) {
-            console.log('Auto-rename model API key not configured');
+        const modelId = String(settings.autoRenameModelId || '').trim();
+        if (!modelId) {
+            console.log('Auto-rename model id empty after trim');
+            return;
+        }
+        const renameReasoningRaw = String(settings.autoRenameReasoningEffort || '')
+            .trim()
+            .toLowerCase();
+        const renameReasoningEffort =
+            renameReasoningRaw === 'medium' ||
+            renameReasoningRaw === 'high' ||
+            renameReasoningRaw === 'xhigh'
+                ? renameReasoningRaw
+                : 'low';
+        const targetSessionId = currentSessionId;
+        if (!targetSessionId) {
+            console.log('Auto-rename skipped: no active session');
             return;
         }
 
-        console.log('Starting auto-rename for session:', currentSessionId);
+        console.log('Starting auto-rename for session:', targetSessionId);
 
         try {
             // 使用自定义提示词模板，替换 {message} 占位符
             const promptTemplate =
                 settings.autoRenamePrompt ||
                 '请根据以下内容生成一个简洁的会话标题（不超过20个字，不要使用引号）：\n\n{message}';
-            const prompt = promptTemplate.replace('{message}', content);
+            const promptBody = promptTemplate.replace('{message}', content);
+            const prompt = [
+                '# Task',
+                '请根据用户消息生成一个简洁会话标题。',
+                '',
+                '# Output Rules',
+                '- 仅输出标题本身',
+                '- 不要解释',
+                '- 不要使用引号',
+                '- 不要输出 Markdown 或列表符号',
+                '- 标题长度控制在 20 个汉字以内',
+                '',
+                '# Input',
+                promptBody,
+            ].join('\n');
 
+            const stderrLines: string[] = [];
             let generatedTitle = '';
+            const appendTitle = (chunk: string) => {
+                const text = String(chunk || '');
+                if (!text.trim()) return;
+                generatedTitle += text;
+            };
 
-            // 调用AI生成标题
-            await chat(
-                settings.autoRenameProvider,
-                {
-                    apiKey: providerConfig.apiKey,
-                    model: modelConfig.id,
-                    messages: [{ role: 'user', content: prompt }],
-                    temperature: modelConfig.temperature,
-                    maxTokens: 50,
-                    stream: true,
-                    onChunk: async (chunk: string) => {
-                        generatedTitle += chunk;
-                    },
-                    onComplete: async (text: string) => {
-                        // 清理生成的标题（移除引号和多余空格）
-                        const cleanTitle = text
-                            .trim()
-                            .replace(/^["']|["']$/g, '')
-                            .substring(0, 50);
-                        if (cleanTitle && currentSessionId) {
-                            // 直接更新当前会话的标题（不重新加载，避免覆盖刚创建的会话）
-                            const session = sessions.find(s => s.id === currentSessionId);
-                            if (session) {
-                                session.title = cleanTitle;
-                                sessions = [...sessions];
-                                await saveSessions();
-                                console.log('Auto-renamed session to:', cleanTitle);
-                            } else {
-                                console.error(
-                                    'Session not found for auto-rename:',
-                                    currentSessionId
-                                );
-                            }
-                        } else {
-                            console.log(
-                                'Auto-rename failed: cleanTitle=',
-                                cleanTitle,
-                                'currentSessionId=',
-                                currentSessionId
-                            );
+            const fs = nodeRequireForSidebar<any>('fs');
+            const mcpResolved = resolveSiyuanMcpScriptPath();
+            if (!fs.existsSync(mcpResolved.scriptPath)) {
+                console.error('Auto-rename skipped: MCP script missing', mcpResolved.scriptPath);
+                return;
+            }
+
+            const handle = runCodexExec({
+                cliPath: settings.codexCliPath,
+                workingDir,
+                prompt,
+                mcpScriptPath: mcpResolved.scriptPath,
+                skipGitRepoCheck: settings.codexSkipGitRepoCheck !== false,
+                modelOverride: modelId,
+                reasoningEffort: renameReasoningEffort as 'low' | 'medium' | 'high' | 'xhigh',
+                runMode: 'read_only',
+                siyuanApiUrl: settings.siyuanApiUrl,
+                siyuanApiToken: settings.siyuanApiToken,
+                onEvent: (event: CodexExecEvent) => {
+                    const type = String(event?.type || '');
+                    const typeLower = type.toLowerCase();
+                    const item = (event as any)?.item;
+                    if (
+                        item &&
+                        (type === 'item.delta' || type === 'item.completed' || type === 'item.started')
+                    ) {
+                        const itemType = String(item?.type || '').toLowerCase();
+                        const itemText = typeof item?.text === 'string' ? item.text : '';
+
+                        if (itemType.includes('reasoning') || itemType.includes('thinking')) return;
+                        if (
+                            itemType.includes('tool') ||
+                            itemType.includes('mcp') ||
+                            itemType.includes('function') ||
+                            itemType === 'command_execution'
+                        ) {
+                            return;
                         }
-                    },
-                    onError: (error: Error) => {
-                        console.error('Auto-rename session failed:', error);
-                        // 静默失败，不影响用户体验
-                    },
+                        if (itemType === 'assistant_message' || itemType === 'agent_message') {
+                            appendTitle(itemText);
+                            return;
+                        }
+                        if (itemText && type !== 'item.started') {
+                            appendTitle(itemText);
+                            return;
+                        }
+                    }
+
+                    const delta =
+                        typeof (event as any)?.delta === 'string'
+                            ? (event as any).delta
+                            : typeof (event as any)?.text === 'string'
+                              ? (event as any).text
+                              : '';
+                    if (!delta) return;
+                    if (
+                        typeLower.includes('reasoning') ||
+                        typeLower.includes('thinking') ||
+                        typeLower.includes('tool') ||
+                        typeLower.includes('mcp')
+                    ) {
+                        return;
+                    }
+                    appendTitle(delta);
                 },
-                providerConfig.customApiUrl,
-                providerConfig.advancedConfig
+                onStdErr: (line: string) => {
+                    if (line.includes('state db missing rollout path')) return;
+                    stderrLines.push(line);
+                },
+            });
+
+            const result = await handle.completed;
+
+            if (result.exitCode !== 0 && !generatedTitle.trim()) {
+                console.error(
+                    'Auto-rename codex failed:',
+                    stderrLines.slice(-5).join(' | ') || `exit=${result.exitCode}`
+                );
+                return;
+            }
+
+            const titleCandidate = String(generatedTitle || '')
+                .replace(/\r\n/g, '\n')
+                .split('\n')
+                .map(line => line.trim())
+                .find(Boolean) || '';
+
+            const cleanTitle = normalizeSessionTitle(
+                titleCandidate
+                    .replace(/^[-*#>\d\.\)\s]+/, '')
+                    .replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '')
+                    .trim(),
+                50
             );
+
+            if (!cleanTitle) {
+                console.log('Auto-rename skipped: empty title from codex');
+                return;
+            }
+
+            const session = sessions.find(s => s.id === targetSessionId);
+            if (!session) {
+                console.error('Session not found for auto-rename:', targetSessionId);
+                return;
+            }
+
+            session.title = cleanTitle;
+            sessions = [...sessions];
+            await saveSessions();
+            console.log('Auto-renamed session to:', cleanTitle);
         } catch (error) {
             console.error('Auto-rename session error:', error);
             // 静默失败
@@ -3530,6 +3651,7 @@
             threadId: existingThreadId,
             skipGitRepoCheck: settings.codexSkipGitRepoCheck !== false,
             modelOverride: settings.codexModelOverride,
+            reasoningEffort: settings.codexReasoningEffort,
             runMode: settings.codexRunMode,
             siyuanApiUrl: settings.siyuanApiUrl,
             siyuanApiToken: settings.siyuanApiToken,
@@ -10963,6 +11085,7 @@
                 id="chat-mode-select"
                 class="b3-select ai-sidebar__mode-select"
                 bind:value={chatMode}
+                on:change={e => void updateChatModeSetting(e.target.value)}
             >
                 {#each CODEX_CHAT_MODES as modeOption}
                     <option value={modeOption}>
@@ -10980,7 +11103,7 @@
                             updateCodexInlineSetting('codexModelOverride', e.target.value)}
                     >
                         <option value="">
-                            {t('aiSidebar.codex.modelOverridePlaceholder') || '留空使用默认'}
+                            {t('aiSidebar.codex.modelOverridePlaceholder') || '默认'}
                         </option>
                         {#if settings?.codexModelOverride &&
                             !codexModelOptions.includes(settings.codexModelOverride)}
@@ -10993,13 +11116,38 @@
                         {/each}
                     </select>
                 </label>
+                <label class="ai-sidebar__codex-field">
+                    <span>{t('settings.codex.reasoningEffort.title') || '思考'}</span>
+                    <select
+                        class="b3-select ai-sidebar__codex-input"
+                        value={settings?.codexReasoningEffort || ''}
+                        on:change={e =>
+                            updateCodexInlineSetting('codexReasoningEffort', e.target.value)}
+                    >
+                        <option value="">
+                            {t('settings.codex.reasoningEffort.options.default') || '默认'}
+                        </option>
+                        <option value="low">
+                            {t('settings.codex.reasoningEffort.options.low') || 'low'}
+                        </option>
+                        <option value="medium">
+                            {t('settings.codex.reasoningEffort.options.medium') || 'medium'}
+                        </option>
+                        <option value="high">
+                            {t('settings.codex.reasoningEffort.options.high') || 'high'}
+                        </option>
+                        <option value="xhigh">
+                            {t('settings.codex.reasoningEffort.options.xhigh') || 'xhigh'}
+                        </option>
+                    </select>
+                </label>
                 <button
                     class="b3-button b3-button--text ai-sidebar__codex-toolcheck-btn"
                     on:click={() => refreshCodexModelOptions(true)}
                     disabled={isLoadingCodexModels}
                     title="拉取模型"
                 >
-                    {isLoadingCodexModels ? '拉取中...' : '拉取模型'}
+                    {isLoadingCodexModels ? '拉取中...' : '拉取'}
                 </button>
                 <button
                     class="b3-button b3-button--text ai-sidebar__codex-toolcheck-btn"
@@ -11010,7 +11158,7 @@
                     {#if isCheckingCodexTools}
                         {t('aiSidebar.codex.toolCheckRunning') || '自检中...'}
                     {:else}
-                        {t('aiSidebar.codex.toolCheck') || '工具自检'}
+                        {t('aiSidebar.codex.toolCheck') || '自检'}
                     {/if}
                 </button>
                 <button
@@ -11039,7 +11187,7 @@
                 {/if}
             </div>
             {#if codexModelLoadError}
-                <span class="ai-sidebar__codex-error">模型接口错误：{codexModelLoadError}</span>
+                <span class="ai-sidebar__codex-error">本地模型读取错误：{codexModelLoadError}</span>
             {/if}
         </div>
         <div class="ai-sidebar__input-row">
@@ -12512,7 +12660,7 @@
     .ai-sidebar__input-container {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 4px;
         padding: 8px 12px;
         border-top: 1px solid var(--b3-border-color);
         background: var(--b3-theme-background);
@@ -12524,8 +12672,8 @@
     .ai-sidebar__mode-selector {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 4px 0;
+        gap: 6px;
+        padding: 2px 0;
         flex-wrap: nowrap;
         overflow-x: auto;
         overflow-y: hidden;
@@ -12533,7 +12681,7 @@
     }
 
     .ai-sidebar__mode-label {
-        font-size: 13px;
+        font-size: 12px;
         color: var(--b3-theme-on-surface);
         font-weight: 500;
         flex-shrink: 0;
@@ -12542,8 +12690,10 @@
 
     .ai-sidebar__mode-select {
         flex: 0 0 auto;
-        min-width: 120px;
-        font-size: 13px;
+        min-width: 96px;
+        height: 24px;
+        font-size: 12px;
+        padding: 1px 6px;
     }
 
     .ai-sidebar__auto-approve-label {
@@ -12564,7 +12714,7 @@
         margin-left: auto;
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
         flex-wrap: nowrap;
         justify-content: flex-end;
         flex-shrink: 0;
@@ -12578,9 +12728,9 @@
     }
 
     .ai-sidebar__codex-context-usage {
-        font-size: 12px;
+        font-size: 11px;
         color: var(--b3-theme-on-surface-light);
-        padding: 0 6px;
+        padding: 0 4px;
         border-radius: 6px;
         border: 1px solid var(--b3-border-color);
         background: var(--b3-theme-surface);
@@ -12590,8 +12740,8 @@
     .ai-sidebar__codex-field {
         display: flex;
         align-items: center;
-        gap: 4px;
-        font-size: 12px;
+        gap: 3px;
+        font-size: 11px;
         color: var(--b3-theme-on-surface);
         min-width: 0;
 
@@ -12601,16 +12751,16 @@
     }
 
     .ai-sidebar__codex-input {
-        width: 138px;
-        height: 26px;
-        font-size: 12px;
-        padding: 2px 8px;
+        width: 112px;
+        height: 24px;
+        font-size: 11px;
+        padding: 1px 6px;
     }
 
     .ai-sidebar__codex-toolcheck-btn {
-        height: 28px;
-        padding: 0 8px;
-        font-size: 12px;
+        height: 24px;
+        padding: 0 6px;
+        font-size: 11px;
         white-space: nowrap;
     }
 
@@ -12618,10 +12768,10 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 28px;
-        height: 28px;
+        width: 24px;
+        height: 24px;
         padding: 0;
-        border-radius: 6px;
+        border-radius: 5px;
     }
 
     .ai-sidebar__tool-selector-btn {
@@ -14706,6 +14856,7 @@
         }
 
         .ai-sidebar__mode-selector {
+            gap: 4px;
             flex-wrap: wrap;
             overflow: visible;
         }
@@ -14714,6 +14865,7 @@
             width: 100%;
             margin-left: 0;
             justify-content: flex-start;
+            gap: 4px;
             flex-wrap: wrap;
         }
 

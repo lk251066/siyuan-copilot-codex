@@ -1,4 +1,5 @@
 export type CodexRunMode = 'read_only' | 'workspace_write' | 'fully_open';
+export type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 
 export interface CodexExecEvent {
     type: string;
@@ -13,6 +14,7 @@ export interface RunCodexExecOptions {
     threadId?: string;
     skipGitRepoCheck?: boolean;
     modelOverride?: string;
+    reasoningEffort?: CodexReasoningEffort | '';
     runMode?: CodexRunMode;
     siyuanApiUrl?: string;
     siyuanApiToken?: string;
@@ -87,12 +89,28 @@ function buildRunModeArgs(runMode: CodexRunMode | undefined): string[] {
     return ['-s', 'read-only'];
 }
 
+function normalizeReasoningEffort(value: unknown): CodexReasoningEffort | '' {
+    const v = String(value || '').trim().toLowerCase();
+    if (v === 'low' || v === 'medium' || v === 'high' || v === 'xhigh') {
+        return v as CodexReasoningEffort;
+    }
+    return '';
+}
+
+function buildReasoningEffortOverrides(effortRaw: unknown): string[] {
+    const effort = normalizeReasoningEffort(effortRaw);
+    if (!effort) return [];
+    const effortLiteral = escapeTomlLiteralString(effort);
+    return [`model_reasoning_effort='${effortLiteral}'`];
+}
+
 export function runCodexExec(options: RunCodexExecOptions): RunCodexExecHandle {
     const childProcess = nodeRequire<typeof import('child_process')>('child_process');
 
     const cliPath = (options.cliPath || '').trim() || 'codex';
     const skipGitRepoCheck = options.skipGitRepoCheck !== false;
     const runModeArgs = buildRunModeArgs(options.runMode);
+    const reasoningOverrides = buildReasoningEffortOverrides(options.reasoningEffort);
 
     const siyuanMcpScriptPath =
         (options.mcpScriptPath || '').trim() || getDefaultSiyuanMcpScriptPath();
@@ -108,7 +126,7 @@ export function runCodexExec(options: RunCodexExecOptions): RunCodexExecHandle {
 
     args.push(...runModeArgs);
 
-    for (const o of overrides) {
+    for (const o of [...overrides, ...reasoningOverrides]) {
         args.push('-c', o);
     }
 

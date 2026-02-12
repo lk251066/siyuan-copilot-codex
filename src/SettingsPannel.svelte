@@ -7,7 +7,7 @@
     import { confirm } from 'siyuan';
     import ProviderConfigPanel from './components/ProviderConfigPanel.svelte';
     import type { CustomProviderConfig } from './defaultSettings';
-    import { fetchCodexModels, resolveCodexModelApiKeyFromSettings } from './codex/codex-models';
+    import { fetchCodexModels, resolveCodexLocalConfigPaths } from './codex/codex-models';
     export let plugin;
 
     // 使用动态默认设置
@@ -18,9 +18,10 @@
 
     let codexModelOptions: string[] = [];
     let isLoadingCodexModels = false;
-    $: openAiModelApiKeyReady = Boolean(
-        String(settings?.aiProviders?.openai?.apiKey || '').trim()
-    );
+    let codexLocalConfigPaths: string[] = [];
+    $: codexLocalConfigPaths = resolveCodexLocalConfigPaths({
+        workingDir: String(settings?.codexWorkingDir || '').trim(),
+    });
 
     function setSetting(key: string, value: any) {
         settings = { ...settings, [key]: value };
@@ -30,27 +31,17 @@
     async function refreshCodexModels(showToast = false) {
         if (isLoadingCodexModels) return;
         isLoadingCodexModels = true;
-        const apiKey = resolveCodexModelApiKeyFromSettings(settings);
         try {
-            if (!apiKey) {
-                codexModelOptions = [];
-                if (showToast) {
-                    pushErrMsg('未检测到 OpenAI API Key，请先在“平台管理 -> OpenAI”中配置');
-                }
-                return;
-            }
             codexModelOptions = await fetchCodexModels({
-                apiKey,
+                workingDir: String(settings?.codexWorkingDir || '').trim(),
             });
             if (showToast) {
-                pushMsg(`Codex 模型列表已更新（${codexModelOptions.length}）`);
+                pushMsg(`Codex 本地模型已更新（${codexModelOptions.length}）`);
             }
         } catch (error) {
             codexModelOptions = [];
             const detail = (error as Error).message || String(error);
-            const hasApiKey = Boolean(apiKey);
-            const authLikeError = /401|api key|unauthorized|鉴权|缺少/i.test(detail);
-            if (showToast || hasApiKey || !authLikeError) {
+            if (showToast) {
                 pushErrMsg(`拉取 Codex 模型失败：${detail}`);
             }
         } finally {
@@ -93,6 +84,9 @@
         items: ISettingItem[];
         //  Type："checkbox" | "select" | "textinput" | "textarea" | "number" | "slider" | "button" | "hint" | "custom";
     }
+
+    // Codex-only：平台管理入口停用（底层配置结构保留，便于回滚）
+    const ENABLE_PLATFORM_MANAGEMENT = false;
 
     const builtInProviderNames: Record<string, string> = {
         gemini: t('platform.builtIn.gemini'),
@@ -313,10 +307,14 @@
                 },
             ],
         },
-        {
-            name: t('settings.settingsGroup.platformManagement'),
-            items: [],
-        },
+        ...(ENABLE_PLATFORM_MANAGEMENT
+            ? [
+                  {
+                      name: t('settings.settingsGroup.platformManagement'),
+                      items: [],
+                  },
+              ]
+            : []),
         {
             name: t('settings.settingsGroup.displayAndOperation'),
             items: [
@@ -579,7 +577,8 @@
                 display={true}
                 on:changed={onChanged}
             />
-        {:else if focusGroup === t('settings.settingsGroup.platformManagement')}
+        {:else if ENABLE_PLATFORM_MANAGEMENT &&
+            focusGroup === t('settings.settingsGroup.platformManagement')}
             <!-- 新的侧边栏布局：左侧为平台列表/操作，右侧为平台配置主区域 -->
             <div class="platform-management-layout">
                 <aside class="platform-sidebar">
@@ -722,7 +721,7 @@
                                 </div>
                                 <div class="config__item-description">
                                     {t('settings.autoRenameSession.modelDescription') ||
-                                        '选择用于生成会话标题的AI模型'}
+                                        '选择用于生成会话标题的 Codex 模型（通过 Codex CLI 调用）'}
                                 </div>
                             </div>
                             <div
@@ -731,48 +730,67 @@
                             >
                                 <select
                                     class="b3-select"
-                                    bind:value={settings.autoRenameProvider}
-                                    on:change={() => {
-                                        settings.autoRenameModelId = '';
-                                        saveSettings();
-                                    }}
+                                    bind:value={settings.autoRenameModelId}
+                                    on:change={saveSettings}
                                 >
                                     <option value="">
-                                        {t('settings.autoRenameSession.selectProvider') ||
-                                            '-- 选择平台 --'}
+                                        {t('settings.autoRenameSession.selectModel') ||
+                                            '-- 选择 Codex 模型 --'}
                                     </option>
-                                    {#each allProviderOptions as provider}
-                                        {#if settings.aiProviders[provider.id]?.models?.length > 0 || (provider.type === 'custom' && settings.aiProviders.customProviders.find(p => p.id === provider.id)?.models?.length > 0)}
-                                            <option value={provider.id}>{provider.name}</option>
-                                        {/if}
+                                    {#if settings.autoRenameModelId &&
+                                        !codexModelOptions.includes(settings.autoRenameModelId)}
+                                        <option value={settings.autoRenameModelId}>
+                                            {settings.autoRenameModelId}
+                                        </option>
+                                    {/if}
+                                    {#each codexModelOptions as model}
+                                        <option value={model}>{model}</option>
                                     {/each}
                                 </select>
-
-                                {#if settings.autoRenameProvider}
-                                    <select
-                                        class="b3-select"
-                                        bind:value={settings.autoRenameModelId}
-                                        on:change={saveSettings}
-                                    >
-                                        <option value="">
-                                            {t('settings.autoRenameSession.selectModel') ||
-                                                '-- 选择模型 --'}
-                                        </option>
-                                        {#if builtInProviderNames[settings.autoRenameProvider]}
-                                            {#each settings.aiProviders[settings.autoRenameProvider]?.models || [] as model}
-                                                <option value={model.id}>
-                                                    {model.name || model.id}
-                                                </option>
-                                            {/each}
-                                        {:else}
-                                            {#each settings.aiProviders.customProviders.find(p => p.id === settings.autoRenameProvider)?.models || [] as model}
-                                                <option value={model.id}>
-                                                    {model.name || model.id}
-                                                </option>
-                                            {/each}
-                                        {/if}
-                                    </select>
+                                <button
+                                    class="b3-button b3-button--outline"
+                                    on:click={() => refreshCodexModels(true)}
+                                    disabled={isLoadingCodexModels}
+                                    type="button"
+                                >
+                                    {isLoadingCodexModels ? '拉取中...' : '拉取模型'}
+                                </button>
+                                {#if codexModelOptions.length === 0}
+                                    <span class="config__item-description">
+                                        暂未读取到本地模型，请点击“拉取模型”
+                                    </span>
                                 {/if}
+                            </div>
+                        </div>
+
+                        <div class="config__item" style="margin-top: 12px;">
+                            <div class="config__item-label">
+                                <div class="config__item-title">
+                                    {t('settings.codex.reasoningEffort.title') || '思考长度'}
+                                </div>
+                                <div class="config__item-description">
+                                    {'会话自动命名使用的思考长度，默认 low'}
+                                </div>
+                            </div>
+                            <div class="config__item-control">
+                                <select
+                                    class="b3-select"
+                                    bind:value={settings.autoRenameReasoningEffort}
+                                    on:change={saveSettings}
+                                >
+                                    <option value="low">
+                                        {t('settings.codex.reasoningEffort.options.low') || 'low'}
+                                    </option>
+                                    <option value="medium">
+                                        {t('settings.codex.reasoningEffort.options.medium') || 'medium'}
+                                    </option>
+                                    <option value="high">
+                                        {t('settings.codex.reasoningEffort.options.high') || 'high'}
+                                    </option>
+                                    <option value="xhigh">
+                                        {t('settings.codex.reasoningEffort.options.xhigh') || 'xhigh'}
+                                    </option>
+                                </select>
                             </div>
                         </div>
 
@@ -932,18 +950,20 @@
                 <div class="codex-settings__row">
                     <div class="codex-settings__label">
                         <div class="codex-settings__title">
-                            模型列表鉴权来源
+                            模型列表来源
                         </div>
                         <div class="codex-settings__desc">
-                            自动使用“平台管理 -> OpenAI”的 API Key 拉取 `https://www.right.codes/codex/v1/models`
+                            自动读取本地 Codex 配置（`config.toml`），不依赖远端模型接口
                         </div>
                     </div>
                     <span
                         class="codex-settings__status"
-                        class:codex-settings__status--ready={openAiModelApiKeyReady}
-                        class:codex-settings__status--missing={!openAiModelApiKeyReady}
+                        class:codex-settings__status--ready={codexLocalConfigPaths.length > 0}
+                        class:codex-settings__status--missing={codexLocalConfigPaths.length === 0}
                     >
-                        {openAiModelApiKeyReady ? '已配置 OpenAI Key' : '未配置 OpenAI Key'}
+                        {codexLocalConfigPaths.length > 0
+                            ? `已检测到 ${codexLocalConfigPaths.length} 个本地配置`
+                            : '未检测到本地配置'}
                     </span>
                 </div>
 
@@ -984,6 +1004,39 @@
                             {isLoadingCodexModels ? '拉取中...' : '拉取模型'}
                         </button>
                     </div>
+                </div>
+
+                <div class="codex-settings__row">
+                    <label class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.reasoningEffort.title') || '思考长度'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.reasoningEffort.description') ||
+                                '传递给 Codex 的 reasoning effort（留空使用本地配置默认值）'}
+                        </div>
+                    </label>
+                    <select
+                        class="b3-select"
+                        value={settings.codexReasoningEffort || ''}
+                        on:change={e => setSetting('codexReasoningEffort', e.target.value)}
+                    >
+                        <option value="">
+                            {t('settings.codex.reasoningEffort.options.default') || '使用配置默认'}
+                        </option>
+                        <option value="low">
+                            {t('settings.codex.reasoningEffort.options.low') || 'low'}
+                        </option>
+                        <option value="medium">
+                            {t('settings.codex.reasoningEffort.options.medium') || 'medium'}
+                        </option>
+                        <option value="high">
+                            {t('settings.codex.reasoningEffort.options.high') || 'high'}
+                        </option>
+                        <option value="xhigh">
+                            {t('settings.codex.reasoningEffort.options.xhigh') || 'xhigh'}
+                        </option>
+                    </select>
                 </div>
 
                 <div class="codex-settings__row">

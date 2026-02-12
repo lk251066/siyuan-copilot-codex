@@ -2568,6 +2568,7 @@ export default class PluginSample extends Plugin {
         let mergedSettings = { ...defaultSettings, ...settings };
         const codexAutoResult = this.applyCodexAutoSettings(settings, mergedSettings);
         const removedKeysOnUpgrade = [
+            'autoRenameProvider',
             'codexProfile',
             'codexInjectSkillsOnThreadStart',
             'codexSelectedSkills',

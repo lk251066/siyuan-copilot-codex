@@ -96,8 +96,8 @@ export const getDefaultSettings = () => ({
 
     // 会话自动重命名设置
     autoRenameSession: false as boolean,  // 是否启用会话自动重命名
-    autoRenameProvider: '' as string,  // 自动重命名使用的平台
     autoRenameModelId: '' as string,  // 自动重命名使用的模型ID
+    autoRenameReasoningEffort: 'low' as 'low' | 'medium' | 'high' | 'xhigh',
     autoRenamePrompt: '请根据以下用户消息生成一个简洁的会话标题（不超过20个字，不要使用引号，标题前添加一个合适的emoji）：\n\n{message}' as string,  // 自动重命名提示词模板
 
     // 小程序设置
@@ -122,7 +122,9 @@ export const getDefaultSettings = () => ({
     codexPromptLastSyncedHash: '' as string,
     codexPromptLastSyncedAt: '' as string,
     codexSkipGitRepoCheck: true as boolean,
+    codexChatMode: 'ask' as 'ask' | 'agent',
     codexModelOverride: '' as string,
+    codexReasoningEffort: '' as '' | 'low' | 'medium' | 'high' | 'xhigh',
     codexRunMode: 'read_only' as 'read_only' | 'workspace_write' | 'fully_open',
     // Siyuan API（用于 codex 注入的 siyuan-mcp 工具）
     siyuanApiUrl: 'http://127.0.0.1:6806' as string,
