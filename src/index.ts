@@ -2506,10 +2506,26 @@ export default class PluginSample extends Plugin {
                 settings.dataTransfer = {};
             }
 
+            // 迁移：移除 Achuan 内置平台后，旧配置回落到 OpenAI
+            if (settings.aiProviders && Object.prototype.hasOwnProperty.call(settings.aiProviders, 'Achuan')) {
+                delete settings.aiProviders.Achuan;
+                await this.saveData(SETTINGS_FILE, settings);
+            }
+            if (settings.currentProvider === 'Achuan') {
+                settings.currentProvider = 'openai';
+                settings.currentModelId = '';
+                await this.saveData(SETTINGS_FILE, settings);
+                pushMsg('检测到旧平台 Achuan，已自动切换到 OpenAI');
+            }
+            if (settings.selectedProviderId === 'Achuan') {
+                settings.selectedProviderId = 'openai';
+                await this.saveData(SETTINGS_FILE, settings);
+            }
+
             if (settings.dataTransfer.autoSetModelCapabilities) {
             } else if (settings.aiProviders) {
                 // 内置平台列表
-                const builtInProviders = ['Achuan', 'gemini', 'deepseek', 'openai', 'moonshot', 'volcano'];
+                const builtInProviders = ['gemini', 'deepseek', 'openai', 'moonshot', 'volcano'];
 
                 // 处理内置平台
                 for (const providerId of builtInProviders) {

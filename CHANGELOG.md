@@ -1,3 +1,10 @@
+## v1.6.27 / 20260212
+- 🧹 移除插件清单中的 `funding` 赞赏码配置
+- 🧹 平台管理中移除 `Achuan` 内置平台与相关帮助/引流文案
+- 🧹 默认配置不再注入小程序预置链接，`webApps` 默认改为空数组
+- 🛠️ 升级迁移补充：旧配置若使用 `Achuan`，自动回落到 `OpenAI`
+- 🔗 `plugin.json.url` 更新为新仓库：`https://github.com/lk251066/siyuan-copilot-codex`
+
 ## v1.6.26 / 20260212
 - 🏷️ 版本号与发布对齐：`plugin.json.version` 更新为 `1.6.26`
 - 📝 README 安装路径修正为 `data/plugins/siyuan-copilot-codex`

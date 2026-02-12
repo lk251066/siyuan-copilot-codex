@@ -1,6 +1,6 @@
 # SiYuan Copilot (Codex Edition)
 
-> Codex-only fork of [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot).
+> Standalone Codex-focused plugin branch.
 > Repository: `https://github.com/lk251066/siyuan-plugin-copilot`.
 
 ## Positioning

@@ -27,7 +27,6 @@
     }
 
     const builtInProviderNames: Record<string, string> = {
-        Achuan: t('platform.builtIn.Achuan'),
         gemini: t('platform.builtIn.gemini'),
         deepseek: t('platform.builtIn.deepseek'),
         openai: t('platform.builtIn.openai'),

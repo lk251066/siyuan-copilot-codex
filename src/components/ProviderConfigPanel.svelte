@@ -14,7 +14,7 @@
     export let isCustomProvider: boolean = false; // 是否为自定义平台
 
     // 内置平台列表（不需要自定义参数）
-    const builtInProviders = ['Achuan', 'gemini', 'deepseek', 'openai', 'moonshot', 'volcano'];
+    const builtInProviders = ['gemini', 'deepseek', 'openai', 'moonshot', 'volcano'];
     $: isBuiltInProvider = builtInProviders.includes(providerId);
 
     const dispatch = createEventDispatcher();
@@ -380,25 +380,6 @@
                         </a>
                     {/if}
                 </div>
-                {#if providerId === 'Achuan'}
-                    <div class="provider-description">
-                        {t('platform.builtIn.AchuanDescription')}
-                    </div>
-                    <div style="margin-top:6px;">
-                        <a
-                            href="https://achuan-2.apifox.cn/doc-8155570"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="platform-link"
-                            title="Achuan API 使用帮助"
-                        >
-                            <svg class="b3-button__icon">
-                                <use xlink:href="#iconHelp"></use>
-                            </svg>
-                            <span>帮助指南</span>
-                        </a>
-                    </div>
-                {/if}
             </div>
             {#if isCustomProvider}
                 <button
@@ -892,18 +873,6 @@
         display: flex;
         align-items: center;
         gap: 12px;
-    }
-
-    .provider-description {
-        font-size: 12px;
-        color: var(--b3-theme-on-surface);
-        line-height: 1.5;
-        background: var(--b3-theme-primary-lightest);
-        padding: 6px 12px;
-        border-radius: 4px;
-        border-left: 3px solid var(--b3-theme-primary);
-        opacity: 0.9;
-        margin-top: 2px;
     }
 
     .platform-link {

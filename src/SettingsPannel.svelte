@@ -95,7 +95,6 @@
     }
 
     const builtInProviderNames: Record<string, string> = {
-        Achuan: t('platform.builtIn.Achuan'),
         gemini: t('platform.builtIn.gemini'),
         openai: t('platform.builtIn.openai'),
         deepseek: t('platform.builtIn.deepseek'),
@@ -105,7 +104,6 @@
 
     // 内置平台的默认 API 地址
     const builtInProviderDefaultUrls: Record<string, string> = {
-        Achuan: 'https://gpt.achuan-2.top/',
         gemini: 'https://generativelanguage.googleapis.com',
         deepseek: 'https://api.deepseek.com',
         moonshot: 'https://api.moonshot.cn',
@@ -115,7 +113,6 @@
 
     // 内置平台的官网链接
     const builtInProviderWebsites: Record<string, string> = {
-        Achuan: 'https://gpt.achuan-2.top/register?aff=ZndO',
         gemini: 'https://aistudio.google.com/apikey',
         deepseek: 'https://platform.deepseek.com/',
         moonshot: 'https://platform.moonshot.cn/',
@@ -461,14 +458,12 @@
                 openai: { apiKey: '', customApiUrl: '', models: [] },
                 moonshot: { apiKey: '', customApiUrl: '', models: [] },
                 volcano: { apiKey: '', customApiUrl: '', models: [] },
-                Achuan: { apiKey: '', customApiUrl: '', models: [] },
                 customProviders: [],
             };
         }
 
         // 确保每个内置平台都存在（支持旧配置升级）
         const builtInPlatformIds = [
-            'Achuan',
             'gemini',
             'deepseek',
             'openai',

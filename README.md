@@ -1,6 +1,6 @@
 # SiYuan Copilot（Codex 版）
 
-> 基于原项目 [Achuan-2/siyuan-plugin-copilot](https://github.com/Achuan-2/siyuan-plugin-copilot) 的 Codex-only 分支。  
+> 面向 Codex CLI 的独立插件分支。  
 > 目标：在思源笔记中稳定使用 Codex CLI，不再维护多模型并行、小程序、翻译等旧入口。
 > 当前仓库：`https://github.com/lk251066/siyuan-plugin-copilot`（仓库重命名后请同步更新 `plugin.json.url`）。
 
