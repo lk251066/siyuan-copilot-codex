@@ -80,8 +80,18 @@ export default class PluginSample extends Plugin {
     private webApps: Map<string, any> = new Map(); // 存储待打开的小程序数据
     private webViewHistory: WebViewHistory[] = []; // WebView 历史记录
     private domainIconMap: Map<string, string> = new Map(); // 缓存域名与图标文件名的映射
-    private readonly onOpenMenuContent = (event: CustomEvent<any>) => {
-        const detail = event.detail;
+    private menuEventBus: any = null;
+
+    private getMenuEventDetail(eventOrDetail: any) {
+        if (!eventOrDetail) return null;
+        if (typeof eventOrDetail === "object" && "detail" in eventOrDetail && eventOrDetail.detail) {
+            return eventOrDetail.detail;
+        }
+        return eventOrDetail;
+    }
+
+    private readonly onOpenMenuContent = (eventOrDetail: any) => {
+        const detail = this.getMenuEventDetail(eventOrDetail);
         const menu = detail?.menu;
         const range: Range | undefined = detail?.range;
         const hasSelection = !!range && !range.collapsed;
@@ -90,7 +100,7 @@ export default class PluginSample extends Plugin {
             this.extractBlockIdFromElement(detail?.element) ||
             this.extractBlockIdFromElement(detail?.protyle?.element) ||
             this.pickValidBlockId([detail?.protyle?.block?.id, detail?.protyle?.options?.blockId]);
-        if (!menu || (!hasSelection && !blockId)) return;
+        if (!menu) return;
         this.addSubmitToCodexMenu(menu, () => {
             if (savedRange) {
                 const { markdown, plainText } = this.extractRangeContent(savedRange);
@@ -115,20 +125,25 @@ export default class PluginSample extends Plugin {
                     source: "open-menu-content",
                 });
                 showMessage(t("toolbar.submitToCodexSuccess"));
+                return;
             }
+            showMessage(t("toolbar.submitToCodexEmpty"));
         });
     };
-    private readonly onOpenMenuDocTree = (event: CustomEvent<any>) => {
-        const detail = event.detail;
+    private readonly onOpenMenuDocTree = (eventOrDetail: any) => {
+        const detail = this.getMenuEventDetail(eventOrDetail);
         const menu = detail?.menu;
         const type = detail?.type;
         if (!menu || (type !== "doc" && type !== "docs")) return;
-        const elements = Array.from((detail?.elements || []) as NodeListOf<HTMLElement>);
-        const docIds = Array.from(
-            new Set(elements.map(el => this.extractBlockIdFromElement(el)).filter(Boolean))
-        ) as string[];
-        if (docIds.length === 0) return;
         this.addSubmitToCodexMenu(menu, () => {
+            const elements = Array.from((detail?.elements || []) as NodeListOf<HTMLElement>);
+            const docIds = Array.from(
+                new Set(elements.map(el => this.extractBlockIdFromElement(el)).filter(Boolean))
+            ) as string[];
+            if (docIds.length === 0) {
+                showMessage(t("toolbar.submitToCodexEmpty"));
+                return;
+            }
             for (const docId of docIds) {
                 this.dispatchAddChatContext({
                     kind: "doc",
@@ -139,16 +154,19 @@ export default class PluginSample extends Plugin {
             showMessage(t("toolbar.submitToCodexSuccess"));
         });
     };
-    private readonly onOpenMenuBlockRef = (event: CustomEvent<any>) => {
-        const detail = event.detail;
+    private readonly onOpenMenuBlockRef = (eventOrDetail: any) => {
+        const detail = this.getMenuEventDetail(eventOrDetail);
         const menu = detail?.menu;
         if (!menu) return;
-        const blockId =
-            this.extractBlockIdFromElement(detail?.element) ||
-            this.extractBlockIdFromElement(detail?.protyle?.element) ||
-            this.pickValidBlockId([detail?.protyle?.block?.id, detail?.protyle?.options?.blockId]);
-        if (!blockId) return;
         this.addSubmitToCodexMenu(menu, () => {
+            const blockId =
+                this.extractBlockIdFromElement(detail?.element) ||
+                this.extractBlockIdFromElement(detail?.protyle?.element) ||
+                this.pickValidBlockId([detail?.protyle?.block?.id, detail?.protyle?.options?.blockId]);
+            if (!blockId) {
+                showMessage(t("toolbar.submitToCodexEmpty"));
+                return;
+            }
             this.dispatchAddChatContext({
                 kind: "block",
                 blockId,
@@ -157,16 +175,19 @@ export default class PluginSample extends Plugin {
             showMessage(t("toolbar.submitToCodexSuccess"));
         });
     };
-    private readonly onOpenMenuFileAnnotationRef = (event: CustomEvent<any>) => {
-        const detail = event.detail;
+    private readonly onOpenMenuFileAnnotationRef = (eventOrDetail: any) => {
+        const detail = this.getMenuEventDetail(eventOrDetail);
         const menu = detail?.menu;
         if (!menu) return;
-        const blockId =
-            this.extractBlockIdFromElement(detail?.element) ||
-            this.extractBlockIdFromElement(detail?.protyle?.element) ||
-            this.pickValidBlockId([detail?.protyle?.block?.id, detail?.protyle?.options?.blockId]);
-        if (!blockId) return;
         this.addSubmitToCodexMenu(menu, () => {
+            const blockId =
+                this.extractBlockIdFromElement(detail?.element) ||
+                this.extractBlockIdFromElement(detail?.protyle?.element) ||
+                this.pickValidBlockId([detail?.protyle?.block?.id, detail?.protyle?.options?.blockId]);
+            if (!blockId) {
+                showMessage(t("toolbar.submitToCodexEmpty"));
+                return;
+            }
             this.dispatchAddChatContext({
                 kind: "block",
                 blockId,
@@ -242,7 +263,7 @@ export default class PluginSample extends Plugin {
         if (!menu || typeof menu.addItem !== "function") return;
         menu.addItem({
             icon: "iconCopilot",
-            label: t("toolbar.submitToCodex"),
+            label: t("toolbar.submitToCodex") || "提交给 Codex",
             click: () => {
                 onClick();
                 return false;
@@ -251,17 +272,24 @@ export default class PluginSample extends Plugin {
     }
 
     private registerAddChatContextMenuHandlers() {
-        this.eventBus.on("open-menu-content", this.onOpenMenuContent);
-        this.eventBus.on("open-menu-doctree", this.onOpenMenuDocTree);
-        this.eventBus.on("open-menu-blockref", this.onOpenMenuBlockRef);
-        this.eventBus.on("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
+        if (this.menuEventBus) return;
+        const bus = (this as any).eventBus || (this.app as any)?.eventBus;
+        if (!bus) return;
+        this.menuEventBus = bus;
+        bus.on("open-menu-content", this.onOpenMenuContent);
+        bus.on("open-menu-doctree", this.onOpenMenuDocTree);
+        bus.on("open-menu-blockref", this.onOpenMenuBlockRef);
+        bus.on("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
     }
 
     private unregisterAddChatContextMenuHandlers() {
-        this.eventBus.off("open-menu-content", this.onOpenMenuContent);
-        this.eventBus.off("open-menu-doctree", this.onOpenMenuDocTree);
-        this.eventBus.off("open-menu-blockref", this.onOpenMenuBlockRef);
-        this.eventBus.off("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
+        const bus = this.menuEventBus;
+        if (!bus) return;
+        bus.off("open-menu-content", this.onOpenMenuContent);
+        bus.off("open-menu-doctree", this.onOpenMenuDocTree);
+        bus.off("open-menu-blockref", this.onOpenMenuBlockRef);
+        bus.off("open-menu-fileannotationref", this.onOpenMenuFileAnnotationRef);
+        this.menuEventBus = null;
     }
 
     /**
@@ -1761,6 +1789,7 @@ export default class PluginSample extends Plugin {
 
     async onLayoutReady() {
         //布局加载完成的时候,会自动调用这个函数
+        this.registerAddChatContextMenuHandlers();
         // 注册AI侧栏
         this.addDock({
             config: {

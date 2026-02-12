@@ -11055,12 +11055,12 @@
                     spellcheck="false"
                 ></textarea>
                 <button
-                    class="b3-button ai-sidebar__send-btn"
-                    class:b3-button--primary={!isLoading}
+                    class="ai-sidebar__send-btn"
                     class:ai-sidebar__send-btn--abort={isLoading}
                     on:click={isLoading ? abortMessage : sendMessage}
                     disabled={!isLoading && !currentInput.trim() && currentAttachments.length === 0}
                     title={isLoading ? '中断生成' : '发送消息'}
+                    aria-label={isLoading ? '中断生成' : '发送消息'}
                 >
                     {#if isLoading}
                         <svg class="b3-button__icon">
@@ -12981,22 +12981,29 @@
         position: absolute;
         right: 8px;
         bottom: 8px;
-        width: 34px;
-        height: 34px;
-        min-width: 34px;
-        border-radius: 10px;
+        width: 36px;
+        height: 36px;
+        min-width: 36px;
+        border-radius: 999px;
         flex-shrink: 0;
         display: flex;
         align-items: center;
         justify-content: center;
+        cursor: pointer;
+        appearance: none;
         padding: 0;
-        border: 1px solid transparent;
-        background: var(--b3-theme-primary);
+        border: 1px solid var(--b3-theme-primary);
+        background: linear-gradient(
+            135deg,
+            var(--b3-theme-primary) 0%,
+            var(--b3-theme-primary-light) 100%
+        );
         color: var(--b3-theme-background);
-        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);
         transition:
             transform 0.18s ease,
             background-color 0.2s ease,
+            border-color 0.2s ease,
             box-shadow 0.2s ease,
             opacity 0.2s ease;
 
@@ -13010,6 +13017,7 @@
             cursor: not-allowed;
             box-shadow: none;
             background: var(--b3-theme-surface);
+            border-color: var(--b3-border-color);
             color: var(--b3-theme-on-surface-light);
         }
 
@@ -13024,6 +13032,7 @@
         }
 
         &.ai-sidebar__send-btn--abort {
+            border-color: var(--b3-theme-error);
             background-color: var(--b3-theme-error);
             color: var(--b3-theme-background);
 
@@ -13034,8 +13043,8 @@
         }
 
         .b3-button__icon {
-            width: 16px;
-            height: 16px;
+            width: 17px;
+            height: 17px;
         }
     }
 
@@ -14719,7 +14728,7 @@
             min-width: 32px;
             right: 7px;
             bottom: 7px;
-            border-radius: 9px;
+            border-radius: 999px;
 
             .b3-button__icon {
                 width: 15px;
@@ -14762,12 +14771,12 @@
         }
 
         .ai-sidebar__send-btn {
-            width: 30px;
-            height: 30px;
-            min-width: 30px;
+            width: 31px;
+            height: 31px;
+            min-width: 31px;
             right: 6px;
             bottom: 6px;
-            border-radius: 8px;
+            border-radius: 999px;
 
             .b3-button__icon {
                 width: 14px;
@@ -14976,9 +14985,9 @@
     }
 
     .ai-sidebar--fullscreen .ai-sidebar__send-btn {
-        width: 40px !important;
-        height: 40px !important;
-        min-width: 40px !important;
+        width: 42px !important;
+        height: 42px !important;
+        min-width: 42px !important;
 
         .b3-button__icon {
             width: 20px !important;
