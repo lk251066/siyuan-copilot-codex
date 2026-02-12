@@ -37,6 +37,7 @@ export default defineConfig({
                 { src: "./icon.png", dest: "./" },
                 { src: "./assets/*", dest: "./assets/" },
                 { src: "./i18n/*", dest: "./i18n/" },
+                { src: "./mcp/**", dest: "./mcp/" },
             ],
         }),
 
@@ -86,6 +87,7 @@ export default defineConfig({
                         async buildStart() {
                             const files = await fg([
                                 './i18n/**',
+                                './mcp/**',
                                 './mindmap-embed/**',
                                 './README*.md',
                                 './plugin.json'

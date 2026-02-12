@@ -7,6 +7,7 @@
     import { confirm } from 'siyuan';
     import ProviderConfigPanel from './components/ProviderConfigPanel.svelte';
     import type { CustomProviderConfig } from './defaultSettings';
+    import { fetchCodexModels, resolveCodexModelApiKeyFromSettings } from './codex/codex-models';
     export let plugin;
 
     // 使用动态默认设置
@@ -14,6 +15,78 @@
 
     // 笔记本列表
     let notebookOptions: Record<string, string> = {};
+
+    let codexModelOptions: string[] = [];
+    let isLoadingCodexModels = false;
+    $: openAiModelApiKeyReady = Boolean(
+        String(settings?.aiProviders?.openai?.apiKey || '').trim()
+    );
+
+    function setSetting(key: string, value: any) {
+        settings = { ...settings, [key]: value };
+        saveSettings();
+    }
+
+    async function refreshCodexModels(showToast = false) {
+        if (isLoadingCodexModels) return;
+        isLoadingCodexModels = true;
+        const apiKey = resolveCodexModelApiKeyFromSettings(settings);
+        try {
+            if (!apiKey) {
+                codexModelOptions = [];
+                if (showToast) {
+                    pushErrMsg('未检测到 OpenAI API Key，请先在“平台管理 -> OpenAI”中配置');
+                }
+                return;
+            }
+            codexModelOptions = await fetchCodexModels({
+                apiKey,
+            });
+            if (showToast) {
+                pushMsg(`Codex 模型列表已更新（${codexModelOptions.length}）`);
+            }
+        } catch (error) {
+            codexModelOptions = [];
+            const detail = (error as Error).message || String(error);
+            const hasApiKey = Boolean(apiKey);
+            const authLikeError = /401|api key|unauthorized|鉴权|缺少/i.test(detail);
+            if (showToast || hasApiKey || !authLikeError) {
+                pushErrMsg(`拉取 Codex 模型失败：${detail}`);
+            }
+        } finally {
+            isLoadingCodexModels = false;
+        }
+    }
+
+    function detectCodexCliPath() {
+        try {
+            const nodeRequire = (globalThis as any).require || require;
+            const childProcess = nodeRequire('child_process') as typeof import('child_process');
+            const child = childProcess.spawn('cmd.exe', ['/d', '/s', '/c', 'where codex'], {
+                windowsHide: true,
+                shell: true,
+            });
+            let out = '';
+            child.stdout?.on('data', (buf: Buffer) => {
+                out += buf.toString('utf8');
+            });
+            child.on('close', () => {
+                const lines = out
+                    .split(/\r?\n/)
+                    .map(s => s.trim())
+                    .filter(Boolean);
+                if (lines.length > 0) {
+                    setSetting('codexCliPath', lines[0]);
+                    pushMsg(`${t('settings.codex.detectCliPath') || '自动探测'}: ${lines[0]}`);
+                } else {
+                    pushErrMsg('未找到 codex，请确认已安装并在 PATH 中可用');
+                }
+            });
+        } catch (e) {
+            console.error('Detect codex path failed:', e);
+            pushErrMsg('自动探测失败，请手动填写 codex 路径');
+        }
+    }
 
     interface ISettingGroup {
         name: string;
@@ -273,17 +346,6 @@
                         step: 1,
                     },
                 },
-                {
-                    key: 'multiModelViewMode',
-                    value: settings.multiModelViewMode,
-                    type: 'select',
-                    title: t('settings.multiModelViewMode.title'),
-                    description: t('settings.multiModelViewMode.description'),
-                    options: {
-                        tab: t('settings.multiModelViewMode.options.tab'),
-                        card: t('settings.multiModelViewMode.options.card'),
-                    },
-                },
             ],
         },
         {
@@ -322,62 +384,8 @@
             ],
         },
         {
-            name: t('settings.settingsGroup.webApp') || '网页小程序',
-            items: [
-                {
-                    key: 'openLinksInWebView',
-                    value: settings.openLinksInWebView,
-                    type: 'checkbox',
-                    title: t('settings.openLinksInWebView.title') || '在 WebView 中打开链接',
-                    description:
-                        t('settings.openLinksInWebView.description') ||
-                        '点击思源笔记中的 https 链接时，在内置 WebView 标签页中打开，而不是外部浏览器',
-                },
-                {
-                    key: 'searchEngine',
-                    value: settings.searchEngine,
-                    type: 'select',
-                    title: t('settings.searchEngine.title') || '搜索引擎',
-                    description:
-                        t('settings.searchEngine.description') || '选择地址栏使用的默认搜索引擎',
-                    options: {
-                        google: 'Google',
-                        bing: 'Bing',
-                    },
-                },
-            ],
-        },
-        {
-            name: t('settings.settingsGroup.translate') || '翻译设置',
-            items: [
-                {
-                    key: 'translateTemperature',
-                    value: settings.translateTemperature,
-                    type: 'number',
-                    title: t('settings.translate.temperature.title') || '翻译 Temperature',
-                    description:
-                        t('settings.translate.temperature.description') ||
-                        '翻译专用的 temperature 参数（0-2），为空则使用模型默认值。值越小，翻译越准确一致；值越大，翻译越灵活多样',
-                    number: {
-                        min: 0,
-                        max: 2,
-                        step: 0.1,
-                    },
-                },
-                {
-                    key: 'translatePrompt',
-                    value: settings.translatePrompt,
-                    type: 'textarea',
-                    title: t('settings.translate.prompt.title') || '翻译提示词',
-                    description:
-                        t('settings.translate.prompt.description') ||
-                        '翻译时使用的提示词模板，${content} 会被替换为要翻译的内容',
-                    direction: 'row',
-                    rows: 8,
-                    placeholder:
-                        t('settings.translate.prompt.placeholder') || '输入翻译提示词模板...',
-                },
-            ],
+            name: t('settings.settingsGroup.codexCli') || 'Codex CLI',
+            items: [],
         },
         {
             name: t('settings.settingsGroup.reset') || 'Reset Settings',
@@ -413,31 +421,6 @@
                 },
             ],
         },
-        {
-            name: '❤️用爱发电',
-            items: [
-                {
-                    key: 'donateInfo',
-                    value: '',
-                    type: 'hint',
-                    title: '用爱发电',
-                    description: `
-                        <p style="margin-top:12px;">如果喜欢我的插件，欢迎给GitHub仓库点star和微信赞赏，这会激励我继续完善此插件和开发新插件。</p>
-
-                        <p style="margin-top:12px;">维护插件费时费力，个人时间和精力有限，开源只是分享，不等于我要浪费我的时间免费帮用户实现ta需要的功能，</p>
-
-                        <p style="margin-top:12px;">我需要的功能我会慢慢改进（打赏可以催更），有些我觉得可以改进、但是现阶段不必要的功能需要打赏才改进（会标注打赏标签和需要打赏金额），而不需要的功能、实现很麻烦的功能会直接关闭issue不考虑实现，我没实现的功能欢迎有大佬来pr</p>
-
-                        <p style="margin-top:12px;">累积赞赏50元的朋友如果想加我微信和进粉丝交流群，可以在赞赏的时候备注微信号，或者发邮件到<a href="mailto:achuan-2@outlook.com">achuan-2@outlook.com</a>来进行好友申请</p>
-                        
-                        <div style="margin-top:12px;">
-                        <img src="plugins/siyuan-plugin-copilot/assets/donate.png" alt="donate" style="max-width:260px; height:auto; border:1px solid var(--b3-border-color);"/>
-                        </div>
-                        <p style="margin-top:12px;">也欢迎大家使用我的<a href="https://gpt.achuan-2.top/register?aff=ZndO">AI API中转站</a>，提供Openai ChatGPT、Gemini、Claude、Deepseek、Grok等API直连中转服务，只要用户注册我就有收益</p>
-                    `,
-                },
-            ],
-        },
     ];
 
     let focusGroup = groups[0].name;
@@ -451,7 +434,7 @@
     const onChanged = ({ detail }: CustomEvent<ChangeEvent>) => {
         console.log(detail.key, detail.value);
         // 使用 in 操作符检查 key 是否存在，而不是检查值是否为 undefined
-        // 这样可以正确处理值为 undefined 的设置项（如 translateTemperature）
+        // 这样可以正确处理值为 undefined 的设置项
         if (detail.key in settings) {
             settings[detail.key] = detail.value;
             saveSettings();
@@ -468,7 +451,7 @@
 
     async function runload() {
         const loadedSettings = await plugin.loadSettings();
-        settings = { ...loadedSettings };
+        settings = { ...getDefaultSettings(), ...loadedSettings };
 
         // 确保 aiProviders 存在
         if (!settings.aiProviders) {
@@ -514,6 +497,8 @@
 
         // 加载笔记本列表
         await loadNotebooks();
+
+        await refreshCodexModels(false);
 
         updateGroupItems();
         // 确保设置已保存（可能包含新的默认值）
@@ -823,6 +808,227 @@
                     </div>
                 {/if}
             </div>
+        {:else if focusGroup === (t('settings.settingsGroup.codexCli') || 'Codex CLI')}
+            <div class="config__tab-container_plugin codex-settings-container">
+                <div class="codex-settings">
+                <div class="codex-settings__header">
+                    <h5>{t('settings.codex.title') || 'Codex CLI'}</h5>
+                </div>
+
+                <div class="codex-settings__row">
+                    <label class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.enabled.title') || '启用 Codex CLI'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.enabled.description') || ''}
+                        </div>
+                    </label>
+                    <input
+                        class="b3-switch"
+                        type="checkbox"
+                        checked={!!settings.codexEnabled}
+                        on:change={e => setSetting('codexEnabled', !!e.target.checked)}
+                    />
+                </div>
+
+                <div class="codex-settings__row">
+                    <label class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.cliPath.title') || 'Codex 路径'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.cliPath.description') || ''}
+                        </div>
+                    </label>
+                    <div class="codex-settings__inline">
+                        <input
+                            class="b3-text-field fn__flex-1"
+                            type="text"
+                            value={settings.codexCliPath || ''}
+                            placeholder="codex 或 C:\\Users\\...\\codex.cmd"
+                            on:change={e => setSetting('codexCliPath', e.target.value)}
+                        />
+                        <button
+                            class="b3-button b3-button--outline"
+                            on:click={detectCodexCliPath}
+                            type="button"
+                        >
+                            {t('settings.codex.detectCliPath') || '自动探测'}
+                        </button>
+                    </div>
+                </div>
+
+                <div class="codex-settings__row">
+                    <label class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.workingDir.title') || '工作目录（--cd）'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.workingDir.description') || ''}
+                        </div>
+                    </label>
+                    <input
+                        class="b3-text-field fn__flex-1"
+                        type="text"
+                        value={settings.codexWorkingDir || ''}
+                        placeholder="C:\\path\\to\\siyuan-workspace"
+                        on:change={e => setSetting('codexWorkingDir', e.target.value)}
+                    />
+                </div>
+
+                <div class="codex-settings__row">
+                    <label class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.runMode.title') || '执行权限'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.runMode.description') || ''}
+                        </div>
+                    </label>
+                    <select
+                        class="b3-select"
+                        value={settings.codexRunMode || 'read_only'}
+                        on:change={e => {
+                            const next = e.target.value;
+                            if (next === 'fully_open') {
+                                confirm(
+                                    t('settings.codex.runMode.options.fullyOpen') ||
+                                        '完全放开（危险）',
+                                    t('settings.codex.runMode.fullyOpenWarning') ||
+                                        '完全放开模式风险极高，是否继续？',
+                                    () => setSetting('codexRunMode', 'fully_open'),
+                                    () => setSetting('codexRunMode', 'read_only')
+                                );
+                                return;
+                            }
+                            setSetting('codexRunMode', next);
+                        }}
+                    >
+                        <option value="read_only">
+                            {t('settings.codex.runMode.options.readOnly') || '只读（推荐）'}
+                        </option>
+                        <option value="workspace_write">
+                            {t('settings.codex.runMode.options.workspaceWrite') || '工作区可写'}
+                        </option>
+                        <option value="fully_open">
+                            {t('settings.codex.runMode.options.fullyOpen') || '完全放开（危险）'}
+                        </option>
+                    </select>
+                </div>
+
+                <div class="codex-settings__row">
+                    <label class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.skipGitRepoCheck.title') || '允许非 Git 目录'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.skipGitRepoCheck.description') || ''}
+                        </div>
+                    </label>
+                    <input
+                        class="b3-switch"
+                        type="checkbox"
+                        checked={settings.codexSkipGitRepoCheck !== false}
+                        on:change={e => setSetting('codexSkipGitRepoCheck', !!e.target.checked)}
+                    />
+                </div>
+
+                <div class="codex-settings__row">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            模型列表鉴权来源
+                        </div>
+                        <div class="codex-settings__desc">
+                            自动使用“平台管理 -> OpenAI”的 API Key 拉取 `https://www.right.codes/codex/v1/models`
+                        </div>
+                    </div>
+                    <span
+                        class="codex-settings__status"
+                        class:codex-settings__status--ready={openAiModelApiKeyReady}
+                        class:codex-settings__status--missing={!openAiModelApiKeyReady}
+                    >
+                        {openAiModelApiKeyReady ? '已配置 OpenAI Key' : '未配置 OpenAI Key'}
+                    </span>
+                </div>
+
+                <div class="codex-settings__row">
+                    <label class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.modelOverride.title') || '模型覆盖（可选）'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.modelOverride.description') || ''}
+                        </div>
+                    </label>
+                    <div class="codex-settings__inline">
+                        <select
+                            class="b3-select fn__flex-1"
+                            value={settings.codexModelOverride || ''}
+                            on:change={e => setSetting('codexModelOverride', e.target.value)}
+                        >
+                            <option value="">
+                                {t('aiSidebar.codex.modelOverridePlaceholder') || '留空使用默认'}
+                            </option>
+                            {#if settings.codexModelOverride &&
+                                !codexModelOptions.includes(settings.codexModelOverride)}
+                                <option value={settings.codexModelOverride}>
+                                    {settings.codexModelOverride}
+                                </option>
+                            {/if}
+                            {#each codexModelOptions as model}
+                                <option value={model}>{model}</option>
+                            {/each}
+                        </select>
+                        <button
+                            class="b3-button b3-button--outline"
+                            type="button"
+                            disabled={isLoadingCodexModels}
+                            on:click={() => refreshCodexModels(true)}
+                        >
+                            {isLoadingCodexModels ? '拉取中...' : '拉取模型'}
+                        </button>
+                    </div>
+                </div>
+
+                <div class="codex-settings__row">
+                    <label class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.siyuanApiUrl.title') || 'SiYuan API 地址'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.siyuanApiUrl.description') || ''}
+                        </div>
+                    </label>
+                    <input
+                        class="b3-text-field fn__flex-1"
+                        type="text"
+                        value={settings.siyuanApiUrl || ''}
+                        placeholder="http://127.0.0.1:6806"
+                        on:change={e => setSetting('siyuanApiUrl', e.target.value)}
+                    />
+                </div>
+
+                <div class="codex-settings__row">
+                    <label class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.siyuanApiToken.title') || 'SiYuan API Token'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.siyuanApiToken.description') || ''}
+                        </div>
+                    </label>
+                    <input
+                        class="b3-text-field fn__flex-1"
+                        type="password"
+                        value={settings.siyuanApiToken || ''}
+                        placeholder="Token"
+                        on:change={e => setSetting('siyuanApiToken', e.target.value)}
+                    />
+                </div>
+
+                </div>
+            </div>
         {:else}
             <SettingPanel
                 group={currentGroup?.name || ''}
@@ -848,10 +1054,21 @@
     .config__tab-wrap {
         flex: 1;
         height: 100%;
+        min-height: 0;
         overflow: hidden;
         padding: 2px;
         display: flex;
         flex-direction: column;
+    }
+
+    .codex-settings-container {
+        flex: 1;
+        height: 100%;
+        max-height: 100%;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
     }
 
     /* 平台管理：侧边栏布局 */
@@ -1044,5 +1261,56 @@
                 opacity: 0.6;
             }
         }
+    }
+
+    .codex-settings {
+        padding: 12px;
+        min-height: max-content;
+    }
+    .codex-settings__header h5 {
+        margin: 0 0 12px 0;
+    }
+    .codex-settings__row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--b3-border-color);
+    }
+    .codex-settings__label {
+        flex: 1;
+        min-width: 260px;
+    }
+    .codex-settings__title {
+        font-weight: 600;
+        margin-bottom: 4px;
+    }
+    .codex-settings__desc {
+        font-size: 12px;
+        color: var(--b3-theme-on-surface-light);
+        line-height: 1.4;
+    }
+    .codex-settings__inline {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex: 1;
+    }
+    .codex-settings__status {
+        font-size: 12px;
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-surface);
+        color: var(--b3-theme-on-surface);
+        white-space: nowrap;
+    }
+    .codex-settings__status--ready {
+        color: var(--b3-theme-primary);
+        border-color: var(--b3-theme-primary-light);
+        background: var(--b3-theme-primary-lightest);
+    }
+    .codex-settings__status--missing {
+        color: var(--b3-theme-on-surface-light);
     }
 </style>

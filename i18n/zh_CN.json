@@ -9,11 +9,52 @@
             "displayAndOperation": "显示与操作",
             "noteExport": "对话导出",
             "sessionManagement": "会话管理",
-            "webApp": "网页小程序",
-            "translate": "翻译设置",
+            "codexCli": "Codex CLI",
             "group1": "页签1",
             "group2": "页签2",
             "reset": "重置设置"
+        },
+        "codex": {
+            "title": "Codex CLI（本地）",
+            "enabled": {
+                "title": "启用 Codex CLI",
+                "description": "使用本机 Codex CLI 作为侧边栏引擎（`codex exec --json`），并复用本地 `~/.codex` 的 MCP"
+            },
+            "cliPath": {
+                "title": "Codex 路径",
+                "description": "Windows 通常为 `C:\\\\Users\\\\<你>\\\\AppData\\\\Roaming\\\\npm\\\\codex.cmd`；留空则尝试使用 PATH 中的 `codex`"
+            },
+            "detectCliPath": "自动探测",
+            "workingDir": {
+                "title": "工作目录（--cd）",
+                "description": "Codex 的工作根目录（`-C/--cd`）。建议指向你的思源 workspace 目录"
+            },
+            "skipGitRepoCheck": {
+                "title": "允许非 Git 目录",
+                "description": "自动添加 `--skip-git-repo-check`（思源 workspace 通常不是 Git 仓库）"
+            },
+            "runMode": {
+                "title": "执行权限",
+                "description": "控制 Codex 执行命令与写文件权限（注意：MCP 工具调用不受该开关直接限制）",
+                "options": {
+                    "readOnly": "只读（推荐）",
+                    "workspaceWrite": "工作区可写",
+                    "fullyOpen": "完全放开（危险）"
+                },
+                "fullyOpenWarning": "完全放开模式会跳过审批与沙箱，风险极高（可能误改/泄露/执行本机命令）。请仅在你明确理解风险且环境可控时启用。"
+            },
+            "modelOverride": {
+                "title": "模型覆盖（可选）",
+                "description": "传给 `codex exec --model`，为空则使用本地 `~/.codex/config.toml` 默认配置"
+            },
+            "siyuanApiUrl": {
+                "title": "SiYuan API 地址",
+                "description": "用于 `siyuan-mcp` 连接思源（默认 `http://127.0.0.1:6806`）"
+            },
+            "siyuanApiToken": {
+                "title": "SiYuan API Token",
+                "description": "用于 `siyuan-mcp` 调用思源 API（不会写入命令行参数，仅通过环境变量传递）"
+            }
         },
         "ai": {
             "provider": {
@@ -48,8 +89,8 @@
             },
             "systemPrompt": {
                 "title": "系统提示词",
-                "description": "设置 AI 的角色和行为",
-                "placeholder": "You are a helpful AI assistant."
+                "description": "与当前 Codex 工作目录下的 AGENTS.md 双向同步（仅工作目录，不是全局）",
+                "placeholder": "未填写时会自动在工作目录生成 AGENTS.md 模板"
             },
             "providerConfig": {
                 "hint": {
@@ -69,14 +110,6 @@
         "messageFontSize": {
             "title": "消息字体大小",
             "description": "调整消息内容的字体大小（默认12px）"
-        },
-        "multiModelViewMode": {
-            "title": "多模型回答样式",
-            "description": "选择多模型回答的默认显示方式",
-            "options": {
-                "tab": "页签视图",
-                "card": "卡片视图"
-            }
         },
         "exportNotebook": {
             "title": "导出笔记本",
@@ -163,6 +196,7 @@
             "ask": "问答模式",
             "edit": "编辑模式",
             "agent": "Agent模式",
+            "codex": "Codex模式",
             "autoApprove": "自动批准",
             "askDescription": "仅进行问答，不修改笔记内容",
             "editDescription": "AI可以直接编辑思源笔记内容",
@@ -178,6 +212,20 @@
             "toolCallFailed": "工具调用失败",
             "viewResult": "查看结果",
             "hideResult": "隐藏结果"
+        },
+        "codex": {
+            "modelOverride": "模型",
+            "modelOverridePlaceholder": "留空使用默认",
+            "toolCheck": "工具自检",
+            "toolCheckRunning": "自检中...",
+            "toolCheckSuccess": "Codex 工具自检完成，共 {count} 个工具",
+            "toolCheckFailed": "Codex 工具自检失败：{error}",
+            "toolCheckReportTitle": "Codex 工具自检",
+            "toolCheckPassed": "通过",
+            "toolCheckFailedShort": "失败",
+            "toolCount": "工具数量",
+            "nativeContextUsage": "上下文 {percent}%（原生）",
+            "nativeContextUsageTitle": "Codex 原生返回的上下文占用：{source}"
         },
         "empty": {
             "title": "开始对话",
