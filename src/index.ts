@@ -83,6 +83,7 @@ export default class PluginSample extends Plugin {
     private menuEventBus: any = null;
     private menuEventBuses: any[] = [];
     private menuDomObserver: MutationObserver | null = null;
+    private domContextMenuBound = false;
     private lastContextMenuTarget: EventTarget | null = null;
     private lastContextMenuAt = 0;
     private readonly domMenuItemDataAttr = "data-codex-submit-menu-item";
@@ -391,37 +392,38 @@ export default class PluginSample extends Plugin {
     private getDomFallbackMenuContainer(menu: HTMLElement): HTMLElement | null {
         if (!menu) return null;
         if (menu.classList.contains("b3-menu__items")) return menu;
-        const directContainer = menu.querySelector(":scope > .b3-menu__items");
-        if (directContainer instanceof HTMLElement) return directContainer;
         const nestedContainer = menu.querySelector(".b3-menu__items");
         if (nestedContainer instanceof HTMLElement) return nestedContainer;
-        return menu.querySelector(".b3-menu__item") ? menu : null;
+        return null;
     }
 
     private injectDomFallbackMenuItem() {
         if (Date.now() - this.lastContextMenuAt > 1500) return;
         const menus = Array.from(document.querySelectorAll(".b3-menu")) as HTMLElement[];
         if (menus.length === 0) return;
+        const visibleMenus = menus.filter((menu) => this.isVisibleMenu(menu));
+        if (visibleMenus.length === 0) return;
+        const menu = visibleMenus[visibleMenus.length - 1];
         const context = this.getContextFromLatestDomState();
         const hasContext =
             !!(context.markdown || context.plainText || context.blockId) ||
             !!(context.docIds && context.docIds.length > 0);
         if (!hasContext) return;
         const label = (t("toolbar.submitToCodex") || "提交给 Codex").trim();
-        for (const menu of menus) {
-            if (!this.isVisibleMenu(menu)) continue;
-            const container = this.getDomFallbackMenuContainer(menu);
-            if (!container) continue;
-            const hasExistingLabel = Array.from(container.querySelectorAll(".b3-menu__label")).some((el) => {
-                return (el.textContent || "").trim() === label;
-            });
-            if (container.querySelector(`[${this.domMenuItemDataAttr}]`) || hasExistingLabel) continue;
-            container.appendChild(this.createDomFallbackMenuItem());
-        }
+        const container = this.getDomFallbackMenuContainer(menu);
+        if (!container) return;
+        const hasExistingLabel = Array.from(container.querySelectorAll(".b3-menu__label")).some((el) => {
+            return (el.textContent || "").trim() === label;
+        });
+        if (container.querySelector(`[${this.domMenuItemDataAttr}]`) || hasExistingLabel) return;
+        container.appendChild(this.createDomFallbackMenuItem());
     }
 
     private setupDomMenuFallback() {
-        document.addEventListener("contextmenu", this.onDocumentContextMenu, true);
+        if (!this.domContextMenuBound) {
+            document.addEventListener("contextmenu", this.onDocumentContextMenu, true);
+            this.domContextMenuBound = true;
+        }
         if (this.menuDomObserver) return;
         this.menuDomObserver = new MutationObserver(() => {
             this.injectDomFallbackMenuItem();
@@ -430,7 +432,10 @@ export default class PluginSample extends Plugin {
     }
 
     private teardownDomMenuFallback() {
-        document.removeEventListener("contextmenu", this.onDocumentContextMenu, true);
+        if (this.domContextMenuBound) {
+            document.removeEventListener("contextmenu", this.onDocumentContextMenu, true);
+            this.domContextMenuBound = false;
+        }
         if (this.menuDomObserver) {
             this.menuDomObserver.disconnect();
             this.menuDomObserver = null;
@@ -523,6 +528,9 @@ export default class PluginSample extends Plugin {
             if (!bus || typeof bus.on !== "function" || typeof bus.off !== "function") continue;
             if (uniqueBuses.includes(bus)) continue;
             uniqueBuses.push(bus);
+        }
+        if (this.menuEventBuses.length > 0) {
+            this.unregisterAddChatContextMenuHandlers();
         }
         if (uniqueBuses.length === 0) return;
         this.menuEventBuses = uniqueBuses;
