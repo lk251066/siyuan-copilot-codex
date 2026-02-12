@@ -29,6 +29,10 @@ import ChatDialog from "./components/ChatDialog.svelte";
 import { updateSettings, getSettings } from "./stores/settings";
 import { getModelCapabilities } from "./utils/modelCapabilities";
 import { matchHotKey, getCustomHotKey } from "./utils/hotkey";
+import {
+    bidirectionalSyncPromptWithWorkingDirAgentsFile,
+    pullPromptFromWorkingDirAgentsFile,
+} from "./codex/agents-sync";
 
 export const SETTINGS_FILE = "settings.json";
 const WEBVIEW_HISTORY_FILE = "webview-history.json";
@@ -1861,6 +1865,107 @@ export default class PluginSample extends Plugin {
             }
         });
     }
+
+    private detectCodexCliPath(): string {
+        try {
+            const nodeRequire = (globalThis as any).require || require;
+            const childProcess = nodeRequire('child_process') as typeof import('child_process');
+            const isWin = (globalThis as any)?.process?.platform === 'win32';
+            const result = isWin
+                ? childProcess.spawnSync('cmd.exe', ['/d', '/s', '/c', 'where codex'], {
+                    windowsHide: true,
+                    shell: true,
+                    encoding: 'utf8',
+                })
+                : childProcess.spawnSync('which', ['codex'], { encoding: 'utf8' });
+            const out = String(result?.stdout || '');
+            const lines = out
+                .split(/\r?\n/)
+                .map((s: string) => s.trim())
+                .filter(Boolean);
+            return lines[0] || '';
+        } catch (e) {
+            console.warn('Detect codex path failed:', e);
+            return '';
+        }
+    }
+
+    private getSiyuanConfig(): any {
+        return (globalThis as any)?.window?.siyuan?.config || (globalThis as any)?.siyuan?.config || {};
+    }
+
+    private detectCodexWorkingDir(): string {
+        const cfg = this.getSiyuanConfig();
+        const candidates = [cfg?.system?.workspaceDir, cfg?.system?.workspace, cfg?.workspaceDir];
+        for (const c of candidates) {
+            if (typeof c === 'string' && c.trim()) return c.trim();
+        }
+        try {
+            const cwd = (globalThis as any)?.process?.cwd?.();
+            if (typeof cwd === 'string' && cwd.trim()) return cwd.trim();
+        } catch (e) {
+            console.warn('Detect codex working dir failed:', e);
+        }
+        return '';
+    }
+
+    private detectSiyuanApiToken(): string {
+        const cfg = this.getSiyuanConfig();
+        const candidates = [cfg?.api?.token, cfg?.token];
+        for (const c of candidates) {
+            if (typeof c === 'string' && c.trim()) return c.trim();
+        }
+        return '';
+    }
+
+    private applyCodexAutoSettings(rawSettings: any, mergedSettings: any): { changed: boolean; autoEnabled: boolean } {
+        let changed = false;
+        let autoEnabled = false;
+        const hasOwn = (key: string) => Object.prototype.hasOwnProperty.call(rawSettings || {}, key);
+
+        if (!String(mergedSettings.codexCliPath || '').trim()) {
+            const detectedPath = this.detectCodexCliPath();
+            if (detectedPath) {
+                mergedSettings.codexCliPath = detectedPath;
+                changed = true;
+            }
+        }
+
+        if (!String(mergedSettings.codexWorkingDir || '').trim()) {
+            const detectedWorkingDir = this.detectCodexWorkingDir();
+            if (detectedWorkingDir) {
+                mergedSettings.codexWorkingDir = detectedWorkingDir;
+                changed = true;
+            }
+        }
+
+        if (!String(mergedSettings.siyuanApiToken || '').trim()) {
+            const detectedToken = this.detectSiyuanApiToken();
+            if (detectedToken) {
+                mergedSettings.siyuanApiToken = detectedToken;
+                changed = true;
+            }
+        }
+
+        // 旧用户升级到含 Codex 功能版本时，若未显式配置 codexEnabled，则自动开启。
+        if (!hasOwn('codexEnabled') && mergedSettings.codexEnabled !== true) {
+            const hasCliPath = !!String(mergedSettings.codexCliPath || '').trim();
+            const hasWorkingDir = !!String(mergedSettings.codexWorkingDir || '').trim();
+            if (hasCliPath && hasWorkingDir) {
+                mergedSettings.codexEnabled = true;
+                changed = true;
+                autoEnabled = true;
+            }
+        }
+
+        // 为自动启用的场景提供可写能力，便于在思源中执行编辑/创建文档。
+        if (!hasOwn('codexRunMode') && autoEnabled) {
+            mergedSettings.codexRunMode = 'workspace_write';
+            changed = true;
+        }
+
+        return { changed, autoEnabled };
+    }
     /**
      * 加载设置
      */
@@ -1950,7 +2055,31 @@ export default class PluginSample extends Plugin {
         }
 
         const defaultSettings = getDefaultSettings();
-        const mergedSettings = { ...defaultSettings, ...settings };
+        let mergedSettings = { ...defaultSettings, ...settings };
+        const codexAutoResult = this.applyCodexAutoSettings(settings, mergedSettings);
+        const removedKeysOnUpgrade = [
+            'codexProfile',
+            'codexInjectSkillsOnThreadStart',
+            'codexSelectedSkills',
+            'codexModelApiKey',
+            'modelPresets',
+            'selectedModelPresetId',
+            'translateProvider',
+            'translateModelId',
+            'translateInputLanguage',
+            'translateOutputLanguage',
+            'translateTemperature',
+            'translatePrompt',
+        ];
+        let removedLegacySetting = false;
+        for (const key of removedKeysOnUpgrade) {
+            if (Object.prototype.hasOwnProperty.call(mergedSettings, key)) {
+                delete (mergedSettings as any)[key];
+                removedLegacySetting = true;
+            }
+        }
+        const promptPullSyncResult = pullPromptFromWorkingDirAgentsFile(mergedSettings);
+        mergedSettings = promptPullSyncResult.settings;
 
         // 检测是否需要保存设置
         let needsSave = false;
@@ -1958,6 +2087,20 @@ export default class PluginSample extends Plugin {
         // 如果是首次安装（settings.json 不存在或为空），需要保存
         const isFirstInstall = !settings || Object.keys(settings).length === 0;
         if (isFirstInstall) {
+            needsSave = true;
+        }
+
+        if (codexAutoResult.changed) {
+            needsSave = true;
+            if (codexAutoResult.autoEnabled) {
+                pushMsg('已自动完成 Codex CLI 基础配置');
+            }
+        }
+
+        if (removedLegacySetting) {
+            needsSave = true;
+        }
+        if (promptPullSyncResult.changed) {
             needsSave = true;
         }
 
@@ -1985,9 +2128,30 @@ export default class PluginSample extends Plugin {
      * 保存设置
      */
     async saveSettings(settings: any) {
-        await this.saveData(SETTINGS_FILE, settings);
+        let nextSettings = settings;
+        try {
+            const syncResult = bidirectionalSyncPromptWithWorkingDirAgentsFile(nextSettings);
+            nextSettings = syncResult.settings;
+            if (syncResult.reason === 'external_file_changed' && syncResult.changed) {
+                pushMsg(`检测到工作目录 AGENTS.md 已更新，系统提示词已同步为文件内容`);
+            }
+        } catch (e) {
+            console.error('Sync AGENTS.md failed:', e);
+        }
+        await this.saveData(SETTINGS_FILE, nextSettings);
         // 更新 store，通知所有订阅者
-        updateSettings(settings);
+        updateSettings(nextSettings);
+    }
+
+    async syncSystemPromptFromWorkingDirAgentsFile() {
+        const settings = (await this.loadData(SETTINGS_FILE)) || {};
+        const mergedSettings = { ...getDefaultSettings(), ...settings };
+        const syncResult = pullPromptFromWorkingDirAgentsFile(mergedSettings);
+        if (syncResult.changed) {
+            await this.saveData(SETTINGS_FILE, syncResult.settings);
+            updateSettings(syncResult.settings);
+        }
+        return syncResult.settings;
     }
 
     /**

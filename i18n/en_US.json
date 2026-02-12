@@ -9,11 +9,52 @@
             "displayAndOperation": "Display & Operation",
             "noteExport": "Chat Export",
             "sessionManagement": "Session Management",
-            "webApp": "Web App",
-            "translate": "Translation Settings",
+            "codexCli": "Codex CLI",
             "group1": "Tab1",
             "group2": "Tab2",
             "reset": "Reset Settings"
+        },
+        "codex": {
+            "title": "Codex CLI (Local)",
+            "enabled": {
+                "title": "Enable Codex CLI",
+                "description": "Use local Codex CLI as the sidebar engine (`codex exec --json`) and reuse your local `~/.codex` MCP"
+            },
+            "cliPath": {
+                "title": "Codex Path",
+                "description": "On Windows this is usually `C:\\\\Users\\\\<you>\\\\AppData\\\\Roaming\\\\npm\\\\codex.cmd`. Leave empty to use `codex` from PATH"
+            },
+            "detectCliPath": "Auto detect",
+            "workingDir": {
+                "title": "Working Directory (--cd)",
+                "description": "Codex working root (`-C/--cd`). Recommended: your SiYuan workspace directory"
+            },
+            "skipGitRepoCheck": {
+                "title": "Allow non-Git dirs",
+                "description": "Automatically add `--skip-git-repo-check`"
+            },
+            "runMode": {
+                "title": "Execution Permission",
+                "description": "Controls Codex shell/file permissions (note: MCP tool calls are not directly restricted by this toggle)",
+                "options": {
+                    "readOnly": "Read-only (Recommended)",
+                    "workspaceWrite": "Workspace write",
+                    "fullyOpen": "Fully open (Dangerous)"
+                },
+                "fullyOpenWarning": "Fully open mode bypasses approvals and sandboxing. EXTREMELY dangerous. Enable only if you fully understand the risk."
+            },
+            "modelOverride": {
+                "title": "Model override (Optional)",
+                "description": "Passed to `codex exec --model`. Empty uses your `~/.codex/config.toml` default"
+            },
+            "siyuanApiUrl": {
+                "title": "SiYuan API URL",
+                "description": "Used by `siyuan-mcp` (default `http://127.0.0.1:6806`)"
+            },
+            "siyuanApiToken": {
+                "title": "SiYuan API Token",
+                "description": "Used by `siyuan-mcp` (passed via env vars, not CLI args)"
+            }
         },
         "ai": {
             "provider": {
@@ -48,8 +89,8 @@
             },
             "systemPrompt": {
                 "title": "System Prompt",
-                "description": "Set the role and behavior of the AI",
-                "placeholder": "You are a helpful AI assistant."
+                "description": "Bidirectionally synced with AGENTS.md in current Codex working directory only (not global)",
+                "placeholder": "If empty, plugin will auto-generate an AGENTS.md template in working directory"
             },
             "providerConfig": {
                 "hint": {
@@ -69,14 +110,6 @@
         "messageFontSize": {
             "title": "Message Font Size",
             "description": "Adjust the font size of message content (default 12px)"
-        },
-        "multiModelViewMode": {
-            "title": "Multi-Model Response Style",
-            "description": "Choose the default display style for multi-model responses",
-            "options": {
-                "tab": "Tab View",
-                "card": "Card View"
-            }
         },
         "exportNotebook": {
             "title": "Export Notebook",
@@ -164,6 +197,7 @@
             "ask": "Ask Mode",
             "edit": "Edit Mode",
             "agent": "Agent Mode",
+            "codex": "Codex Mode",
             "autoApprove": "Auto Approve",
             "askDescription": "Q&A only, no modification to note content",
             "editDescription": "AI can directly edit SiYuan note content",
@@ -179,6 +213,20 @@
             "toolCallFailed": "Tool Call Failed",
             "viewResult": "View Result",
             "hideResult": "Hide Result"
+        },
+        "codex": {
+            "modelOverride": "Model",
+            "modelOverridePlaceholder": "Leave empty to use default",
+            "toolCheck": "Tool Check",
+            "toolCheckRunning": "Checking...",
+            "toolCheckSuccess": "Codex tool check finished, {count} tools found",
+            "toolCheckFailed": "Codex tool check failed: {error}",
+            "toolCheckReportTitle": "Codex Tool Check",
+            "toolCheckPassed": "Passed",
+            "toolCheckFailedShort": "Failed",
+            "toolCount": "Tool Count",
+            "nativeContextUsage": "Context {percent}% (native)",
+            "nativeContextUsageTitle": "Native context usage reported by Codex: {source}"
         },
         "empty": {
             "title": "Start Conversation",
