@@ -380,6 +380,24 @@ export default class PluginSample extends Plugin {
         return button;
     }
 
+    private isVisibleMenu(menu: HTMLElement): boolean {
+        if (!menu) return false;
+        const style = window.getComputedStyle(menu);
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        const rect = menu.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    }
+
+    private getDomFallbackMenuContainer(menu: HTMLElement): HTMLElement | null {
+        if (!menu) return null;
+        if (menu.classList.contains("b3-menu__items")) return menu;
+        const directContainer = menu.querySelector(":scope > .b3-menu__items");
+        if (directContainer instanceof HTMLElement) return directContainer;
+        const nestedContainer = menu.querySelector(".b3-menu__items");
+        if (nestedContainer instanceof HTMLElement) return nestedContainer;
+        return menu.querySelector(".b3-menu__item") ? menu : null;
+    }
+
     private injectDomFallbackMenuItem() {
         if (Date.now() - this.lastContextMenuAt > 1500) return;
         const menus = Array.from(document.querySelectorAll(".b3-menu")) as HTMLElement[];
@@ -391,11 +409,14 @@ export default class PluginSample extends Plugin {
         if (!hasContext) return;
         const label = (t("toolbar.submitToCodex") || "提交给 Codex").trim();
         for (const menu of menus) {
-            const hasExistingLabel = Array.from(menu.querySelectorAll(".b3-menu__label")).some((el) => {
+            if (!this.isVisibleMenu(menu)) continue;
+            const container = this.getDomFallbackMenuContainer(menu);
+            if (!container) continue;
+            const hasExistingLabel = Array.from(container.querySelectorAll(".b3-menu__label")).some((el) => {
                 return (el.textContent || "").trim() === label;
             });
-            if (menu.querySelector(`[${this.domMenuItemDataAttr}]`) || hasExistingLabel) continue;
-            menu.appendChild(this.createDomFallbackMenuItem());
+            if (container.querySelector(`[${this.domMenuItemDataAttr}]`) || hasExistingLabel) continue;
+            container.appendChild(this.createDomFallbackMenuItem());
         }
     }
 
