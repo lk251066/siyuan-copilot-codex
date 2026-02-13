@@ -1,4 +1,9 @@
 ## Unreleased / 20260213
+- 🧩 标识隔离：侧栏/页签类型改为 `codex-*` 命名（`codex-ai-chat-sidebar`、`codex-ai-chat-tab`、`codex-webapp-tab`），避免与原 Copilot 插件并存冲突
+- 🧩 事件隔离：`提交给 Codex` 事件名改为基于插件名动态命名（`${pluginName}:add-chat-context`），并同步隔离 DOM 兜底菜单标记属性
+- 🧩 WebView 隔离：共享会话分区改为 `persist:siyuan-copilot-codex-webapp-shared`，避免与同类插件共用分区
+- 🌍 i18n 补齐：修复顶部拉取模型、图片查看器、附件复制提示等硬编码文案，补充中英文文案键
+- 🌍 i18n 修复：`index.ts` 中迁移提示 fallback 改为英文，避免审查中“非 i18n 文案”问题
 - 🛠️ 图片资源路径修复：MCP 图片上传默认写入 `assets` 目录，返回路径统一为 `/assets/...`，避免写到数据根目录导致笔记内图片异常
 - 🛠️ 差异详情优化：点击思考/工具中的单次 Diff 时，详情仅展示变更相关片段（含省略行），不再铺满全文
 - 🛠️ 聊天时间线优化：思考/工具中的 Diff 条目头部默认显示 `+/-` 行数（历史与流式一致）

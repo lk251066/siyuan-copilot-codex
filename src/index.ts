@@ -37,16 +37,17 @@ export const SETTINGS_FILE = "settings.json";
 const WEBVIEW_HISTORY_FILE = "webview-history.json";
 const WEBAPP_ICON_DIR = "/data/storage/petal/siyuan-plugin-copilot/webappIcon";
 const MAX_HISTORY_COUNT = 200;
-const ADD_CHAT_CONTEXT_EVENT = "siyuan-copilot:add-chat-context";
+const DEFAULT_PLUGIN_NAMESPACE = "siyuan-copilot-codex";
+const ADD_CHAT_CONTEXT_EVENT_SUFFIX = "add-chat-context";
 const DOCK_ICON_ID = "iconCode";
 const ICON_COPILOT_ID = "iconCopilotCodex";
 const ICON_MODEL_SETTING_ID = "iconModelSettingCodex";
 const ICON_TRANSLATE_ID = "iconTranslateCodex";
 const ICON_WEBAPP_ID = "iconCopilotWebAppCodex";
 
-const AI_SIDEBAR_TYPE = "ai-chat-sidebar";
-export const AI_TAB_TYPE = "ai-chat-tab";
-export const WEBAPP_TAB_TYPE = "copilot-webapp";
+const AI_SIDEBAR_TYPE = "codex-ai-chat-sidebar";
+export const AI_TAB_TYPE = "codex-ai-chat-tab";
+export const WEBAPP_TAB_TYPE = "codex-webapp-tab";
 
 type AddChatContextEventDetail =
     | {
@@ -90,7 +91,18 @@ export default class PluginSample extends Plugin {
     private domContextMenuBound = false;
     private lastContextMenuTarget: EventTarget | null = null;
     private lastContextMenuAt = 0;
-    private readonly domMenuItemDataAttr = "data-codex-submit-menu-item";
+    private get pluginNamespace(): string {
+        const raw = String(this.name || DEFAULT_PLUGIN_NAMESPACE).toLowerCase().trim();
+        return raw.replace(/[^a-z0-9_-]/g, "-") || DEFAULT_PLUGIN_NAMESPACE;
+    }
+
+    private getAddChatContextEventName(): string {
+        return `${this.pluginNamespace}:${ADD_CHAT_CONTEXT_EVENT_SUFFIX}`;
+    }
+
+    private get domMenuItemDataAttr(): string {
+        return `data-${this.pluginNamespace}-submit-menu-item`;
+    }
 
     private getMenuEventDetail(eventOrDetail: any) {
         if (!eventOrDetail) return null;
@@ -502,7 +514,7 @@ export default class PluginSample extends Plugin {
     ) {
         const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
         window.dispatchEvent(
-            new CustomEvent<AddChatContextEventDetail>(ADD_CHAT_CONTEXT_EVENT, {
+            new CustomEvent<AddChatContextEventDetail>(this.getAddChatContextEventName(), {
                 detail: { ...detail, requestId } as AddChatContextEventDetail,
             })
         );
@@ -513,7 +525,7 @@ export default class PluginSample extends Plugin {
         menu.addItem({
             icon: ICON_COPILOT_ID,
             label: t("toolbar.submitToCodex") || "提交给 Codex",
-            id: "copilot-submit-codex",
+            id: `${this.pluginNamespace}-submit-codex`,
             click: () => {
                 onClick();
                 return false;
@@ -960,7 +972,8 @@ export default class PluginSample extends Plugin {
                 new AISidebar({
                     target: element,
                     props: {
-                        plugin: pluginInstance
+                        plugin: pluginInstance,
+                        addChatContextEvent: pluginInstance.getAddChatContextEventName(),
                     }
                 });
             },
@@ -1321,7 +1334,7 @@ export default class PluginSample extends Plugin {
                     // 全屏按钮
                     const fullscreenBtn = document.createElement('button');
                     fullscreenBtn.className = 'b3-button b3-button--text';
-                    fullscreenBtn.title = '全屏 (Alt+Y)';
+                    fullscreenBtn.title = t("webview.actions.fullscreen") || "Fullscreen (Alt+Y)";
                     fullscreenBtn.innerHTML = '<svg class="b3-button__icon"><use xlink:href="#iconFullscreen"></use></svg>';
                     navbar.appendChild(fullscreenBtn);
 
@@ -1481,7 +1494,7 @@ export default class PluginSample extends Plugin {
 
                     // 所有 webapp 使用同一个 partition，这样可以在不同标签页和跨域导航时共享登录状态
                     // 这解决了在一个标签页登录后，新标签页或跨域跳转时需要重新登录的问题
-                    const partitionName = 'persist:siyuan-copilot-webapp-shared';
+                    const partitionName = 'persist:siyuan-copilot-codex-webapp-shared';
                     webview.setAttribute('partition', partitionName);
 
                     // 设置清理后的 User-Agent，移除 Electron 标识以避免被网站检测和限制
@@ -2100,7 +2113,8 @@ export default class PluginSample extends Plugin {
                 this.aiSidebarApp = new AISidebar({
                     target: dock.element,
                     props: {
-                        plugin: this
+                        plugin: this,
+                        addChatContextEvent: this.getAddChatContextEventName(),
                     }
                 });
             },
@@ -2554,7 +2568,7 @@ export default class PluginSample extends Plugin {
                 await this.saveData(SETTINGS_FILE, settings);
                 pushMsg(
                     t("migration.achuanFallback") ||
-                    "检测到旧平台 Achuan，已自动切换到 OpenAI"
+                    "Legacy Achuan provider detected; switched to OpenAI automatically"
                 );
             }
             if (settings.selectedProviderId === 'Achuan') {
@@ -2592,7 +2606,7 @@ export default class PluginSample extends Plugin {
                 await this.saveData(SETTINGS_FILE, settings);
                 pushMsg(
                     t("migration.autoSetModelCapabilities") ||
-                    "已自动为现有模型设置能力"
+                    "Model capabilities were auto-initialized for existing models"
                 );
             }
         } catch (e) {
@@ -2641,7 +2655,7 @@ export default class PluginSample extends Plugin {
             if (codexAutoResult.autoEnabled) {
                 pushMsg(
                     t("migration.codexAutoConfigured") ||
-                    "已自动完成 Codex CLI 基础配置"
+                    "Codex CLI baseline configuration was auto-completed"
                 );
             }
         }
@@ -2684,7 +2698,7 @@ export default class PluginSample extends Plugin {
             if (syncResult.reason === 'external_file_changed' && syncResult.changed) {
                 pushMsg(
                     t("migration.agentsPromptSynced") ||
-                    "检测到工作目录 AGENTS.md 已更新，系统提示词已同步为文件内容"
+                    "Detected AGENTS.md update in working directory; system prompt has been synced"
                 );
             }
         } catch (e) {

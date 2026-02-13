@@ -50,8 +50,7 @@
     export let plugin: any;
     export let initialMessage: string = ''; // 初始消息
     export let mode: 'sidebar' | 'dialog' = 'sidebar'; // 使用模式：sidebar或dialog
-
-    const ADD_CHAT_CONTEXT_EVENT = 'siyuan-copilot:add-chat-context';
+    export let addChatContextEvent: string = 'siyuan-copilot-codex:add-chat-context';
     const addChatContextHandledRequests = new Set<string>();
 
     type AddChatContextEventDetail =
@@ -321,10 +320,10 @@
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            pushMsg('图片下载成功');
+            pushMsg(t('aiSidebar.success.imageDownloadSuccess') || 'Image downloaded');
         } catch (error) {
             console.error('下载图片失败:', error);
-            pushErrMsg('下载图片失败');
+            pushErrMsg(t('aiSidebar.errors.imageDownloadFailed') || 'Image download failed');
         }
     }
 
@@ -355,13 +354,13 @@
                 canvas.width = img.width;
                 canvas.height = img.height;
                 const ctx = canvas.getContext('2d');
-                if (!ctx) throw new Error('无法创建 Canvas 上下文');
+                if (!ctx) throw new Error('Failed to create canvas context');
                 ctx.drawImage(img, 0, 0);
 
                 const pngBlob = await new Promise<Blob | null>(resolve =>
                     canvas.toBlob(resolve, 'image/png')
                 );
-                if (!pngBlob) throw new Error('转换图片失败');
+                if (!pngBlob) throw new Error('Failed to convert image to PNG');
 
                 await navigator.clipboard.write([
                     new ClipboardItem({
@@ -371,10 +370,13 @@
                 URL.revokeObjectURL(img.src);
             }
 
-            pushMsg('图片已复制到剪贴板');
+            pushMsg(t('aiSidebar.success.imageCopiedToClipboard') || 'Image copied to clipboard');
         } catch (error) {
             console.error('复制图片失败:', error);
-            pushErrMsg('复制图片失败，请尝试下载后复制');
+            pushErrMsg(
+                t('aiSidebar.errors.imageCopyFailed') ||
+                    'Image copy failed, try downloading the file first'
+            );
         }
     }
 
@@ -419,13 +421,19 @@
                 workingDir: String(settings?.codexWorkingDir || '').trim(),
             });
             if (showToast) {
-                pushMsg(`Codex 本地模型已更新（${codexModelOptions.length}）`);
+                pushMsg(
+                    (t('aiSidebar.codex.modelsRefreshed') || 'Codex local models updated ({count})')
+                        .replace('{count}', String(codexModelOptions.length))
+                );
             }
         } catch (error) {
             codexModelOptions = [];
             codexModelLoadError = (error as Error).message || String(error);
             if (showToast) {
-                pushErrMsg(`拉取 Codex 模型失败：${codexModelLoadError}`);
+                pushErrMsg(
+                    (t('aiSidebar.codex.refreshModelsFailed') || 'Failed to refresh Codex models: {error}')
+                        .replace('{error}', codexModelLoadError)
+                );
             }
         } finally {
             isLoadingCodexModels = false;
@@ -1403,7 +1411,7 @@
         document.addEventListener('scroll', closeContextMenu, true);
         // 添加全局复制事件监听器
         document.addEventListener('copy', handleCopyEvent);
-        window.addEventListener(ADD_CHAT_CONTEXT_EVENT, onAddChatContextEvent);
+        window.addEventListener(addChatContextEvent, onAddChatContextEvent);
     });
 
     onDestroy(async () => {
@@ -1418,7 +1426,7 @@
         document.removeEventListener('scroll', closeContextMenu, true);
         // 移除全局复制事件监听器
         document.removeEventListener('copy', handleCopyEvent);
-        window.removeEventListener(ADD_CHAT_CONTEXT_EVENT, onAddChatContextEvent);
+        window.removeEventListener(addChatContextEvent, onAddChatContextEvent);
 
         // 保存工具配置
         if (isToolConfigLoaded) {
@@ -11085,7 +11093,9 @@
                                     >
                                         <use xlink:href="#iconRight"></use>
                                     </svg>
-                                    <span class="ai-message__thinking-title">💭 思考过程</span>
+                                    <span class="ai-message__thinking-title">
+                                        💭 {t('aiSidebar.messages.thinking')}
+                                    </span>
                                 </div>
                                 {#if !isCollapsed}
                                     {@const thinkDisplay = getThinkingDisplayContent(
@@ -11799,7 +11809,7 @@
                                                                     <span
                                                                         class="ai-message__thinking-title"
                                                                     >
-                                                                        💭 思考过程
+                                                                        💭 {t('aiSidebar.messages.thinking')}
                                                                     </span>
                                                                 </div>
                                                                 {#if !isCollapsed}
@@ -11876,7 +11886,7 @@
                                                                 attachment.data,
                                                                 attachment.name
                                                             )}
-                                                        title="点击查看大图"
+                                                        title={t('aiSidebar.actions.viewImage') || 'View image'}
                                                     />
                                                     <button
                                                         class="b3-button b3-button--text ai-message__attachment-copy"
@@ -11884,9 +11894,15 @@
                                                             navigator.clipboard.writeText(
                                                                 attachment.data
                                                             );
-                                                            pushMsg('已复制图片URL');
+                                                            pushMsg(
+                                                                t('aiSidebar.success.copyImageUrl') ||
+                                                                    'Image URL copied'
+                                                            );
                                                         }}
-                                                        title="复制图片URL"
+                                                        title={
+                                                            t('aiSidebar.actions.copyImageUrl') ||
+                                                            'Copy image URL'
+                                                        }
                                                     >
                                                         <svg class="b3-button__icon">
                                                             <use xlink:href="#iconCopy"></use>
@@ -11921,13 +11937,20 @@
                                                                 );
                                                                 pushMsg(
                                                                     attachment.isWebPage
-                                                                        ? '已复制网页Markdown内容'
-                                                                        : '已复制文件内容'
+                                                                        ? t(
+                                                                              'aiSidebar.success.copyWebMarkdown'
+                                                                          ) ||
+                                                                              'Web page markdown copied'
+                                                                        : t('aiSidebar.success.copyFileContent') ||
+                                                                              'File content copied'
                                                                 );
                                                             }}
                                                             title={attachment.isWebPage
-                                                                ? '复制网页Markdown'
-                                                                : '复制文件内容'}
+                                                                ? t(
+                                                                      'aiSidebar.actions.copyWebMarkdown'
+                                                                  ) || 'Copy web page markdown'
+                                                                : t('aiSidebar.actions.copyFileContent') ||
+                                                                      'Copy file content'}
                                                         >
                                                             <svg class="b3-button__icon">
                                                                 <use xlink:href="#iconCopy"></use>
@@ -12985,7 +13008,7 @@
                                                     <use xlink:href="#iconRight"></use>
                                                 </svg>
                                                 <span class="ai-message__thinking-title">
-                                                    💭 思考过程
+                                                    💭 {t('aiSidebar.messages.thinking')}
                                                 </span>
                                             </div>
                                             {#if !response.thinkingCollapsed}
@@ -13062,14 +13085,14 @@
                         <button
                             class="ai-sidebar__context-doc-remove"
                             on:click={() => removeContextDocument(doc.id)}
-                            title="移除文档"
+                            title={t('aiSidebar.context.remove') || 'Remove'}
                         >
                             ×
                         </button>
                         <button
                             class="ai-sidebar__context-doc-link"
                             on:click={() => openDocument(doc.id)}
-                            title="点击查看文档"
+                            title={t('aiSidebar.context.open') || 'Open'}
                         >
                             📄 {doc.title}
                         </button>
@@ -13089,7 +13112,7 @@
                         <button
                             class="ai-sidebar__context-doc-remove"
                             on:click={() => removeAttachment(index)}
-                            title="移除附件"
+                            title={t('aiSidebar.attachment.remove') || 'Remove attachment'}
                         >
                             ×
                         </button>
@@ -13107,9 +13130,9 @@
                                 class="b3-button b3-button--text ai-sidebar__context-doc-copy"
                                 on:click|stopPropagation={() => {
                                     navigator.clipboard.writeText(attachment.data);
-                                    pushMsg('已复制图片URL');
+                                    pushMsg(t('aiSidebar.success.copyImageUrl') || 'Image URL copied');
                                 }}
-                                title="复制图片URL"
+                                title={t('aiSidebar.actions.copyImageUrl') || 'Copy image URL'}
                             >
                                 <svg class="b3-button__icon">
                                     <use xlink:href="#iconCopy"></use>
@@ -13124,9 +13147,15 @@
                                 class="b3-button b3-button--text ai-sidebar__context-doc-copy"
                                 on:click|stopPropagation={() => {
                                     navigator.clipboard.writeText(attachment.data);
-                                    pushMsg('已复制网页Markdown内容');
+                                    pushMsg(
+                                        t('aiSidebar.success.copyWebMarkdown') ||
+                                            'Web page markdown copied'
+                                    );
                                 }}
-                                title="复制网页Markdown"
+                                title={
+                                    t('aiSidebar.actions.copyWebMarkdown') ||
+                                    'Copy web page markdown'
+                                }
                             >
                                 <svg class="b3-button__icon">
                                     <use xlink:href="#iconCopy"></use>
@@ -13143,9 +13172,11 @@
                                 class="b3-button b3-button--text ai-sidebar__context-doc-copy"
                                 on:click|stopPropagation={() => {
                                     navigator.clipboard.writeText(attachment.data);
-                                    pushMsg('已复制文件内容');
+                                    pushMsg(
+                                        t('aiSidebar.success.copyFileContent') || 'File content copied'
+                                    );
                                 }}
-                                title="复制文件内容"
+                                title={t('aiSidebar.actions.copyFileContent') || 'Copy file content'}
                             >
                                 <svg class="b3-button__icon">
                                     <use xlink:href="#iconCopy"></use>
@@ -13234,9 +13265,11 @@
                     class="b3-button b3-button--text ai-sidebar__codex-toolcheck-btn"
                     on:click={() => refreshCodexModelOptions(true)}
                     disabled={isLoadingCodexModels}
-                    title="拉取模型"
+                    title={t('aiSidebar.codex.refreshModels') || 'Refresh models'}
                 >
-                    {isLoadingCodexModels ? '拉取中...' : '拉取'}
+                    {isLoadingCodexModels
+                        ? t('aiSidebar.codex.refreshModelsLoading') || 'Refreshing...'
+                        : t('aiSidebar.codex.refreshModels') || 'Refresh'}
                 </button>
                 <button
                     class="b3-button b3-button--text ai-sidebar__codex-toolcheck-btn"
@@ -13276,7 +13309,12 @@
                 {/if}
             </div>
             {#if codexModelLoadError}
-                <span class="ai-sidebar__codex-error">本地模型读取错误：{codexModelLoadError}</span>
+                <span class="ai-sidebar__codex-error">
+                    {(t('aiSidebar.codex.modelLoadError') || 'Local model load error: {error}').replace(
+                        '{error}',
+                        codexModelLoadError
+                    )}
+                </span>
             {/if}
         </div>
         <div class="ai-sidebar__input-row">
@@ -13296,8 +13334,8 @@
                     class:ai-sidebar__send-btn--abort={isLoading}
                     on:click={isLoading ? abortMessage : sendMessage}
                     disabled={!isLoading && !currentInput.trim() && currentAttachments.length === 0}
-                    title={isLoading ? '中断生成' : '发送消息'}
-                    aria-label={isLoading ? '中断生成' : '发送消息'}
+                    title={isLoading ? t('aiSidebar.actions.stop') : t('aiSidebar.actions.send')}
+                    aria-label={isLoading ? t('aiSidebar.actions.stop') : t('aiSidebar.actions.send')}
                 >
                     {#if isLoading}
                         <svg class="b3-button__icon">
@@ -13822,29 +13860,31 @@
     {#if isImageViewerOpen}
         <div class="image-viewer">
             <div class="image-viewer__header">
-                <h3 class="image-viewer__title">{currentImageName || '图片预览'}</h3>
+                <h3 class="image-viewer__title">
+                    {currentImageName || t('aiSidebar.attachment.previewTitle') || 'Image preview'}
+                </h3>
                 <div class="image-viewer__actions">
                     <button
                         class="b3-button b3-button--text"
                         on:click={() => copyImageAsPng(currentImageSrc)}
-                        title="复制图片"
+                        title={t('aiSidebar.actions.copyImage') || 'Copy image'}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        <span>复制</span>
+                        <span>{t('aiSidebar.actions.copy') || 'Copy'}</span>
                     </button>
                     <button
                         class="b3-button b3-button--text"
                         on:click={() =>
                             downloadImage(currentImageSrc, currentImageName || 'image.png')}
-                        title="下载图片"
+                        title={t('aiSidebar.actions.downloadImage') || 'Download image'}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
-                        <span>下载</span>
+                        <span>{t('aiSidebar.actions.download') || 'Download'}</span>
                     </button>
                     <button
                         class="b3-button b3-button--text"
                         on:click={closeImageViewer}
-                        title="关闭"
+                        title={t('common.close') || 'Close'}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
                     </button>

@@ -225,7 +225,12 @@
             "toolCheckFailedShort": "失败",
             "toolCount": "工具数量",
             "nativeContextUsage": "上下文 {percent}%（原生）",
-            "nativeContextUsageTitle": "Codex 原生返回的上下文占用：{source}"
+            "nativeContextUsageTitle": "Codex 原生返回的上下文占用：{source}",
+            "refreshModels": "拉取",
+            "refreshModelsLoading": "拉取中...",
+            "modelsRefreshed": "Codex 本地模型已更新（{count}）",
+            "refreshModelsFailed": "拉取 Codex 模型失败：{error}",
+            "modelLoadError": "本地模型读取错误：{error}"
         },
         "empty": {
             "title": "开始对话",
@@ -246,6 +251,13 @@
             "copyMessage": "复制消息",
             "copyAsMarkdown": "复制为 Markdown",
             "copyAllChat": "复制全部对话",
+            "copyImage": "复制图片",
+            "download": "下载",
+            "downloadImage": "下载图片",
+            "viewImage": "查看图片",
+            "copyImageUrl": "复制图片 URL",
+            "copyWebMarkdown": "复制网页 Markdown",
+            "copyFileContent": "复制文件内容",
             "copyBefore": "复制修改前",
             "copyAfter": "复制修改后",
             "copyOldContent": "复制修改前的内容",
@@ -398,7 +410,8 @@
         },
         "attachment": {
             "title": "附件",
-            "remove": "移除附件"
+            "remove": "移除附件",
+            "previewTitle": "图片预览"
         },
         "edit": {
             "title": "编辑操作",
@@ -427,6 +440,8 @@
         "errors": {
             "imageOnly": "只支持图片文件",
             "imageTooLarge": "图片文件过大，最大支持 10MB",
+            "imageDownloadFailed": "下载图片失败",
+            "imageCopyFailed": "复制图片失败，请尝试下载后复制",
             "textAndImageOnly": "只支持文本文件和图片文件",
             "fileTooLarge": "文件过大，文本文件最大 5MB，图片最大 10MB",
             "addImageFailed": "添加图片失败",
@@ -456,6 +471,9 @@
         "success": {
             "copySuccess": "消息已复制",
             "copyMarkdownSuccess": "对话已复制为 Markdown",
+            "copyImageUrl": "已复制图片URL",
+            "copyWebMarkdown": "已复制网页Markdown内容",
+            "copyFileContent": "已复制文件内容",
             "clearSuccess": "对话已清空",
             "documentExists": "该文档已在上下文中",
             "blockExists": "该内容已在上下文中",
@@ -467,7 +485,9 @@
             "insertBlockSuccess": "新块已插入",
             "rejectEditSuccess": "已拒绝编辑",
             "imageAutoUploaded": "图片已自动添加为附件",
-            "submittedToCodex": "已添加到 Codex 引用"
+            "submittedToCodex": "已添加到 Codex 引用",
+            "imageDownloadSuccess": "图片下载成功",
+            "imageCopiedToClipboard": "图片已复制到剪贴板"
         },
         "confirm": {
             "clearChat": {

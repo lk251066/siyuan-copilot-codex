@@ -226,7 +226,12 @@
             "toolCheckFailedShort": "Failed",
             "toolCount": "Tool Count",
             "nativeContextUsage": "Context {percent}% (native)",
-            "nativeContextUsageTitle": "Native context usage reported by Codex: {source}"
+            "nativeContextUsageTitle": "Native context usage reported by Codex: {source}",
+            "refreshModels": "Refresh",
+            "refreshModelsLoading": "Refreshing...",
+            "modelsRefreshed": "Codex local models updated ({count})",
+            "refreshModelsFailed": "Failed to refresh Codex models: {error}",
+            "modelLoadError": "Local model load error: {error}"
         },
         "empty": {
             "title": "Start Conversation",
@@ -247,6 +252,13 @@
             "copyMessage": "Copy Message",
             "copyAsMarkdown": "Copy as Markdown",
             "copyAllChat": "Copy All Chat",
+            "copyImage": "Copy Image",
+            "download": "Download",
+            "downloadImage": "Download Image",
+            "viewImage": "View image",
+            "copyImageUrl": "Copy image URL",
+            "copyWebMarkdown": "Copy web page markdown",
+            "copyFileContent": "Copy file content",
             "copyBefore": "Copy Before",
             "copyAfter": "Copy After",
             "copyOldContent": "Copy Old Content",
@@ -399,7 +411,8 @@
         },
         "attachment": {
             "title": "Attachments",
-            "remove": "Remove Attachment"
+            "remove": "Remove Attachment",
+            "previewTitle": "Image Preview"
         },
         "edit": {
             "title": "Edit Operations",
@@ -428,6 +441,8 @@
         "errors": {
             "imageOnly": "Only image files are supported",
             "imageTooLarge": "Image file too large, maximum 10MB supported",
+            "imageDownloadFailed": "Image download failed",
+            "imageCopyFailed": "Image copy failed, try downloading the file first",
             "textAndImageOnly": "Only text files and image files are supported",
             "fileTooLarge": "File too large, text files max 5MB, images max 10MB",
             "addImageFailed": "Failed to add image",
@@ -457,6 +472,9 @@
         "success": {
             "copySuccess": "Message copied",
             "copyMarkdownSuccess": "Conversation copied as Markdown",
+            "copyImageUrl": "Image URL copied",
+            "copyWebMarkdown": "Web page markdown copied",
+            "copyFileContent": "File content copied",
             "clearSuccess": "Conversation cleared",
             "documentExists": "Document already in context",
             "blockExists": "This content is already in context",
@@ -468,7 +486,9 @@
             "insertBlockSuccess": "New block inserted successfully",
             "rejectEditSuccess": "Edit rejected",
             "imageAutoUploaded": "Image automatically added as attachment",
-            "submittedToCodex": "Added to Codex references"
+            "submittedToCodex": "Added to Codex references",
+            "imageDownloadSuccess": "Image downloaded",
+            "imageCopiedToClipboard": "Image copied to clipboard"
         },
         "confirm": {
             "clearChat": {
