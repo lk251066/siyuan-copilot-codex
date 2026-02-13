@@ -9500,6 +9500,24 @@
         return result;
     }
 
+    function getDiffLineStats(operation: EditOperation | null | undefined): {
+        added: number;
+        removed: number;
+    } {
+        if (!operation) return { added: 0, removed: 0 };
+        const oldText =
+            operation.operationType === 'insert' ? '' : String(operation.oldContent || '');
+        const newText = String(operation.newContent || '');
+        const lines = generateSimpleDiff(oldText, newText);
+        let added = 0;
+        let removed = 0;
+        for (const line of lines) {
+            if (line.type === 'added') added += 1;
+            if (line.type === 'removed') removed += 1;
+        }
+        return { added, removed };
+    }
+
     type SplitDiffRow = {
         leftLine: string;
         rightLine: string;
@@ -10600,57 +10618,154 @@
         return uniqueLabels.length > maxNames ? `${head}...` : head;
     }
 
-    function isLikelyFullDocumentSnapshot(text: string): boolean {
-        const normalized = String(text || '').trim();
-        if (!normalized) return false;
-        const lineCount = normalized.split('\n').length;
-        if (lineCount >= 12) return true;
-        if (/^#\s+/m.test(normalized) && lineCount >= 4) return true;
-        return normalized.length >= 500;
+    type FocusedDiffTexts = {
+        oldText: string;
+        newText: string;
+        added: number;
+        removed: number;
+    };
+
+    function buildFocusedDiffTexts(
+        oldText: string,
+        newText: string,
+        maxLines = 64
+    ): FocusedDiffTexts {
+        const allLines = generateSimpleDiff(String(oldText || ''), String(newText || ''));
+        let added = 0;
+        let removed = 0;
+        for (const line of allLines) {
+            if (line.type === 'added') added += 1;
+            else if (line.type === 'removed') removed += 1;
+        }
+        const focusedLines = compactTraceDiffLines(allLines, maxLines);
+        const oldFocused: string[] = [];
+        const newFocused: string[] = [];
+        for (const line of focusedLines) {
+            if (line.type === 'removed') {
+                oldFocused.push(line.line);
+                continue;
+            }
+            if (line.type === 'added') {
+                newFocused.push(line.line);
+                continue;
+            }
+            oldFocused.push(line.line);
+            newFocused.push(line.line);
+        }
+        return {
+            oldText: oldFocused.join('\n').trimEnd(),
+            newText: newFocused.join('\n').trimEnd(),
+            added,
+            removed,
+        };
     }
 
-    function buildMergedEditOperationTexts(operations: EditOperation[]): { oldText: string; newText: string } {
-        if (!operations.length) return { oldText: '', newText: '' };
+    function buildEditOperationAggregationKey(operation: EditOperation): string {
+        const fileKey = getEditOperationFileKey(operation);
+        const operationType = operation.operationType || 'update';
+        const blockId = String(operation.blockId || '').trim() || 'unknown';
+        const position = String(operation.position || '');
+        if (operationType === 'insert') {
+            const content = String(operation.newContentForDisplay || operation.newContent || '');
+            return `${fileKey}|${operationType}|${position}|${blockId}|${content.length}|${content.slice(0, 160)}`;
+        }
+        return `${fileKey}|${operationType}|${position}|${blockId}`;
+    }
 
-        const snapshots = operations.map(operation => {
-            const { oldText, newText } = getEditOperationDisplayTexts(operation);
+    function mergeEditOperationsForDiff(operations: EditOperation[]): EditOperation[] {
+        if (!operations.length) return [];
+        const merged: EditOperation[] = [];
+        const keyToIndex = new Map<string, number>();
+        for (const operation of operations) {
+            const key = buildEditOperationAggregationKey(operation);
+            const existingIndex = keyToIndex.get(key);
+            if (existingIndex === undefined) {
+                merged.push(cloneEditOperation(operation));
+                keyToIndex.set(key, merged.length - 1);
+                continue;
+            }
+
+            const existing = merged[existingIndex];
+            if (!String(existing.oldContent || '').trim() && String(operation.oldContent || '').trim()) {
+                existing.oldContent = operation.oldContent;
+            }
+            if (
+                !String(existing.oldContentForDisplay || '').trim() &&
+                String(operation.oldContentForDisplay || '').trim()
+            ) {
+                existing.oldContentForDisplay = operation.oldContentForDisplay;
+            }
+
+            if (String(operation.newContent || '').trim()) {
+                existing.newContent = operation.newContent;
+            }
+            if (String(operation.newContentForDisplay || '').trim()) {
+                existing.newContentForDisplay = operation.newContentForDisplay;
+            }
+
+            if (operation.operationType === 'insert' && operation.position) {
+                existing.position = operation.position;
+            }
+        }
+        return merged;
+    }
+
+    function buildMergedEditOperationTexts(operations: EditOperation[]): {
+        oldText: string;
+        newText: string;
+        added: number;
+        removed: number;
+    } {
+        if (!operations.length) return { oldText: '', newText: '', added: 0, removed: 0 };
+
+        const mergedOperations = mergeEditOperationsForDiff(operations);
+        const focusedSummaries = mergedOperations
+            .map(operation => {
+                const { oldText, newText } = getEditOperationDisplayTexts(operation);
+                return buildFocusedDiffTexts(oldText, newText, 64);
+            })
+            .filter(summary => {
+                return (
+                    summary.added > 0 ||
+                    summary.removed > 0 ||
+                    String(summary.oldText || '').trim() ||
+                    String(summary.newText || '').trim()
+                );
+            });
+
+        if (!focusedSummaries.length) {
+            return { oldText: '', newText: '', added: 0, removed: 0 };
+        }
+
+        if (focusedSummaries.length === 1) {
+            const only = focusedSummaries[0];
             return {
-                operation,
-                oldText,
-                newText,
-                isSnapshot:
-                    operation.operationType === 'update' &&
-                    (isLikelyFullDocumentSnapshot(oldText) || isLikelyFullDocumentSnapshot(newText)),
+                oldText: only.oldText,
+                newText: only.newText,
+                added: only.added,
+                removed: only.removed,
             };
+        }
+
+        const oldParts: string[] = [];
+        const newParts: string[] = [];
+        let added = 0;
+        let removed = 0;
+        focusedSummaries.forEach((summary, index) => {
+            const sectionTitle = `@@ change ${index + 1} @@`;
+            oldParts.push(sectionTitle);
+            newParts.push(sectionTitle);
+            oldParts.push(summary.oldText || '');
+            newParts.push(summary.newText || '');
+            added += summary.added;
+            removed += summary.removed;
         });
 
-        const snapshotUpdates = snapshots.filter(item => item.isSnapshot);
-        if (snapshotUpdates.length > 0) {
-            const firstWithOld =
-                snapshotUpdates.find(item => String(item.oldText || '').trim().length > 0) ||
-                snapshotUpdates[0];
-            const lastWithNew =
-                [...snapshotUpdates].reverse().find(item => String(item.newText || '').trim().length > 0) ||
-                snapshotUpdates[snapshotUpdates.length - 1];
-            return {
-                oldText: String(firstWithOld.oldText || ''),
-                newText: String(lastWithNew.newText || ''),
-            };
-        }
-
-        if (operations.length === 1) {
-            return getEditOperationDisplayTexts(operations[0]);
-        }
-
-        const oldParts = snapshots
-            .map(item => String(item.oldText || '').trim())
-            .filter(Boolean);
-        const newParts = snapshots
-            .map(item => String(item.newText || '').trim())
-            .filter(Boolean);
         return {
-            oldText: oldParts.join('\n'),
-            newText: newParts.join('\n'),
+            oldText: oldParts.join('\n\n').trim(),
+            newText: newParts.join('\n\n').trim(),
+            added,
+            removed,
         };
     }
 
@@ -10731,11 +10846,8 @@
             const mergedTexts = buildMergedEditOperationTexts(group.operations);
             group.oldCombined = mergedTexts.oldText;
             group.newCombined = mergedTexts.newText;
-            const mergedLines = generateSimpleDiff(group.oldCombined, group.newCombined);
-            for (const line of mergedLines) {
-                if (line.type === 'added') group.added += 1;
-                if (line.type === 'removed') group.removed += 1;
-            }
+            group.added = mergedTexts.added;
+            group.removed = mergedTexts.removed;
         }
         return Array.from(grouped.values());
     }
@@ -10769,9 +10881,12 @@
     function viewEditOperationFileGroupDiff(group: EditOperationFileGroup) {
         if (!group.operations.length) return;
         const first = group.operations[0];
+        const hasOld = String(group.oldCombined || '').trim().length > 0;
+        const hasNew = String(group.newCombined || '').trim().length > 0;
+        const operationType: 'update' | 'insert' = hasOld || !hasNew ? 'update' : 'insert';
         currentDiffOperation = {
             ...first,
-            operationType: 'update',
+            operationType,
             blockId: first.blockId || group.fileLabel || 'unknown',
             filePath: group.fileLabel,
             status: first.status,
@@ -10789,6 +10904,22 @@
     ): { type: 'removed' | 'added' | 'unchanged'; line: string }[] {
         const lines = generateSimpleDiff(String(group.oldCombined || ''), String(group.newCombined || ''));
         return compactTraceDiffLines(lines, maxLines);
+    }
+
+    function getTraceEditOperationStats(
+        operations: EditOperation[] | null | undefined
+    ): { added: number; removed: number; changed: number } {
+        const fileGroups = buildEditOperationFileGroups(operations);
+        if (!fileGroups.length) {
+            return { added: 0, removed: 0, changed: 0 };
+        }
+        let added = 0;
+        let removed = 0;
+        for (const group of fileGroups) {
+            added += Number(group.added || 0);
+            removed += Number(group.removed || 0);
+        }
+        return { added, removed, changed: added + removed };
     }
 
     function buildCodexTraceKeyPart(trace: CodexTraceCall, traceIdx: number): string {
@@ -10982,6 +11113,9 @@
                                     {@const traceDiffTarget = trace.kind === 'diff'
                                         ? getTraceDiffFileNameSummary(trace.editOperations, 1)
                                         : ''}
+                                    {@const traceDiffStats = getTraceEditOperationStats(
+                                        trace.editOperations
+                                    )}
                                     <div
                                         class="ai-message__trace-item"
                                         class:ai-message__trace-item--diff={trace.kind === 'diff'}
@@ -11018,6 +11152,11 @@
                                                     title={traceDiffTarget}
                                                 >
                                                     {traceDiffTarget}
+                                                </span>
+                                            {/if}
+                                            {#if trace.kind === 'diff'}
+                                                <span class="ai-message__trace-item-diff-stats">
+                                                    +{traceDiffStats.added} -{traceDiffStats.removed}
                                                 </span>
                                             {/if}
                                             {#if trace.kind !== 'thinking'}
@@ -11219,6 +11358,9 @@
                                         traceIdx
                                     )}
                                     {@const traceExpanded = codexTraceExpanded[traceKey] ?? false}
+                                    {@const traceDiffStats = getTraceEditOperationStats(
+                                        trace.editOperations
+                                    )}
                                     <div class="ai-message__trace-item">
                                         <div
                                             class="ai-message__trace-item-header"
@@ -11234,6 +11376,11 @@
                                             <span class="ai-message__trace-item-name">
                                                 {trace.name || 'Tool'}
                                             </span>
+                                            {#if trace.editOperations && trace.editOperations.length > 0}
+                                                <span class="ai-message__trace-item-diff-stats">
+                                                    +{traceDiffStats.added} -{traceDiffStats.removed}
+                                                </span>
+                                            {/if}
                                             <span
                                                 class="ai-message__trace-item-status ai-message__trace-item-status--{trace.status || 'running'}"
                                             >
@@ -12132,6 +12279,9 @@
                                     {@const traceDiffTarget = trace.kind === 'diff'
                                         ? getTraceDiffFileNameSummary(trace.editOperations, 1)
                                         : ''}
+                                    {@const traceDiffStats = getTraceEditOperationStats(
+                                        trace.editOperations
+                                    )}
                                     <div
                                         class="ai-message__trace-stream-item"
                                         class:ai-message__trace-stream-item--diff={trace.kind === 'diff'}
@@ -12168,6 +12318,11 @@
                                                     title={traceDiffTarget}
                                                 >
                                                     {traceDiffTarget}
+                                                </span>
+                                            {/if}
+                                            {#if trace.kind === 'diff'}
+                                                <span class="ai-message__trace-item-diff-stats">
+                                                    +{traceDiffStats.added} -{traceDiffStats.removed}
                                                 </span>
                                             {/if}
                                             {#if trace.kind !== 'thinking'}
@@ -12397,6 +12552,9 @@
                                     )}
                                     {@const streamTraceExpanded =
                                         codexTraceExpanded[streamTraceKey] ?? false}
+                                    {@const traceDiffStats = getTraceEditOperationStats(
+                                        trace.editOperations
+                                    )}
                                     <div class="ai-message__trace-stream-item">
                                         <div
                                             class="ai-message__trace-item-header"
@@ -12412,6 +12570,11 @@
                                             <span class="ai-message__trace-item-name">
                                                 {trace.name || 'Tool'}
                                             </span>
+                                            {#if trace.editOperations && trace.editOperations.length > 0}
+                                                <span class="ai-message__trace-item-diff-stats">
+                                                    +{traceDiffStats.added} -{traceDiffStats.removed}
+                                                </span>
+                                            {/if}
                                             <span
                                                 class="ai-message__trace-item-status ai-message__trace-item-status--{trace.status || 'running'}"
                                             >
@@ -13355,6 +13518,10 @@
                             {currentDiffOperation.blockId}
                             <br />
                         {/if}
+                        <strong>Diff:</strong>
+                        +{getDiffLineStats(currentDiffOperation).added}
+                        -{getDiffLineStats(currentDiffOperation).removed}
+                        <br />
                         {#if currentDiffOperation.operationType === 'insert'}
                             <strong>{t('aiSidebar.edit.insertBlock')}:</strong>
                             {currentDiffOperation.position === 'before'
@@ -14288,6 +14455,13 @@
         gap: 6px;
         white-space: nowrap;
         text-transform: lowercase;
+    }
+
+    .ai-message__trace-item-diff-stats {
+        font-size: 10px;
+        color: var(--b3-theme-on-surface-light);
+        white-space: nowrap;
+        flex-shrink: 0;
     }
 
     .ai-message__trace-item-target {

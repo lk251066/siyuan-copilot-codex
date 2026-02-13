@@ -26,6 +26,7 @@ const https = require('node:https');
 const { URL } = require('node:url');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 
 const SIYUAN_API_URL = (process.env.SIYUAN_API_URL || 'http://127.0.0.1:6806').replace(/\/+$/, '');
 const SIYUAN_API_TOKEN = process.env.SIYUAN_API_TOKEN || '';
@@ -36,9 +37,22 @@ const SIYUAN_MCP_READ_ONLY = (() => {
 const DEFAULT_IMAGE_LIMIT = 12;
 const MAX_IMAGE_BYTES = Number.parseInt(process.env.SIYUAN_MCP_MAX_IMAGE_BYTES || '', 10) || 15 * 1024 * 1024;
 const REMOTE_FETCH_TIMEOUT_MS = Number.parseInt(process.env.SIYUAN_MCP_REMOTE_TIMEOUT_MS || '', 10) || 30000;
+const REMOTE_FETCH_MAX_RETRIES =
+    Number.parseInt(process.env.SIYUAN_MCP_REMOTE_MAX_RETRIES || '', 10) || 2;
 const REMOTE_USER_AGENT =
     process.env.SIYUAN_MCP_USER_AGENT ||
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+const REMOTE_PAGE_MIRROR_PREFIX =
+    process.env.SIYUAN_MCP_PAGE_MIRROR_PREFIX || 'https://r.jina.ai/http://';
+const RETRYABLE_ERROR_CODES = new Set([
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'ECONNREFUSED',
+    'EPIPE',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+    'EAI_AGAIN',
+]);
 
 function assertWriteAllowed(toolName) {
     if (!SIYUAN_MCP_READ_ONLY) return;
@@ -202,12 +216,192 @@ function guessMimeTypeFromName(fileName) {
     return 'application/octet-stream';
 }
 
-function ensureFileExt(fileName, mimeType) {
+function ensureFileExt(fileName, mimeType, options = {}) {
     const base = sanitizeFileName(fileName);
+    const forceByMime = options && options.forceByMime === true;
+    const inferredExt = guessExtensionFromMime(mimeType);
     const currentExt = path.extname(base).replace('.', '').toLowerCase();
-    if (currentExt) return base;
-    const inferredExt = guessExtensionFromMime(mimeType) || 'png';
-    return `${base}.${inferredExt}`;
+    if (currentExt) {
+        if (!forceByMime || !inferredExt || currentExt === inferredExt) {
+            return base;
+        }
+        const suffix = `.${currentExt}`;
+        const withoutExt = base.toLowerCase().endsWith(suffix)
+            ? base.slice(0, -suffix.length)
+            : base.slice(0, Math.max(0, base.length - (currentExt.length + 1)));
+        return `${withoutExt}.${inferredExt}`;
+    }
+    const finalExt = inferredExt || 'png';
+    return `${base}.${finalExt}`;
+}
+
+function detectImageTypeFromBuffer(buffer) {
+    const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+    if (buf.length >= 8) {
+        if (
+            buf[0] === 0x89 &&
+            buf[1] === 0x50 &&
+            buf[2] === 0x4e &&
+            buf[3] === 0x47 &&
+            buf[4] === 0x0d &&
+            buf[5] === 0x0a &&
+            buf[6] === 0x1a &&
+            buf[7] === 0x0a
+        ) {
+            return { mime: 'image/png', ext: 'png' };
+        }
+    }
+    if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+        return { mime: 'image/jpeg', ext: 'jpg' };
+    }
+    if (buf.length >= 6) {
+        const gifHead = buf.toString('ascii', 0, 6);
+        if (gifHead === 'GIF87a' || gifHead === 'GIF89a') {
+            return { mime: 'image/gif', ext: 'gif' };
+        }
+    }
+    if (buf.length >= 12) {
+        const riff = buf.toString('ascii', 0, 4);
+        const webp = buf.toString('ascii', 8, 12);
+        if (riff === 'RIFF' && webp === 'WEBP') {
+            return { mime: 'image/webp', ext: 'webp' };
+        }
+    }
+    if (buf.length >= 2 && buf[0] === 0x42 && buf[1] === 0x4d) {
+        return { mime: 'image/bmp', ext: 'bmp' };
+    }
+    if (buf.length >= 12) {
+        const ftyp = buf.toString('ascii', 4, 8);
+        const brand = buf.toString('ascii', 8, 12);
+        if (ftyp === 'ftyp' && (brand === 'avif' || brand === 'avis')) {
+            return { mime: 'image/avif', ext: 'avif' };
+        }
+    }
+
+    const textHead = buf.slice(0, 512).toString('utf8').trimStart().toLowerCase();
+    if (textHead.startsWith('<svg') || textHead.startsWith('<?xml')) {
+        if (textHead.includes('<svg')) {
+            return { mime: 'image/svg+xml', ext: 'svg' };
+        }
+    }
+    return null;
+}
+
+function compactPreviewText(buffer, limit = 160) {
+    const raw = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+    return raw
+        .slice(0, limit)
+        .toString('utf8')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, limit);
+}
+
+function isImageMimeType(mimeType) {
+    const value = String(mimeType || '').trim().toLowerCase();
+    return value.startsWith('image/');
+}
+
+function toSingleHeaderValue(headerValue) {
+    if (Array.isArray(headerValue)) return String(headerValue[0] || '');
+    return String(headerValue || '');
+}
+
+function decodeCompressedBody(buffer, contentEncoding) {
+    const body = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || Buffer.alloc(0));
+    const encoding = String(contentEncoding || '')
+        .split(',')
+        .map((item) => item.trim().toLowerCase())
+        .find(Boolean);
+    if (!encoding || encoding === 'identity') return body;
+    try {
+        if (encoding === 'gzip' || encoding === 'x-gzip') return zlib.gunzipSync(body);
+        if (encoding === 'deflate') {
+            try {
+                return zlib.inflateSync(body);
+            } catch {
+                return zlib.inflateRawSync(body);
+            }
+        }
+        if (encoding === 'br' && typeof zlib.brotliDecompressSync === 'function') {
+            return zlib.brotliDecompressSync(body);
+        }
+    } catch (err) {
+        const reason = err && err.message ? err.message : String(err);
+        throw new Error(`下载图片解压失败: ${encoding} ${reason}`);
+    }
+    return body;
+}
+
+function assertBinaryImageResponse(response) {
+    const rawBody = Buffer.from(response?.body || Buffer.alloc(0));
+    if (!rawBody.length) throw new Error('下载图片失败：空响应');
+    if (rawBody.length > MAX_IMAGE_BYTES) {
+        throw new Error(`图片过大，超过限制 ${MAX_IMAGE_BYTES} bytes`);
+    }
+
+    const rawContentType = toSingleHeaderValue(response?.headers?.['content-type']);
+    let normalizedContentType = rawContentType.split(';')[0].trim().toLowerCase();
+    const contentEncoding = toSingleHeaderValue(response?.headers?.['content-encoding']);
+    const body = decodeCompressedBody(rawBody, contentEncoding);
+    if (!body.length) throw new Error('下载图片失败：解压后为空');
+    if (body.length > MAX_IMAGE_BYTES) {
+        throw new Error(`图片过大，超过限制 ${MAX_IMAGE_BYTES} bytes`);
+    }
+    const detected = detectImageTypeFromBuffer(body);
+    const declaredImage = isImageMimeType(normalizedContentType);
+
+    if (!declaredImage && !detected) {
+        const preview = compactPreviewText(body, 180);
+        throw new Error(
+            `下载资源不是图片: content-type=${normalizedContentType || 'unknown'} preview=${preview || '<binary>'}`
+        );
+    }
+
+    if (
+        detected?.mime &&
+        (!normalizedContentType ||
+            normalizedContentType === 'application/octet-stream' ||
+            !declaredImage ||
+            normalizedContentType !== detected.mime)
+    ) {
+        normalizedContentType = detected.mime;
+    }
+
+    const contentLengthRaw = toSingleHeaderValue(response?.headers?.['content-length']);
+    const expectedLength = Number.parseInt(contentLengthRaw, 10);
+    if (
+        Number.isFinite(expectedLength) &&
+        expectedLength > 0 &&
+        expectedLength <= MAX_IMAGE_BYTES + 1024 * 1024 &&
+        rawBody.length !== expectedLength
+    ) {
+        throw new Error(`下载图片大小不完整: expected=${expectedLength} actual=${rawBody.length}`);
+    }
+
+    if (declaredImage && !detected) {
+        const preview = compactPreviewText(body, 220).toLowerCase();
+        const looksLikeHtml =
+            preview.startsWith('<!doctype html') ||
+            preview.startsWith('<html') ||
+            preview.includes('<body') ||
+            preview.includes('<head') ||
+            preview.includes('<title');
+        const declaredSvg = normalizedContentType.includes('svg');
+        const hasSvgTag = preview.includes('<svg');
+        if (looksLikeHtml || (declaredSvg && !hasSvgTag)) {
+            throw new Error(
+                `下载资源疑似非有效图片: declared=${normalizedContentType || 'unknown'} preview=${preview || '<binary>'}`
+            );
+        }
+    }
+
+    return {
+        body,
+        contentType: normalizedContentType || detected?.mime || '',
+        detectedMime: detected?.mime || '',
+        detectedExt: detected?.ext || '',
+    };
 }
 
 function normalizeAssetPath(assetPath) {
@@ -280,7 +474,44 @@ function resolveAbsoluteUrl(baseUrl, candidate) {
     }
 }
 
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
 async function httpRequestRaw(params) {
+    const maxRetries = Number.isFinite(params?.maxRetries)
+        ? Math.max(0, Number(params.maxRetries))
+        : REMOTE_FETCH_MAX_RETRIES;
+    let attempt = 0;
+    let lastErr = null;
+    while (attempt <= maxRetries) {
+        try {
+            const res = await httpRequestRawOnce(params);
+            const status = Number(res?.statusCode || 0);
+            if (
+                status &&
+                [408, 425, 429, 500, 502, 503, 504].includes(status) &&
+                attempt < maxRetries
+            ) {
+                await sleep(220 * (attempt + 1));
+                attempt += 1;
+                continue;
+            }
+            return res;
+        } catch (err) {
+            lastErr = err;
+            const code = String(err?.code || '').toUpperCase();
+            if (!RETRYABLE_ERROR_CODES.has(code) || attempt >= maxRetries) {
+                throw err;
+            }
+            await sleep(220 * (attempt + 1));
+            attempt += 1;
+        }
+    }
+    throw lastErr || new Error('请求失败');
+}
+
+async function httpRequestRawOnce(params) {
     const targetUrl = params?.url;
     const method = String(params?.method || 'GET').toUpperCase();
     const headers = { ...(params?.headers || {}) };
@@ -353,7 +584,7 @@ async function httpRequestRaw(params) {
     });
 }
 
-async function fetchRemoteText(url) {
+async function fetchRemoteText(url, options = {}) {
     const res = await httpRequestRaw({
         url,
         method: 'GET',
@@ -362,12 +593,46 @@ async function fetchRemoteText(url) {
             Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
         redirects: 4,
+        timeoutMs: Number.isFinite(options?.timeoutMs) ? Number(options.timeoutMs) : undefined,
+        maxRetries: Number.isFinite(options?.maxRetries) ? Number(options.maxRetries) : undefined,
     });
     const status = Number(res.statusCode || 0);
     if (status < 200 || status >= 300) {
         throw new Error(`拉取网页失败: HTTP ${status}`);
     }
     return String(res.body || Buffer.alloc(0)).toString('utf8');
+}
+
+function buildPageMirrorUrl(url) {
+    const parsed = validateRemoteUrl(url);
+    const withoutProtocol = parsed.href.replace(/^[a-z]+:\/\//i, '');
+    const prefixRaw = String(REMOTE_PAGE_MIRROR_PREFIX || 'https://r.jina.ai/http://');
+    const prefix = prefixRaw.endsWith('/') ? prefixRaw : `${prefixRaw}/`;
+    return `${prefix}${withoutProtocol}`;
+}
+
+async function fetchRemoteTextWithFallback(url) {
+    try {
+        const content = await fetchRemoteText(url, { maxRetries: 0, timeoutMs: 15000 });
+        return {
+            content,
+            source: 'origin',
+            fallbackUsed: false,
+            fallbackUrl: '',
+            warnings: [],
+        };
+    } catch (originErr) {
+        const warning = `origin fetch failed: ${originErr && originErr.message ? originErr.message : String(originErr)}`;
+        const mirrorUrl = buildPageMirrorUrl(url);
+        const content = await fetchRemoteText(mirrorUrl, { maxRetries: 1, timeoutMs: 15000 });
+        return {
+            content,
+            source: 'mirror',
+            fallbackUsed: true,
+            fallbackUrl: mirrorUrl,
+            warnings: [warning],
+        };
+    }
 }
 
 async function fetchRemoteBinary(url) {
@@ -386,13 +651,7 @@ async function fetchRemoteBinary(url) {
     if (status < 200 || status >= 300) {
         throw new Error(`下载图片失败: HTTP ${status}`);
     }
-    const body = Buffer.from(res.body || Buffer.alloc(0));
-    if (!body.length) throw new Error('下载图片失败：空响应');
-    if (body.length > MAX_IMAGE_BYTES) {
-        throw new Error(`图片过大，超过限制 ${MAX_IMAGE_BYTES} bytes`);
-    }
-    const contentType = String(res.headers?.['content-type'] || '').split(';')[0].trim();
-    return { body, contentType };
+    return assertBinaryImageResponse(res);
 }
 
 function extractImageUrlsFromHtml(pageUrl, html, limit) {
@@ -433,6 +692,21 @@ function extractImageUrlsFromHtml(pageUrl, html, limit) {
             tag.match(/\bdata-original\s*=\s*["']([^"']+)["']/i) ||
             tag.match(/\bsrc\s*=\s*["']([^"']+)["']/i);
         if (attrMatch?.[1]) pushCandidate(attrMatch[1]);
+    }
+
+    const markdownImgRegex = /!\[[^\]]*\]\(([^)\s]+(?:\s+"[^"]*")?)\)/gi;
+    let markdownMatch;
+    while ((markdownMatch = markdownImgRegex.exec(html)) !== null) {
+        const target = String(markdownMatch[1] || '')
+            .trim()
+            .replace(/\s+"[^"]*"$/, '');
+        if (target) pushCandidate(target);
+    }
+
+    const directImgUrlRegex = /(https?:\/\/[^\s"'<>]+?\.(?:png|jpe?g|gif|webp|svg)(?:\?[^\s"'<>]*)?)/gi;
+    let directImgMatch;
+    while ((directImgMatch = directImgUrlRegex.exec(html)) !== null) {
+        pushCandidate(directImgMatch[1]);
     }
 
     const max = Number.isFinite(limit) ? Math.max(1, Math.min(Number(limit), 50)) : DEFAULT_IMAGE_LIMIT;
@@ -623,18 +897,40 @@ async function importImageFromUrl(params) {
     const downloaded = await fetchRemoteBinary(urlObj.href);
     const mimeType =
         String(params?.mimeType || '').trim() ||
+        String(downloaded.detectedMime || '').trim() ||
         String(downloaded.contentType || '').trim() ||
         guessMimeTypeFromName(urlObj.pathname);
     const rawName = params?.fileName
         ? String(params.fileName)
         : decodeURIComponent(path.basename(urlObj.pathname || '') || `image-${Date.now()}`);
-    const finalName = ensureFileExt(rawName, mimeType);
-    const uploaded = await uploadImageBufferToSiyuan({
+    const detectedExt = String(downloaded.detectedExt || '').trim().toLowerCase();
+    const inferredExt = detectedExt || guessExtensionFromMime(mimeType);
+    const finalName = ensureFileExt(rawName, mimeType, { forceByMime: true });
+    let uploaded = await uploadImageBufferToSiyuan({
         fileName: finalName,
         mimeType,
         fileBuffer: downloaded.body,
         assetsDirPath: String(params?.assetsDirPath || ''),
     });
+
+    if (inferredExt) {
+        const uploadedExt = path.extname(String(uploaded.assetPath || '')).replace('.', '').toLowerCase();
+        if (uploadedExt && uploadedExt !== inferredExt) {
+            const retryName = ensureFileExt(path.basename(finalName, path.extname(finalName)), mimeType, {
+                forceByMime: true,
+            });
+            try {
+                uploaded = await uploadImageBufferToSiyuan({
+                    fileName: retryName,
+                    mimeType,
+                    fileBuffer: downloaded.body,
+                    assetsDirPath: String(params?.assetsDirPath || ''),
+                });
+            } catch {
+                // keep the first uploaded asset path to avoid turning a usable result into a hard failure
+            }
+        }
+    }
     return {
         sourceUrl: urlObj.href,
         fileName: finalName,
@@ -930,8 +1226,8 @@ async function tool_siyuan_extract_page_images(args) {
         : DEFAULT_IMAGE_LIMIT;
 
     const page = validateRemoteUrl(pageUrl);
-    const html = await fetchRemoteText(page.href);
-    const imageUrls = extractImageUrlsFromHtml(page.href, html, limit);
+    const fetchedPage = await fetchRemoteTextWithFallback(page.href);
+    const imageUrls = extractImageUrlsFromHtml(page.href, fetchedPage.content, limit);
     if (!download) {
         return {
             ok: true,
@@ -939,6 +1235,10 @@ async function tool_siyuan_extract_page_images(args) {
             url: page.href,
             count: imageUrls.length,
             imageUrls,
+            source: fetchedPage.source,
+            fallbackUsed: fetchedPage.fallbackUsed,
+            fallbackUrl: fetchedPage.fallbackUrl,
+            warnings: fetchedPage.warnings,
         };
     }
 
@@ -969,6 +1269,10 @@ async function tool_siyuan_extract_page_images(args) {
             count: successAssets.length,
             assets: successAssets,
             failures: imported.filter((item) => item && item.error),
+            source: fetchedPage.source,
+            fallbackUsed: fetchedPage.fallbackUsed,
+            fallbackUrl: fetchedPage.fallbackUrl,
+            warnings: fetchedPage.warnings,
         };
     }
 
@@ -993,6 +1297,10 @@ async function tool_siyuan_extract_page_images(args) {
         operation: inserted.operation,
         result: inserted.result,
         imageMarkdown: inserted.imageMarkdown,
+        source: fetchedPage.source,
+        fallbackUsed: fetchedPage.fallbackUsed,
+        fallbackUrl: fetchedPage.fallbackUrl,
+        warnings: fetchedPage.warnings,
     };
 }
 
@@ -1009,8 +1317,8 @@ async function tool_siyuan_capture_webpage_screenshot(args) {
     const candidates = [
         `https://s.wordpress.com/mshots/v1/${encodeURIComponent(page.href)}?w=${width}`,
         fullPage
-            ? `https://image.thum.io/get/fullpage/${encodeURIComponent(page.href)}`
-            : `https://image.thum.io/get/width/${width}/${encodeURIComponent(page.href)}`,
+            ? `https://image.thum.io/get/fullpage/${page.href}`
+            : `https://image.thum.io/get/width/${width}/${page.href}`,
     ];
 
     let imported = null;
@@ -1019,7 +1327,7 @@ async function tool_siyuan_capture_webpage_screenshot(args) {
         try {
             imported = await importImageFromUrl({
                 url: candidate,
-                fileName: `screenshot-${Date.now()}.png`,
+                fileName: `screenshot-${Date.now()}`,
                 assetsDirPath: args?.assetsDirPath,
             });
             imported.sourcePage = page.href;
@@ -1604,5 +1912,7 @@ rl.on('line', (line) => {
 });
 
 rl.on('close', () => {
-    process.exit(0);
+    chain.finally(() => {
+        process.exit(0);
+    });
 });

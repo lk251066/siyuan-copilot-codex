@@ -1,4 +1,12 @@
 ## Unreleased / 20260213
+- 🛠️ 聊天时间线优化：思考/工具中的 Diff 条目头部默认显示 `+/-` 行数（历史与流式一致）
+- 🛠️ 修复文件级 Diff 展示：单项 Diff 改为“仅显示变更相关片段”，不再把整篇全文直接塞进卡片/弹窗
+- 🛠️ 修复全局 Diff 合并：按文件先聚合同类编辑操作，再按操作级差异累计 `+/-` 行数，避免拼接全文导致统计和内容错位
+- 🛠️ 修复插入场景 Diff 弹窗：仅新增内容时改为 `insert` 展示，不再误显示为 loading
+- 🛠️ 图片抓取稳定性修复：`siyuan_extract_page_images` 增加瞬时网络错误重试与页面镜像兜底（`r.jina.ai`），并在返回中标注 `fallbackUsed` 与 `warnings`
+- 🛡️ 图片下载校验增强：远程响应若非真实图片（如 `text/html` 错误页）将直接报错，避免把错误页面当图片写入资源库
+- 🛠️ 截图文件修复：`siyuan_capture_webpage_screenshot` 回退到 `thum.io` 时修正 URL 拼接；截图文件名按真实 MIME 自动补齐扩展名
+- 🛠️ MCP 进程收尾修复：stdin 关闭时等待在途请求处理完成后再退出，避免慢请求场景下响应丢失
 - 🧹 聊天区下线“保存到笔记/编辑消息”按钮与对应逻辑、弹窗、样式，统一改为工具驱动写回
 - ✨ MCP 新增 Codex 图片链路工具：`siyuan_import_image_urls`、`siyuan_extract_page_images`、`siyuan_capture_webpage_screenshot`、`siyuan_insert_images_to_note`
 - 🎨 差异弹窗移除“对比模式/分栏模式”切换，仅保留分栏视图，并在分栏内按行高亮新增/删除
