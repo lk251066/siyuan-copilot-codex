@@ -9525,8 +9525,9 @@
         rightType: 'added' | 'unchanged' | 'empty';
     };
 
-    function generateSplitDiffRows(oldText: string, newText: string): SplitDiffRow[] {
-        const lines = generateSimpleDiff(oldText, newText);
+    function generateSplitDiffRows(oldText: string, newText: string, maxLines = 120): SplitDiffRow[] {
+        const fullLines = generateSimpleDiff(oldText, newText);
+        const lines = compactTraceDiffLines(fullLines, maxLines);
         const rows: SplitDiffRow[] = [];
         for (let i = 0; i < lines.length; i += 1) {
             const line = lines[i];
@@ -13588,7 +13589,8 @@
                         </div>
                         {@const splitRows = generateSplitDiffRows(
                             currentDiffOperation.oldContent,
-                            currentDiffOperation.newContent
+                            currentDiffOperation.newContent,
+                            140
                         )}
                         <div class="ai-sidebar__diff-split ai-sidebar__diff-split--with-diff">
                             <div class="ai-sidebar__diff-split-column">

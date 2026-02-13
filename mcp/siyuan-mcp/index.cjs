@@ -411,6 +411,12 @@ function normalizeAssetPath(assetPath) {
     return `/${raw}`;
 }
 
+function resolveAssetsDirPath(inputPath) {
+    const raw = String(inputPath || '').trim();
+    if (!raw) return 'assets';
+    return raw.replace(/^\/+/, '');
+}
+
 function normalizeDocFilePath(box, docPath) {
     const notebook = String(box || '').trim();
     const p = String(docPath || '').trim().replace(/^\/+/, '');
@@ -728,12 +734,13 @@ function buildImageMarkdown(assets, altPrefix = 'image') {
 async function uploadImageBufferToSiyuan({ fileName, mimeType, fileBuffer, assetsDirPath = '' }) {
     const finalName = ensureFileExt(fileName, mimeType);
     const finalMime = String(mimeType || '').trim() || guessMimeTypeFromName(finalName);
+    const normalizedAssetsDirPath = resolveAssetsDirPath(assetsDirPath);
     const boundary = `----siyuan-mcp-${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
 
     const head = Buffer.from(
         `--${boundary}\r\n` +
             `Content-Disposition: form-data; name="assetsDirPath"\r\n\r\n` +
-            `${String(assetsDirPath || '')}\r\n` +
+            `${normalizedAssetsDirPath}\r\n` +
             `--${boundary}\r\n` +
             `Content-Disposition: form-data; name="file[]"; filename="${finalName}"\r\n` +
             `Content-Type: ${finalMime}\r\n\r\n`,
@@ -910,7 +917,7 @@ async function importImageFromUrl(params) {
         fileName: finalName,
         mimeType,
         fileBuffer: downloaded.body,
-        assetsDirPath: String(params?.assetsDirPath || ''),
+        assetsDirPath: resolveAssetsDirPath(params?.assetsDirPath),
     });
 
     if (inferredExt) {
@@ -924,7 +931,7 @@ async function importImageFromUrl(params) {
                     fileName: retryName,
                     mimeType,
                     fileBuffer: downloaded.body,
-                    assetsDirPath: String(params?.assetsDirPath || ''),
+                    assetsDirPath: resolveAssetsDirPath(params?.assetsDirPath),
                 });
             } catch {
                 // keep the first uploaded asset path to avoid turning a usable result into a hard failure
