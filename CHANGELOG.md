@@ -1,3 +1,18 @@
+## Unreleased / 20260213
+- 🧹 聊天区下线“保存到笔记/编辑消息”按钮与对应逻辑、弹窗、样式，统一改为工具驱动写回
+- ✨ MCP 新增 Codex 图片链路工具：`siyuan_import_image_urls`、`siyuan_extract_page_images`、`siyuan_capture_webpage_screenshot`、`siyuan_insert_images_to_note`
+- 🎨 差异弹窗移除“对比模式/分栏模式”切换，仅保留分栏视图，并在分栏内按行高亮新增/删除
+- 🗂️ 差异卡片颗粒度调整为“笔记文件”：工具/时间线差异按文件聚合展示，不再按块 ID 展示
+- 🛠️ 新增块 ID 到笔记文件路径自动解析与缓存：缺少 `filePath` 时回填为 `notebook/path.sy`
+- 🎨 更新插件封面图标：重绘 `icon.png` 与 `preview.png`，统一为 Codex 视觉风格
+- 🎨 Execution 时间线中的 `Diff` 条目改为独立视觉样式（独立色条/标签/内容区），不再与 Thought/Tool 共用同一行样式
+- 🛠️ 补齐 Codex 工具差异预览展示路径：历史 `Tool Calls` 与流式 `Tool Calls` 现在和 `Execution` 时间线一致，均支持“工具项下方内联差异预览（可展开/收起）+ Diff 弹窗”
+- 🛠️ Codex 时间线新增独立 `Diff` 条目：编辑差异与 Thought/Search/Tool 同级按时序展示（Tool 完成后自动追加）
+- 🎨 流式回复区新增常驻“运行中...”指示（省略号跳动），回复过程中底部持续可见
+- 🧹 移除思考/搜索/工具内容“仅显示最近片段”截断逻辑，改为完整展示（含流式思考详情）
+- 🔄 Codex 一次答复完整结束后自动刷新当前笔记页面（仅在收尾触发，不在流式中途触发）
+- 🎨 最终差异区改为按文件聚合简表：仅显示文件名与差异行数（Δ/+/-），去掉聊天区双栏对比展示，保留按文件查看/应用/拒绝
+
 ## v1.6.28 / 20260212
 - 🔄 Codex 模型列表来源切换为本地配置：读取 `~/.codex/config.toml` 与工作目录 `.codex/config.toml`，不再依赖远端模型接口
 - ✨ 新增 Codex “思考长度”配置：支持 `low / medium / high / xhigh`，并在运行时透传 `model_reasoning_effort`

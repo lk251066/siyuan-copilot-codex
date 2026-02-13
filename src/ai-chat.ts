@@ -34,6 +34,7 @@ export interface MessageContent {
 export interface EditOperation {
     operationType?: 'update' | 'insert'; // 操作类型：update=更新块，insert=插入块，默认为update
     blockId: string; // update时为要更新的块ID，insert时为参考块ID
+    filePath?: string; // 可选：关联文件路径（用于按文件聚合展示差异）
     newContent: string;
     oldContent?: string; // kramdown格式的旧内容，用于实际应用编辑
     oldContentForDisplay?: string; // Markdown格式的旧内容，用于显示差异
@@ -41,6 +42,19 @@ export interface EditOperation {
     status: 'pending' | 'applied' | 'rejected';
     // insert操作的额外参数
     position?: 'before' | 'after'; // 插入位置：before=在blockId之前，after=在blockId之后
+}
+
+export interface CodexTraceCall {
+    id: string;
+    kind: 'thinking' | 'tool' | 'search' | 'diff';
+    name?: string;
+    status?: 'running' | 'completed' | 'error';
+    eventType?: string;
+    input?: string;
+    output?: string;
+    query?: string;
+    text?: string;
+    editOperations?: EditOperation[];
 }
 
 export interface ContextDocument {
@@ -62,6 +76,9 @@ export interface Message {
     tool_call_id?: string; // Tool 结果的 call_id
     name?: string; // Tool 的名称
     finalReply?: string; // Agent模式：工具调用后的最终回复
+    codexTimeline?: CodexTraceCall[]; // Codex 执行时间线（按真实顺序）
+    codexToolCalls?: CodexTraceCall[]; // Codex 工具调用轨道
+    codexSearchCalls?: CodexTraceCall[]; // Codex 搜索轨道
     multiModelResponses?: Array<{
         provider: string;
         modelId: string;

@@ -38,6 +38,7 @@ const WEBVIEW_HISTORY_FILE = "webview-history.json";
 const WEBAPP_ICON_DIR = "/data/storage/petal/siyuan-plugin-copilot/webappIcon";
 const MAX_HISTORY_COUNT = 200;
 const ADD_CHAT_CONTEXT_EVENT = "siyuan-copilot:add-chat-context";
+const DOCK_ICON_ID = "iconCode";
 const ICON_COPILOT_ID = "iconCopilotCodex";
 const ICON_MODEL_SETTING_ID = "iconModelSettingCodex";
 const ICON_TRANSLATE_ID = "iconTranslateCodex";
@@ -2088,11 +2089,11 @@ export default class PluginSample extends Plugin {
             config: {
                 position: "RightBottom",
                 size: { width: 400, height: 0 },
-                icon: ICON_COPILOT_ID,
-                title: "Copilot",
+                icon: DOCK_ICON_ID,
+                title: t("aiSidebar.title") || "Codex",
             },
             data: {
-                text: "Copilot"
+                text: t("aiSidebar.title") || "Codex"
             },
             type: AI_SIDEBAR_TYPE,
             init: (dock) => {
@@ -2349,12 +2350,12 @@ export default class PluginSample extends Plugin {
         //当插件被禁用的时候，会自动调用这个函数
         this.unregisterAddChatContextMenuHandlers();
         this.teardownDomMenuFallback();
-        console.log("Copilot onunload");
+        console.log("Codex onunload");
     }
 
     async uninstall() {
         //当插件被卸载的时候，会自动调用这个函数
-        console.log("Copilot uninstall");
+        console.log("Codex uninstall");
         // 删除配置文件
         await this.removeData(SETTINGS_FILE);
         await this.removeData(WEBVIEW_HISTORY_FILE);
@@ -2713,8 +2714,8 @@ export default class PluginSample extends Plugin {
         openTab({
             app: this.app,
             custom: {
-                title: 'Siyuan Copilot',
-                icon: ICON_COPILOT_ID,
+                title: t("aiSidebar.title") || "Codex",
+                icon: DOCK_ICON_ID,
                 id: tabId,
                 data: {
                     time: Date.now()
@@ -2731,8 +2732,8 @@ export default class PluginSample extends Plugin {
         const tab = openTab({
             app: this.app,
             custom: {
-                title: 'Siyuan Copilot',
-                icon: ICON_COPILOT_ID,
+                title: t("aiSidebar.title") || "Codex",
+                icon: DOCK_ICON_ID,
                 id: tabId,
             }
         });

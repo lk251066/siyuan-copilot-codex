@@ -8,6 +8,7 @@
         type ToolCall,
         type ContextDocument,
         type ThinkingEffort,
+        type CodexTraceCall,
         isSupportedThinkingGeminiModel,
         isSupportedThinkingClaudeModel,
         isGemini3Model,
@@ -27,11 +28,6 @@
         getBlockKramdown,
         getBlockByID,
         getFileBlob,
-        renderSprig,
-        createDocWithMd,
-        lsNotebooks,
-        searchDocs,
-        getHPathByID,
         putFile,
         removeFile,
     } from './api';
@@ -95,8 +91,14 @@
     let isLoading = false;
     let streamingMessage = '';
     let streamingThinking = ''; // 流式思考内容
+    let streamingCodexTimeline: CodexTraceCall[] = []; // Codex 流式时间线（按真实顺序）
+    let streamingToolCalls: CodexTraceCall[] = []; // 流式工具调用轨道
+    let streamingSearchCalls: CodexTraceCall[] = []; // 流式搜索轨道
     let isThinkingPhase = false; // 是否在思考阶段
     let streamingThinkingExpanded = false;
+    let streamingCodexTimelineExpanded = true;
+    let streamingToolCallsExpanded = true;
+    let streamingSearchCallsExpanded = true;
     let settings: any = {};
     let messagesContainer: HTMLElement;
     let textareaElement: HTMLTextAreaElement;
@@ -105,11 +107,6 @@
 
     // 思考过程折叠状态管理
     let thinkingCollapsed: Record<number, boolean> = {};
-
-    // 消息编辑状态
-    let editingMessageIndex: number | null = null;
-    let editingMessageContent = '';
-    let isEditDialogOpen = false;
 
     // 右键菜单状态
     let contextMenuVisible = false;
@@ -222,8 +219,6 @@
     let autoApproveEdit = false; // 自动批准编辑操作
     let isDiffDialogOpen = false;
     let currentDiffOperation: EditOperation | null = null;
-    type DiffViewMode = 'diff' | 'split';
-    let diffViewMode: DiffViewMode = 'diff'; // diff查看模式：diff或split
     $: if (isCodexMode && chatMode === 'edit') {
         chatMode = 'agent';
     }
@@ -1118,6 +1113,7 @@
     let toolCallsInProgress: Set<string> = new Set(); // 正在执行的工具调用ID
     let toolCallsExpanded: Record<string, boolean> = {}; // 工具调用是否展开，默认折叠
     let toolCallResultsExpanded: Record<string, boolean> = {}; // 工具结果是否展开，默认折叠
+    let codexTraceExpanded: Record<string, boolean> = {}; // Codex 轨道明细折叠状态
     let pendingToolCall: ToolCall | null = null; // 待批准的工具调用
     let isToolApprovalDialogOpen = false; // 工具批准对话框是否打开
     let isToolConfigLoaded = false; // 标记工具配置是否已加载
@@ -1146,23 +1142,6 @@
     let selectedAnswerIndex: number | null = null; // 用户选择的答案索引
     let multiModelLayout: 'card' | 'tab' = 'tab'; // 多模型布局模式：card 或 tab（会在初始化时从设置读取）
     let selectedTabIndex: number = 0; // 当前选中的页签索引
-
-    // 保存到笔记相关
-    let isSaveToNoteDialogOpen = false; // 保存到笔记对话框是否打开
-    let saveDocumentName = ''; // 保存的文档名称
-    let saveNotebookId = ''; // 保存的笔记本ID
-    let savePath = ''; // 保存的路径
-    let savePathSearchKeyword = ''; // 路径搜索关键词
-    let savePathSearchResults: any[] = []; // 路径搜索结果
-    let isSavePathSearching = false; // 是否正在搜索路径
-    let savePathSearchTimeout: number | null = null; // 路径搜索防抖
-    let showSavePathDropdown = false; // 是否显示路径下拉框
-    let currentDocPath = ''; // 当前文档路径
-    let currentDocNotebookId = ''; // 当前文档所在笔记本ID
-    let hasDefaultPath = false; // 是否有全局默认路径
-    let saveDialogNotebooks: any[] = []; // 保存对话框中的笔记本列表
-    let saveMessageIndex: number | null = null; // 要保存的单个消息索引（null表示保存整个会话）
-    let openAfterSave = true; // 保存后是否打开笔记
 
     // 订阅设置变化
     let unsubscribe: () => void;
@@ -1521,6 +1500,9 @@
         thinkingCollapsed;
         streamingMessage;
         streamingThinking;
+        streamingCodexTimeline;
+        streamingToolCalls;
+        streamingSearchCalls;
 
         tick().then(async () => {
             if (messagesContainer) {
@@ -1539,6 +1521,15 @@
 
     $: if (!streamingThinking) {
         streamingThinkingExpanded = false;
+    }
+    $: if (!streamingCodexTimeline.length) {
+        streamingCodexTimelineExpanded = false;
+    }
+    $: if (!streamingToolCalls.length) {
+        streamingToolCallsExpanded = false;
+    }
+    $: if (!streamingSearchCalls.length) {
+        streamingSearchCallsExpanded = false;
     }
 
     // 处理粘贴事件
@@ -3595,6 +3586,605 @@
         return null;
     }
 
+    function stripKramdownIdMarkersForDisplay(content: string): string {
+        return String(content || '').replace(/\{:\s*id="[^"]+"\s*\}/g, '').trim();
+    }
+
+    function normalizeEditOperationFilePath(rawPath: unknown): string {
+        const raw = String(rawPath || '').trim();
+        if (!raw) return '';
+        return raw.replace(/\\/g, '/');
+    }
+
+    function safeJsonParse(raw: unknown): any | null {
+        if (typeof raw !== 'string') return null;
+        const trimmed = raw.trim();
+        if (!trimmed) return null;
+        try {
+            return JSON.parse(trimmed);
+        } catch {
+            const fenced = trimmed.match(/```json\s*([\s\S]*?)\s*```/i);
+            if (fenced && fenced[1]) {
+                try {
+                    return JSON.parse(fenced[1].trim());
+                } catch {
+                    return null;
+                }
+            }
+            return null;
+        }
+    }
+
+    function normalizeCodexToolPayload(rawOutput: unknown): any {
+        let payload: any = rawOutput;
+        if (typeof payload === 'string') {
+            payload = safeJsonParse(payload) ?? payload;
+        }
+        if (payload && typeof payload === 'object' && Array.isArray(payload.content)) {
+            const textItem = payload.content.find((item: any) => item?.type === 'text');
+            if (textItem && typeof textItem.text === 'string') {
+                const inner = safeJsonParse(textItem.text);
+                if (inner && typeof inner === 'object') {
+                    payload = inner;
+                }
+            }
+        }
+        return payload;
+    }
+
+    function normalizeCodexToolArgs(rawArgs: unknown): Record<string, any> {
+        if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {
+            return rawArgs as Record<string, any>;
+        }
+        const parsed = safeJsonParse(rawArgs);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return parsed as Record<string, any>;
+        }
+        return {};
+    }
+
+    function firstNonEmptyString(...values: unknown[]): string {
+        for (const value of values) {
+            const text = String(value || '').trim();
+            if (text) return text;
+        }
+        return '';
+    }
+
+    function normalizeToolNameCandidate(raw: unknown): string {
+        const text = String(raw || '').trim();
+        if (!text) return '';
+        const siyuanMatch = text.match(/\bsiyuan_[a-z0-9_]+\b/i);
+        if (siyuanMatch?.[0]) return siyuanMatch[0].toLowerCase();
+        return text;
+    }
+
+    function isGenericToolName(name: string): boolean {
+        const normalized = String(name || '').trim().toLowerCase();
+        if (!normalized) return true;
+        return (
+            normalized === 'tool' ||
+            normalized === 'search' ||
+            normalized === 'function' ||
+            normalized === 'mcp' ||
+            normalized === 'mcp_tool' ||
+            normalized === 'tool_call' ||
+            normalized === 'function_call' ||
+            normalized === 'mcp_tool_call' ||
+            normalized === 'mcp_tool_result' ||
+            normalized === 'call_tool'
+        );
+    }
+
+    function extractMcpServerNameFromUnknown(value: any): string {
+        if (!value || typeof value !== 'object') return '';
+        return firstNonEmptyString(
+            value.server,
+            value.server_name,
+            value.serverName,
+            value.mcp_server,
+            value.mcpServer,
+            value.mcp?.server,
+            value.mcp?.server_name,
+            value.item?.server,
+            value.item?.server_name,
+            value.item?.serverName,
+            value.item?.mcp_server,
+            value.item?.mcpServer,
+            value.item?.mcp?.server,
+            value.item?.mcp?.server_name
+        );
+    }
+
+    function extractSiyuanToolNameFromStructuredData(value: any): string {
+        if (!value || typeof value !== 'object') return '';
+        const candidate = normalizeToolNameCandidate(
+            firstNonEmptyString(
+                value.tool,
+                value.tool_name,
+                value.toolName,
+                value.mcp_tool_name,
+                value.server_tool_name,
+                value.mcp?.tool_name,
+                value.mcp?.toolName,
+                value.operation?.tool,
+                value.operation?.tool_name,
+                value.operation?.name,
+                value.params?.tool,
+                value.params?.tool_name,
+                value.params?.name,
+                value.arguments?.tool,
+                value.arguments?.tool_name,
+                value.arguments?.name,
+                value.result?.tool,
+                value.result?.tool_name,
+                value.result?.operation?.tool,
+                value.output?.tool,
+                value.output?.tool_name,
+                value.output?.operation?.tool,
+                value.item?.tool,
+                value.item?.tool_name,
+                value.item?.toolName,
+                value.item?.mcp_tool_name,
+                value.item?.server_tool_name,
+                value.item?.mcp?.tool_name,
+                value.item?.mcp?.toolName,
+                value.item?.operation?.tool,
+                value.item?.operation?.tool_name,
+                value.item?.operation?.name
+            )
+        );
+        return candidate.startsWith('siyuan_') ? candidate : '';
+    }
+
+    function extractSiyuanToolNameByRegex(value: unknown): string {
+        const text = stringifyCodexTraceValue(value, 12000);
+        if (!text) return '';
+        const match = text.match(/\bsiyuan_[a-z0-9_]+\b/i);
+        return match?.[0] ? match[0].toLowerCase() : '';
+    }
+
+    function extractToolNameFromUnknown(value: any): string {
+        if (!value || typeof value !== 'object') return '';
+        const directName = normalizeToolNameCandidate(
+            firstNonEmptyString(
+                value.tool_name,
+                value.toolName,
+                value.mcp_tool_name,
+                value.server_tool_name,
+                value.mcp?.tool_name,
+                value.mcp?.toolName,
+                value.name,
+                value.function?.name,
+                value.tool,
+                value.tool?.name,
+                value.tool?.function?.name,
+                value.call?.name,
+                value.item?.tool_name,
+                value.item?.toolName,
+                value.item?.mcp_tool_name,
+                value.item?.server_tool_name,
+                value.item?.mcp?.tool_name,
+                value.item?.mcp?.toolName,
+                value.item?.name,
+                value.item?.function?.name,
+                value.item?.tool,
+                value.item?.tool?.name,
+                value.item?.tool?.function?.name,
+                value.item?.call?.name
+            )
+        );
+        if (directName.startsWith('siyuan_')) return directName;
+        if (directName && !isGenericToolName(directName)) return directName;
+
+        const argsRaw = extractToolArgsFromUnknown(value);
+        const outputRaw = extractToolOutputFromUnknown(value);
+        const normalizedArgs = normalizeCodexToolArgs(argsRaw);
+        const normalizedOutput = normalizeCodexToolPayload(outputRaw);
+        const serverName = String(extractMcpServerNameFromUnknown(value)).toLowerCase();
+        const eventType = firstNonEmptyString(value.type, value.item?.type).toLowerCase();
+        const likelyMcp = serverName.includes('mcp') || eventType.includes('mcp');
+        const likelySiyuan =
+            serverName.includes('siyuan') ||
+            extractSiyuanToolNameFromStructuredData(value).startsWith('siyuan_') ||
+            extractSiyuanToolNameFromStructuredData(value.item).startsWith('siyuan_');
+
+        const structuredToolName = firstNonEmptyString(
+            extractSiyuanToolNameFromStructuredData(value),
+            extractSiyuanToolNameFromStructuredData(value.item),
+            extractSiyuanToolNameFromStructuredData(normalizedArgs),
+            extractSiyuanToolNameFromStructuredData(normalizedOutput)
+        );
+        if (structuredToolName && (likelySiyuan || likelyMcp || isGenericToolName(directName))) {
+            return structuredToolName;
+        }
+
+        const regexToolName = firstNonEmptyString(
+            extractSiyuanToolNameByRegex(argsRaw),
+            extractSiyuanToolNameByRegex(outputRaw),
+            extractSiyuanToolNameByRegex(value),
+            extractSiyuanToolNameByRegex(value.item)
+        );
+        if (regexToolName && (likelySiyuan || likelyMcp || isGenericToolName(directName))) {
+            return regexToolName;
+        }
+
+        return directName;
+    }
+
+    function extractToolArgsFromUnknown(value: any): unknown {
+        if (!value || typeof value !== 'object') return undefined;
+        return (
+            value.arguments ??
+            value.args ??
+            value.input ??
+            value.query ??
+            value.function?.arguments ??
+            value.tool?.arguments ??
+            value.tool?.function?.arguments ??
+            value.call?.arguments ??
+            value.item?.arguments ??
+            value.item?.args ??
+            value.item?.input ??
+            value.item?.query ??
+            value.item?.function?.arguments ??
+            value.item?.tool?.arguments ??
+            value.item?.tool?.function?.arguments ??
+            value.item?.call?.arguments
+        );
+    }
+
+    function extractToolOutputFromUnknown(value: any): unknown {
+        if (!value || typeof value !== 'object') return undefined;
+        return value.output ?? value.result ?? value.content ?? value.item?.output ?? value.item?.result;
+    }
+
+    function extractToolCallIdFromUnknown(value: any): string {
+        if (!value || typeof value !== 'object') return '';
+        return firstNonEmptyString(
+            value.call_id,
+            value.callId,
+            value.id,
+            value.tool_call_id,
+            value.toolCallId,
+            value.item?.call_id,
+            value.item?.callId,
+            value.item?.id,
+            value.item?.tool_call_id,
+            value.item?.toolCallId
+        );
+    }
+
+    function stringifyCodexTraceValue(value: unknown, maxLen = 4000): string {
+        if (value === undefined || value === null) return '';
+        let text = '';
+        if (typeof value === 'string') {
+            text = value;
+        } else {
+            try {
+                text = JSON.stringify(value, null, 2);
+            } catch {
+                text = String(value);
+            }
+        }
+        const normalized = normalizeThinkingText(text).trim();
+        if (!normalized) return '';
+        if (normalized.length <= maxLen) return normalized;
+        return `${normalized.slice(0, maxLen)}\n...(truncated)...`;
+    }
+
+    function extractCodexSearchQuery(argsRaw: unknown): string {
+        const args = normalizeCodexToolArgs(argsRaw);
+        const query = firstNonEmptyString(
+            args.q,
+            args.query,
+            args.keyword,
+            args.keywords,
+            args.search,
+            args.searchTerm,
+            args.text,
+            args.term,
+            args.pattern
+        );
+        if (query) return query;
+        if (typeof argsRaw === 'string') {
+            const compact = normalizeThinkingText(argsRaw).trim();
+            if (compact.length > 0 && compact.length <= 240) return compact;
+        }
+        return '';
+    }
+
+    function isCodexSearchTrace(params: {
+        toolName?: string;
+        eventType?: string;
+        itemType?: string;
+        argsRaw?: unknown;
+    }): boolean {
+        const toolName = String(params.toolName || '').toLowerCase();
+        const eventType = String(params.eventType || '').toLowerCase();
+        const itemType = String(params.itemType || '').toLowerCase();
+        const hints = `${toolName} ${eventType} ${itemType}`;
+        const hasSearchHint =
+            hints.includes('web_search') ||
+            hints.includes('search') ||
+            hints.includes('grep') ||
+            hints.includes('ripgrep') ||
+            hints.includes('lookup') ||
+            hints.includes('find');
+        if (!hasSearchHint) return false;
+        const hasWriteHint =
+            hints.includes('insert') ||
+            hints.includes('update') ||
+            hints.includes('create') ||
+            hints.includes('append') ||
+            hints.includes('delete') ||
+            hints.includes('remove') ||
+            hints.includes('write') ||
+            hints.includes('edit');
+        if (!hasWriteHint) return true;
+        return !!extractCodexSearchQuery(params.argsRaw);
+    }
+
+    function getCodexTraceStatusText(status: CodexTraceCall['status']): string {
+        if (status === 'completed') return 'done';
+        if (status === 'error') return 'error';
+        return 'running';
+    }
+
+    function getCodexTimelineTypeLabel(kind: CodexTraceCall['kind']): string {
+        if (kind === 'thinking') return 'Thought';
+        if (kind === 'search') return 'Search';
+        if (kind === 'diff') return 'Diff';
+        return 'Tool';
+    }
+
+    function getCodexTimelineEntryName(trace: CodexTraceCall): string {
+        if (trace.kind === 'thinking') return 'Thought';
+        if (trace.kind === 'diff') return '';
+        const fallback =
+            trace.kind === 'search' ? 'Search' : trace.kind === 'diff' ? 'Diff' : 'Tool';
+        return String(trace.name || '').trim() || fallback;
+    }
+
+    function cloneEditOperation(operation: EditOperation): EditOperation {
+        return { ...operation };
+    }
+
+    function cloneCodexTraceCall(trace: CodexTraceCall): CodexTraceCall {
+        return {
+            ...trace,
+            editOperations: trace.editOperations?.map(cloneEditOperation),
+        };
+    }
+
+    function mergeTraceEditOperations(
+        prevOps?: EditOperation[],
+        nextOps?: EditOperation[]
+    ): EditOperation[] | undefined {
+        const prev = (prevOps || []).map(cloneEditOperation);
+        const next = (nextOps || []).map(cloneEditOperation);
+        if (!prev.length && !next.length) return undefined;
+        if (!next.length) return prev;
+        const merged = [...prev];
+        const keyIndex = new Map<string, number>();
+        merged.forEach((op, idx) => keyIndex.set(buildEditOperationFingerprint(op), idx));
+        for (const op of next) {
+            const key = buildEditOperationFingerprint(op);
+            const existingIdx = keyIndex.get(key);
+            if (existingIdx === undefined) {
+                keyIndex.set(key, merged.length);
+                merged.push(op);
+                continue;
+            }
+            merged[existingIdx] = {
+                ...merged[existingIdx],
+                ...op,
+            };
+        }
+        return merged;
+    }
+
+    function buildEditOperationFingerprint(operation: EditOperation): string {
+        const blockId = String(operation.blockId || '').trim();
+        const filePath = normalizeEditOperationFilePath(operation.filePath);
+        const opType = operation.operationType || 'update';
+        const position = operation.position || '';
+        const content = String(operation.newContent || '');
+        return `${opType}|${position}|${filePath}|${blockId}|${content.length}|${content.slice(0, 200)}`;
+    }
+
+    function toAppliedEditOperation(rawOperation: any): EditOperation | null {
+        if (!rawOperation || typeof rawOperation !== 'object') return null;
+        const operationType = rawOperation.operationType === 'insert' ? 'insert' : 'update';
+        const blockId = String(rawOperation.blockId || rawOperation.id || '').trim() || 'unknown';
+        const newContent = String(rawOperation.newContent || '').trim();
+        if (!newContent) return null;
+
+        const nextOperation: EditOperation = {
+            operationType,
+            blockId,
+            filePath: normalizeEditOperationFilePath(
+                rawOperation.filePath || rawOperation.path || rawOperation.file || ''
+            ),
+            newContent,
+            oldContent: String(rawOperation.oldContent || ''),
+            oldContentForDisplay: String(rawOperation.oldContentForDisplay || ''),
+            newContentForDisplay:
+                String(rawOperation.newContentForDisplay || '').trim() ||
+                stripKramdownIdMarkersForDisplay(newContent),
+            status: 'applied',
+        };
+        if (operationType === 'insert') {
+            nextOperation.position = rawOperation.position === 'before' ? 'before' : 'after';
+        }
+        return nextOperation;
+    }
+
+    function extractFilesystemEditOperationsFromToolEvent(params: {
+        toolName: string;
+        argsRaw: unknown;
+        outputRaw: unknown;
+    }): EditOperation[] {
+        const toolName = String(params.toolName || '').toLowerCase();
+        if (!toolName.includes('filesystem')) return [];
+        const args = normalizeCodexToolArgs(params.argsRaw);
+        const output = normalizeCodexToolPayload(params.outputRaw);
+        const filePath = normalizeEditOperationFilePath(
+            firstNonEmptyString(args.path, args.filePath, args.file, args.destination, args.source)
+        );
+
+        if (toolName.includes('edit_file')) {
+            const edits = Array.isArray(args.edits) ? args.edits : [];
+            const operations: EditOperation[] = [];
+            for (const edit of edits) {
+                if (!edit || typeof edit !== 'object') continue;
+                const oldText = String((edit as any).oldText || '');
+                const newText = String((edit as any).newText || '');
+                if (!oldText && !newText) continue;
+                const effectivePath =
+                    normalizeEditOperationFilePath((edit as any).path || (edit as any).filePath) ||
+                    filePath ||
+                    'unknown';
+                operations.push({
+                    operationType: 'update',
+                    blockId: effectivePath,
+                    filePath: effectivePath,
+                    newContent: newText,
+                    oldContent: oldText,
+                    oldContentForDisplay: oldText,
+                    newContentForDisplay: newText,
+                    status: 'applied',
+                });
+            }
+            if (operations.length > 0) return operations;
+
+            const outputText = stringifyCodexTraceValue(output, 12000);
+            if (outputText && filePath) {
+                return [
+                    {
+                        operationType: 'update',
+                        blockId: filePath,
+                        filePath,
+                        newContent: outputText,
+                        oldContent: '',
+                        oldContentForDisplay: '',
+                        newContentForDisplay: outputText,
+                        status: 'applied',
+                    },
+                ];
+            }
+            return [];
+        }
+
+        if (toolName.includes('write_file')) {
+            const content = String(args.content || '');
+            if (!content || !filePath) return [];
+            return [
+                {
+                    operationType: 'insert',
+                    blockId: filePath,
+                    filePath,
+                    position: 'after',
+                    newContent: content,
+                    oldContent: '',
+                    oldContentForDisplay: '',
+                    newContentForDisplay: content,
+                    status: 'applied',
+                },
+            ];
+        }
+
+        return [];
+    }
+
+    function extractEditOperationsFromCodexToolEvent(params: {
+        toolName: string;
+        argsRaw: unknown;
+        outputRaw: unknown;
+    }): EditOperation[] {
+        const toolName = String(params.toolName || '').trim();
+        const filesystemOperations = extractFilesystemEditOperationsFromToolEvent(params);
+        if (filesystemOperations.length > 0) return filesystemOperations;
+        if (!toolName.startsWith('siyuan_')) return [];
+
+        const args = normalizeCodexToolArgs(params.argsRaw);
+        const payload = normalizeCodexToolPayload(params.outputRaw);
+        const normalizedPayload =
+            payload && typeof payload === 'object' && payload.result && payload.operation
+                ? payload
+                : payload && typeof payload === 'object'
+                  ? payload
+                  : {};
+
+        const fromOperation = toAppliedEditOperation((normalizedPayload as any).operation);
+        if (fromOperation) return [fromOperation];
+
+        if (toolName === 'siyuan_update_block') {
+            const blockId = String(args.id || '').trim();
+            const newContent = String(args.data || '').trim();
+            if (!blockId || !newContent) return [];
+            return [
+                {
+                    operationType: 'update',
+                    blockId,
+                    filePath: '',
+                    newContent,
+                    oldContent: '',
+                    oldContentForDisplay: '',
+                    newContentForDisplay: stripKramdownIdMarkersForDisplay(newContent),
+                    status: 'applied',
+                },
+            ];
+        }
+
+        if (toolName === 'siyuan_insert_block') {
+            const newContent = String(args.data || '').trim();
+            if (!newContent) return [];
+            const blockId =
+                String(
+                    args.nextID || args.previousID || args.parentID || args.appendParentID || ''
+                ).trim() || 'unknown';
+            const position = args.nextID ? 'before' : 'after';
+            return [
+                {
+                    operationType: 'insert',
+                    blockId,
+                    filePath: '',
+                    position,
+                    newContent,
+                    oldContent: '',
+                    oldContentForDisplay: '',
+                    newContentForDisplay: stripKramdownIdMarkersForDisplay(newContent),
+                    status: 'applied',
+                },
+            ];
+        }
+
+        if (toolName === 'siyuan_create_document') {
+            const markdown = String(args.markdown || '').trim();
+            if (!markdown) return [];
+            const notebook = String(args.notebook || '').trim();
+            const path = String(args.path || '').trim();
+            const blockId = notebook && path ? `${notebook}:${path}` : 'unknown';
+            const filePath = notebook && path ? `${notebook}/${path.replace(/^\/+/, '')}` : '';
+            return [
+                {
+                    operationType: 'insert',
+                    blockId,
+                    filePath,
+                    position: 'after',
+                    newContent: markdown,
+                    oldContent: '',
+                    oldContentForDisplay: '',
+                    newContentForDisplay: stripKramdownIdMarkersForDisplay(markdown),
+                    status: 'applied',
+                },
+            ];
+        }
+
+        return [];
+    }
+
     async function sendMessageWithCodex(params: {
         userContent: string;
         attachments?: MessageAttachment[];
@@ -3625,6 +4215,13 @@
         const prompt = promptParts.join('\n\n---\n\n');
 
         const stderrLines: string[] = [];
+        const codexToolEditOperations: EditOperation[] = [];
+        const codexToolEditOperationKeys = new Set<string>();
+        const codexToolEditOperationPending = new Map<string, EditOperation>();
+        const codexToolSnapshotTasks = new Map<string, Promise<void>>();
+        let codexTraceSeq = 0;
+        let activeThinkingTraceId = '';
+        const codexTraceKeyByCallId = new Map<string, string>();
         let scrollScheduled = false;
         const scheduleScroll = () => {
             if (scrollScheduled) return;
@@ -3633,6 +4230,212 @@
                 scrollScheduled = false;
                 if (autoScroll) void scrollToBottom();
             }, 0);
+        };
+
+        const upsertStreamingTrace = (
+            kind: 'tool' | 'search',
+            patch: Partial<CodexTraceCall> & { id: string; name: string }
+        ) => {
+            const nextEntry: CodexTraceCall = {
+                id: patch.id,
+                kind,
+                name: patch.name || (kind === 'search' ? '搜索' : '工具'),
+                status: patch.status || 'running',
+                eventType: patch.eventType || '',
+                input: patch.input || '',
+                output: patch.output || '',
+                query: patch.query || '',
+                editOperations: patch.editOperations?.map(cloneEditOperation),
+            };
+            const list = kind === 'search' ? streamingSearchCalls : streamingToolCalls;
+            const index = list.findIndex(item => item.id === nextEntry.id);
+            if (index === -1) {
+                if (kind === 'search') {
+                    streamingSearchCalls = [...streamingSearchCalls, nextEntry];
+                    streamingSearchCallsExpanded = true;
+                } else {
+                    streamingToolCalls = [...streamingToolCalls, nextEntry];
+                    streamingToolCallsExpanded = true;
+                }
+                return;
+            }
+            const merged: CodexTraceCall = {
+                ...list[index],
+                ...nextEntry,
+                // 避免 started 阶段把已有 output 覆盖为空字符串
+                output: nextEntry.output || list[index].output || '',
+                input: nextEntry.input || list[index].input || '',
+                query: nextEntry.query || list[index].query || '',
+                editOperations: mergeTraceEditOperations(
+                    list[index].editOperations,
+                    nextEntry.editOperations
+                ),
+            };
+            const nextList = [...list];
+            nextList[index] = merged;
+            if (kind === 'search') {
+                streamingSearchCalls = nextList;
+            } else {
+                streamingToolCalls = nextList;
+            }
+        };
+
+        const upsertStreamingTimeline = (
+            patch: Partial<CodexTraceCall> & { id: string; kind: CodexTraceCall['kind'] }
+        ) => {
+            const nextEntry: CodexTraceCall = {
+                id: patch.id,
+                kind: patch.kind,
+                name: patch.name || '',
+                status: patch.status || (patch.kind === 'thinking' ? 'completed' : 'running'),
+                eventType: patch.eventType || '',
+                input: patch.input || '',
+                output: patch.output || '',
+                query: patch.query || '',
+                text: patch.text || '',
+                editOperations: patch.editOperations?.map(cloneEditOperation),
+            };
+            const index = streamingCodexTimeline.findIndex(item => item.id === nextEntry.id);
+            if (index === -1) {
+                streamingCodexTimeline = [...streamingCodexTimeline, nextEntry];
+                streamingCodexTimelineExpanded = true;
+                return;
+            }
+            const prev = streamingCodexTimeline[index];
+            const merged: CodexTraceCall = {
+                ...prev,
+                ...nextEntry,
+                name: nextEntry.name || prev.name || '',
+                status: nextEntry.status || prev.status,
+                input: nextEntry.input || prev.input || '',
+                output: nextEntry.output || prev.output || '',
+                query: nextEntry.query || prev.query || '',
+                text: nextEntry.text || prev.text || '',
+                editOperations: mergeTraceEditOperations(prev.editOperations, nextEntry.editOperations),
+            };
+            const nextList = [...streamingCodexTimeline];
+            nextList[index] = merged;
+            streamingCodexTimeline = nextList;
+        };
+
+        const markThinkingTimelineCompleted = () => {
+            if (!streamingCodexTimeline.length) return;
+            let changed = false;
+            const next = streamingCodexTimeline.map(item => {
+                if (item.kind === 'thinking' && item.status !== 'completed') {
+                    changed = true;
+                    return { ...item, status: 'completed' };
+                }
+                return item;
+            });
+            if (changed) {
+                streamingCodexTimeline = next;
+            }
+        };
+
+        const finishActiveThinkingSegment = () => {
+            if (!activeThinkingTraceId) return;
+            upsertStreamingTimeline({
+                id: activeThinkingTraceId,
+                kind: 'thinking',
+                name: 'Thought',
+                eventType: 'thinking',
+                status: 'completed',
+            });
+            activeThinkingTraceId = '';
+        };
+
+        const appendTraceFromToolEvent = (params: {
+            phase: 'started' | 'completed';
+            toolName: string;
+            itemType?: string;
+            eventType?: string;
+            callId?: string;
+            argsRaw?: unknown;
+            outputRaw?: unknown;
+            status?: CodexTraceCall['status'];
+            editOperations?: EditOperation[];
+        }) => {
+            // Any tool/search event marks the end of the current thinking segment.
+            finishActiveThinkingSegment();
+            const displayName =
+                String(params.toolName || '').trim() ||
+                (params.phase === 'started' ? '工具调用' : '工具结果');
+            const traceKind: 'search' | 'tool' = isCodexSearchTrace({
+                toolName: displayName,
+                eventType: params.eventType,
+                itemType: params.itemType,
+                argsRaw: params.argsRaw,
+            })
+                ? 'search'
+                : 'tool';
+            const normalizedInput = stringifyCodexTraceValue(params.argsRaw);
+            const normalizedOutput = stringifyCodexTraceValue(params.outputRaw);
+            const query = traceKind === 'search' ? extractCodexSearchQuery(params.argsRaw) : '';
+            const callId = String(params.callId || '').trim();
+            let traceId = '';
+            if (callId) {
+                const baseKey = `${traceKind}:${callId}`;
+                traceId = codexTraceKeyByCallId.get(baseKey) || '';
+                if (!traceId) {
+                    codexTraceSeq += 1;
+                    traceId = `${baseKey}:${codexTraceSeq}`;
+                    codexTraceKeyByCallId.set(baseKey, traceId);
+                }
+            } else if (params.phase === 'completed') {
+                const pending = [...streamingCodexTimeline]
+                    .reverse()
+                    .find(
+                        item =>
+                            item.kind === traceKind &&
+                            String(item.name || '').trim() === displayName &&
+                            item.status === 'running'
+                    );
+                if (pending?.id) {
+                    traceId = pending.id;
+                }
+            }
+            if (!traceId) {
+                codexTraceSeq += 1;
+                traceId = `${traceKind}:${displayName}:${codexTraceSeq}`;
+            }
+            upsertStreamingTrace(traceKind, {
+                id: traceId,
+                name: displayName,
+                eventType: String(params.eventType || params.itemType || ''),
+                status: params.status || (params.phase === 'completed' ? 'completed' : 'running'),
+                input: normalizedInput,
+                output: normalizedOutput,
+                query,
+                editOperations: params.editOperations,
+            });
+            upsertStreamingTimeline({
+                id: traceId,
+                kind: traceKind,
+                name: displayName,
+                eventType: String(params.eventType || params.itemType || ''),
+                status: params.status || (params.phase === 'completed' ? 'completed' : 'running'),
+                input: normalizedInput,
+                output: normalizedOutput,
+                query,
+                editOperations: params.editOperations,
+            });
+            if (
+                traceKind === 'tool' &&
+                params.phase === 'completed' &&
+                params.editOperations &&
+                params.editOperations.length > 0
+            ) {
+                upsertStreamingTimeline({
+                    id: `${traceId}:diff`,
+                    kind: 'diff',
+                    name: `${displayName} diff`,
+                    eventType: 'edit.diff',
+                    status: params.status === 'error' ? 'error' : 'completed',
+                    editOperations: params.editOperations,
+                });
+            }
+            scheduleScroll();
         };
 
         // Create AbortController for unified abort handling.
@@ -3671,6 +4474,99 @@
                     void setCurrentSessionCodexThreadId(maybeThreadId);
                 }
 
+                const ensureBeforeContentSnapshot = (operation: EditOperation) => {
+                    if (!operation.blockId || operation.blockId === 'unknown') return;
+                    const snapshotKey = buildEditOperationFingerprint(operation);
+                    if (codexToolSnapshotTasks.has(snapshotKey)) return;
+                    const task = (async () => {
+                        try {
+                            await ensureEditOperationFilePath(operation);
+                        } catch {
+                            // ignore
+                        }
+                        if (operation.operationType !== 'update') return;
+                        if (
+                            String(operation.oldContent || '').trim() &&
+                            String(operation.oldContentForDisplay || '').trim()
+                        ) {
+                            return;
+                        }
+                        try {
+                            if (!String(operation.oldContent || '').trim()) {
+                                const blockData = await getBlockKramdown(operation.blockId);
+                                if (blockData?.kramdown) {
+                                    operation.oldContent = blockData.kramdown;
+                                }
+                            }
+                        } catch {
+                            // ignore
+                        }
+                        try {
+                            if (!String(operation.oldContentForDisplay || '').trim()) {
+                                const mdData = await exportMdContent(
+                                    operation.blockId,
+                                    false,
+                                    false,
+                                    2,
+                                    0,
+                                    false
+                                );
+                                if (mdData?.content) {
+                                    operation.oldContentForDisplay = mdData.content;
+                                }
+                            }
+                        } catch {
+                            // ignore
+                        }
+                    })();
+                    codexToolSnapshotTasks.set(snapshotKey, task);
+                };
+
+                const appendCodexToolEditOperations = (
+                    toolName: string,
+                    argsRaw: unknown,
+                    outputRaw: unknown,
+                    phase: 'started' | 'completed' = 'completed'
+                ): EditOperation[] => {
+                    const traceOperations: EditOperation[] = [];
+                    const operations = extractEditOperationsFromCodexToolEvent({
+                        toolName,
+                        argsRaw,
+                        outputRaw,
+                    });
+                    if (!operations.length) return traceOperations;
+                    for (const operation of operations) {
+                        const fingerprint = buildEditOperationFingerprint(operation);
+                        const existing = codexToolEditOperationPending.get(fingerprint);
+                        const target = existing || operation;
+                        if (!existing) {
+                            codexToolEditOperationPending.set(fingerprint, target);
+                        } else {
+                            if (!existing.oldContent && operation.oldContent) {
+                                existing.oldContent = operation.oldContent;
+                            }
+                            if (!existing.oldContentForDisplay && operation.oldContentForDisplay) {
+                                existing.oldContentForDisplay = operation.oldContentForDisplay;
+                            }
+                            if (!existing.newContentForDisplay && operation.newContentForDisplay) {
+                                existing.newContentForDisplay = operation.newContentForDisplay;
+                            }
+                        }
+                        if (phase === 'started') {
+                            ensureBeforeContentSnapshot(target);
+                            continue;
+                        }
+                        ensureBeforeContentSnapshot(target);
+                        if (codexToolEditOperationKeys.has(fingerprint)) continue;
+                        codexToolEditOperationKeys.add(fingerprint);
+                        const appliedOperation: EditOperation = target;
+                        appliedOperation.status = 'applied';
+                        codexToolEditOperations.push(appliedOperation);
+                        traceOperations.push(appliedOperation);
+                    }
+                    return traceOperations;
+                };
+
                 const normalizeStreamingChunk = (text: string) =>
                     String(text ?? '')
                         .replace(/\r\n/g, '\n')
@@ -3682,18 +4578,37 @@
                     if (!raw) return;
                     streamingThinking = streamingThinking ? `${streamingThinking}\n${raw}` : raw;
                     isThinkingPhase = true;
+                    const currentThinking =
+                        activeThinkingTraceId &&
+                        streamingCodexTimeline.find(
+                            item => item.id === activeThinkingTraceId && item.kind === 'thinking'
+                        );
+                    if (!activeThinkingTraceId || !currentThinking || currentThinking.status === 'completed') {
+                        codexTraceSeq += 1;
+                        activeThinkingTraceId = `thinking:${codexTraceSeq}`;
+                    }
+                    upsertStreamingTimeline({
+                        id: activeThinkingTraceId,
+                        kind: 'thinking',
+                        name: 'Thought',
+                        eventType: 'thinking',
+                        status: 'running',
+                        text: currentThinking?.text ? `${currentThinking.text}\n${raw}` : raw,
+                    });
                     scheduleScroll();
                 };
 
                 const appendAssistant = (text: string) => {
                     const raw = String(text ?? '');
                     if (!raw.trim()) return;
+                    finishActiveThinkingSegment();
                     if (streamingMessage && !streamingMessage.endsWith('\n')) {
                         streamingMessage += '\n';
                     }
                     streamingMessage += raw;
                     // Once assistant output starts, treat thinking as completed.
                     isThinkingPhase = false;
+                    markThinkingTimelineCompleted();
                     scheduleScroll();
                 };
 
@@ -3711,75 +4626,109 @@
                         appendThinking(itemText);
                         return;
                     }
+                    // Non-thinking items start a new chronological phase.
+                    finishActiveThinkingSegment();
 
                     if (itemTypeLower === 'agent_message' || itemTypeLower === 'assistant_message') {
                         appendAssistant(itemText);
                         return;
                     }
 
+                    if (itemTypeLower.includes('search')) {
+                        const input = extractToolArgsFromUnknown(item);
+                        const output = extractToolOutputFromUnknown(item);
+                        appendTraceFromToolEvent({
+                            phase: type === 'item.completed' ? 'completed' : 'started',
+                            toolName: extractToolNameFromUnknown(item) || itemType || 'search',
+                            itemType,
+                            eventType: type,
+                            callId: extractToolCallIdFromUnknown(item),
+                            argsRaw: input,
+                            outputRaw: output,
+                            status: type === 'item.completed' ? 'completed' : 'running',
+                        });
+                        return;
+                    }
+
                     if (itemTypeLower === 'command_execution') {
                         const command = String(item?.command || '').trim();
                         if (type === 'item.started') {
-                            if (command) appendThinking(`[cmd] ${command}`);
+                            appendTraceFromToolEvent({
+                                phase: 'started',
+                                toolName: command ? `shell: ${command}` : 'shell',
+                                itemType,
+                                eventType: type,
+                                callId: extractToolCallIdFromUnknown(item),
+                                argsRaw: command ? { command } : undefined,
+                                status: 'running',
+                            });
                             return;
                         }
                         if (type === 'item.completed') {
                             const exitCode = item?.exit_code;
-                            const header = `[cmd done exit=${exitCode ?? ''}]${command ? ` ${command}` : ''}`;
-                            appendThinking(header);
-
                             const aggregated = typeof item?.aggregated_output === 'string'
                                 ? item.aggregated_output
                                 : '';
-                            if (aggregated) {
-                                const maxLen = 4000;
-                                const text =
-                                    aggregated.length > maxLen
-                                        ? aggregated.slice(0, maxLen) + '\n...(truncated)...'
-                                        : aggregated;
-                                appendThinking(text);
-                            }
+                            appendTraceFromToolEvent({
+                                phase: 'completed',
+                                toolName: command ? `shell: ${command}` : 'shell',
+                                itemType,
+                                eventType: type,
+                                callId: extractToolCallIdFromUnknown(item),
+                                argsRaw: command ? { command } : undefined,
+                                outputRaw:
+                                    exitCode === undefined
+                                        ? aggregated
+                                        : {
+                                              exitCode,
+                                              output: aggregated,
+                                          },
+                                status: Number(exitCode) === 0 ? 'completed' : 'error',
+                            });
                             return;
                         }
                     }
 
-                    // Generic tool-like items (MCP, function, etc.) -> append to thinking for debugging.
+                    // Generic tool-like items (MCP, function, etc.) -> append to dedicated tracks.
                     if (
                         itemTypeLower.includes('tool') ||
                         itemTypeLower.includes('mcp') ||
                         itemTypeLower.includes('function')
                     ) {
-                        const name =
-                            String(
-                                item?.tool_name ||
-                                    item?.name ||
-                                    item?.tool?.name ||
-                                    item?.tool?.function?.name ||
-                                    ''
-                            ).trim();
-                        const header = `[${itemType || 'tool'}]${name ? ` ${name}` : ''}`;
-                        appendThinking(header);
-
-                        const input =
-                            item?.arguments ||
-                            item?.args ||
-                            item?.input ||
-                            item?.tool?.arguments ||
-                            item?.tool?.function?.arguments;
-                        if (input !== undefined) {
-                            const inputText =
-                                typeof input === 'string' ? input : JSON.stringify(input);
-                            appendThinking(inputText);
+                        const name = extractToolNameFromUnknown(item);
+                        const input = extractToolArgsFromUnknown(item);
+                        const output = extractToolOutputFromUnknown(item);
+                        if (type === 'item.started') {
+                            appendCodexToolEditOperations(name, input, output, 'started');
+                            appendTraceFromToolEvent({
+                                phase: 'started',
+                                toolName: name || itemType || 'tool',
+                                itemType,
+                                eventType: type,
+                                callId: extractToolCallIdFromUnknown(item),
+                                argsRaw: input,
+                                outputRaw: output,
+                                status: 'running',
+                            });
                         }
-
-                        const output = item?.output || item?.result || item?.content;
-                        if (output !== undefined) {
-                            const outText =
-                                typeof output === 'string' ? output : JSON.stringify(output);
-                            const maxLen = 4000;
-                            appendThinking(
-                                outText.length > maxLen ? outText.slice(0, maxLen) + '\n...(truncated)...' : outText
+                        if (type === 'item.completed') {
+                            const traceEditOperations = appendCodexToolEditOperations(
+                                name,
+                                input,
+                                output,
+                                'completed'
                             );
+                            appendTraceFromToolEvent({
+                                phase: 'completed',
+                                toolName: name || itemType || 'tool',
+                                itemType,
+                                eventType: type,
+                                callId: extractToolCallIdFromUnknown(item),
+                                argsRaw: input,
+                                outputRaw: output,
+                                status: 'completed',
+                                editOperations: traceEditOperations,
+                            });
                         }
                         return;
                     }
@@ -3791,30 +4740,64 @@
                     }
                 }
 
-                // Tool / MCP events -> append to thinking for debugging
-                if (typeLower.includes('tool') || typeLower.includes('mcp')) {
-                    const toolName =
-                        (event as any)?.tool_name ||
-                        (event as any)?.name ||
-                        (event as any)?.tool?.name ||
-                        (event as any)?.tool?.function?.name ||
-                        '';
-                    const args =
-                        (event as any)?.arguments ||
-                        (event as any)?.args ||
-                        (event as any)?.input ||
-                        (event as any)?.tool?.arguments ||
-                        (event as any)?.tool?.function?.arguments;
-                    const argsText =
-                        args === undefined
-                            ? ''
-                            : typeof args === 'string'
-                              ? args
-                              : JSON.stringify(args);
-                    const line = toolName
-                        ? `[tool] ${toolName}${argsText ? ` ${argsText}` : ''}`
-                        : `[event] ${type}`;
-                    appendThinking(line);
+                // Tool / MCP / Search events -> append to dedicated tracks
+                if (typeLower.includes('tool') || typeLower.includes('mcp') || typeLower.includes('search')) {
+                    finishActiveThinkingSegment();
+                    const toolName = extractToolNameFromUnknown(event);
+                    const args = extractToolArgsFromUnknown(event);
+                    const output = extractToolOutputFromUnknown(event);
+                    const maybeDone =
+                        typeLower.includes('completed') ||
+                        typeLower.includes('done') ||
+                        typeLower.includes('result');
+                    const maybeStarted =
+                        typeLower.includes('started') ||
+                        typeLower.includes('start') ||
+                        typeLower.includes('begin');
+                    if (maybeStarted) {
+                        appendCodexToolEditOperations(String(toolName || ''), args, undefined, 'started');
+                        appendTraceFromToolEvent({
+                            phase: 'started',
+                            toolName: String(toolName || type || 'tool'),
+                            itemType: '',
+                            eventType: type,
+                            callId: extractToolCallIdFromUnknown(event),
+                            argsRaw: args,
+                            outputRaw: output,
+                            status: 'running',
+                        });
+                    }
+                    if (maybeDone) {
+                        const traceEditOperations = appendCodexToolEditOperations(
+                            String(toolName || ''),
+                            args,
+                            output,
+                            'completed'
+                        );
+                        appendTraceFromToolEvent({
+                            phase: 'completed',
+                            toolName: String(toolName || type || 'tool'),
+                            itemType: '',
+                            eventType: type,
+                            callId: extractToolCallIdFromUnknown(event),
+                            argsRaw: args,
+                            outputRaw: output,
+                            status: 'completed',
+                            editOperations: traceEditOperations,
+                        });
+                    }
+                    if (!maybeStarted && !maybeDone) {
+                        appendTraceFromToolEvent({
+                            phase: 'started',
+                            toolName: String(toolName || type || 'tool'),
+                            itemType: '',
+                            eventType: type,
+                            callId: extractToolCallIdFromUnknown(event),
+                            argsRaw: args,
+                            outputRaw: output,
+                            status: 'running',
+                        });
+                    }
                     return;
                 }
 
@@ -3841,11 +4824,17 @@
                 if (line.includes('state db missing rollout path')) return;
 
                 stderrLines.push(line);
-                // Surface a small amount of stderr in thinking to help debugging.
+                // Surface a small amount of stderr in tool track to help debugging.
                 if (stderrLines.length <= 5) {
-                    streamingThinking += (streamingThinking ? '\n' : '') + `[stderr] ${line}`;
-                    isThinkingPhase = true;
-                    scheduleScroll();
+                    appendTraceFromToolEvent({
+                        phase: 'completed',
+                        toolName: 'stderr',
+                        itemType: 'stderr',
+                        eventType: 'stderr',
+                        callId: `stderr-${stderrLines.length}`,
+                        outputRaw: line,
+                        status: 'error',
+                    });
                 }
             },
         });
@@ -3865,6 +4854,16 @@
 
         if (isAborted) return;
 
+        if (codexToolSnapshotTasks.size > 0) {
+            await Promise.allSettled(Array.from(codexToolSnapshotTasks.values()));
+        }
+        await ensureEditOperationFilePaths(codexToolEditOperations);
+        await ensureTraceEditOperationFilePaths(streamingCodexTimeline);
+        await ensureTraceEditOperationFilePaths(streamingToolCalls);
+        await ensureTraceEditOperationFilePaths(streamingSearchCalls);
+        finishActiveThinkingSegment();
+        markThinkingTimelineCompleted();
+
         const convertedText = convertLatexToMarkdown(streamingMessage);
 
         if (!convertedText.trim() && stderrLines.length > 0) {
@@ -3877,16 +4876,32 @@
         };
 
         if (streamingThinking) assistantMessage.thinking = streamingThinking;
+        if (streamingCodexTimeline.length > 0) {
+            assistantMessage.codexTimeline = streamingCodexTimeline.map(cloneCodexTraceCall);
+        }
+        if (streamingSearchCalls.length > 0) {
+            assistantMessage.codexSearchCalls = streamingSearchCalls.map(cloneCodexTraceCall);
+        }
+        if (streamingToolCalls.length > 0) {
+            assistantMessage.codexToolCalls = streamingToolCalls.map(cloneCodexTraceCall);
+        }
+        if (codexToolEditOperations.length > 0) {
+            assistantMessage.editOperations = codexToolEditOperations;
+        }
 
         messages = [...messages, assistantMessage];
         streamingMessage = '';
         streamingThinking = '';
+        streamingCodexTimeline = [];
+        streamingSearchCalls = [];
+        streamingToolCalls = [];
         isThinkingPhase = false;
         isLoading = false;
         abortController = null;
         hasUnsavedChanges = true;
 
         await saveCurrentSession(true);
+        refreshCurrentNotePageAfterReply();
     }
 
     // 发送消息
@@ -4057,7 +5072,12 @@
         isLoading = true;
         isAborted = false; // 重置中断标志
         streamingMessage = '';
-        streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+        streamingSearchCalls = [];
+        streamingToolCallsExpanded = false;
+        streamingSearchCallsExpanded = false;
         isThinkingPhase = false;
         hasUnsavedChanges = true;
         autoScroll = true; // 发送新消息时启用自动滚动
@@ -4114,7 +5134,10 @@
                 }
                 isLoading = false;
                 streamingMessage = '';
-                streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+                streamingSearchCalls = [];
                 isThinkingPhase = false;
                 abortController = null;
             }
@@ -4972,7 +5995,10 @@
                                     }
 
                                     streamingMessage = '';
-                                    streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+                                    streamingSearchCalls = [];
                                     isThinkingPhase = false;
                                     isLoading = false;
                                     abortController = null;
@@ -4999,7 +6025,10 @@
                                 }
                                 isLoading = false;
                                 streamingMessage = '';
-                                streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+                                streamingSearchCalls = [];
                                 isThinkingPhase = false;
                                 abortController = null;
 
@@ -5182,7 +6211,10 @@
                                 messages = [...messages, assistantMessage];
                             }
                             streamingMessage = '';
-                            streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+                            streamingSearchCalls = [];
                             isThinkingPhase = false;
                             isLoading = false;
                             abortController = null;
@@ -5209,7 +6241,10 @@
                             }
                             isLoading = false;
                             streamingMessage = '';
-                            streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+                            streamingSearchCalls = [];
                             isThinkingPhase = false;
                             abortController = null;
                         },
@@ -5238,7 +6273,10 @@
                 hasUnsavedChanges = true;
                 isLoading = false;
                 streamingMessage = '';
-                streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+                streamingSearchCalls = [];
                 isThinkingPhase = false;
             }
             abortController = null;
@@ -5289,14 +6327,26 @@
             }
 
             // 单模型模式：如果有已生成的部分，将其保存为消息
-            if (streamingMessage || streamingThinking) {
+            if (
+                streamingMessage ||
+                streamingThinking ||
+                streamingCodexTimeline.length > 0 ||
+                streamingToolCalls.length > 0 ||
+                streamingSearchCalls.length > 0
+            ) {
                 // 先保存到临时变量
                 const tempStreamingMessage = streamingMessage;
                 const tempStreamingThinking = streamingThinking;
+                const tempStreamingTimeline = streamingCodexTimeline.map(cloneCodexTraceCall);
+                const tempStreamingToolCalls = streamingToolCalls.map(cloneCodexTraceCall);
+                const tempStreamingSearchCalls = streamingSearchCalls.map(cloneCodexTraceCall);
 
                 // 立即清空流式消息和状态，避免重复渲染
                 streamingMessage = '';
                 streamingThinking = '';
+                streamingCodexTimeline = [];
+                streamingToolCalls = [];
+                streamingSearchCalls = [];
                 isThinkingPhase = false;
                 isLoading = false;
 
@@ -5310,11 +6360,23 @@
                 if (tempStreamingThinking) {
                     message.thinking = tempStreamingThinking;
                 }
+                if (tempStreamingTimeline.length > 0) {
+                    message.codexTimeline = tempStreamingTimeline;
+                }
+                if (tempStreamingToolCalls.length > 0) {
+                    message.codexToolCalls = tempStreamingToolCalls;
+                }
+                if (tempStreamingSearchCalls.length > 0) {
+                    message.codexSearchCalls = tempStreamingSearchCalls;
+                }
                 messages = [...messages, message];
                 hasUnsavedChanges = true;
             } else {
                 streamingMessage = '';
                 streamingThinking = '';
+                streamingCodexTimeline = [];
+                streamingToolCalls = [];
+                streamingSearchCalls = [];
                 isThinkingPhase = false;
                 isLoading = false;
             }
@@ -5396,7 +6458,12 @@
             : [];
         contextDocuments = [];
         streamingMessage = '';
-        streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+        streamingSearchCalls = [];
+        streamingToolCallsExpanded = false;
+        streamingSearchCallsExpanded = false;
         isThinkingPhase = false;
         thinkingCollapsed = {};
         currentSessionId = '';
@@ -6777,17 +7844,11 @@
                 selectionText = '';
                 break;
             }
-            case 'edit':
-                startEditMessage(messageIndex);
-                break;
             case 'delete':
                 deleteMessage(messageIndex);
                 break;
             case 'regenerate':
                 regenerateMessage(messageIndex);
-                break;
-            case 'save':
-                openSaveToNoteDialog(messageIndex);
                 break;
         }
     }
@@ -6930,6 +7991,22 @@
     // 获取当前聚焦的编辑器
     function getProtyle() {
         return getActiveEditor(false)?.protyle;
+    }
+
+    function refreshCurrentNotePageAfterReply() {
+        try {
+            const currentProtyle = getProtyle();
+            if (!currentProtyle?.getInstance) return;
+            setTimeout(() => {
+                try {
+                    currentProtyle.getInstance()?.reload(false);
+                } catch (error) {
+                    console.warn('刷新当前笔记页面失败:', error);
+                }
+            }, 0);
+        } catch (error) {
+            console.warn('刷新当前笔记页面失败:', error);
+        }
     }
 
     // 获取当前聚焦的块ID
@@ -7734,6 +8811,11 @@
                 }
 
                 messages = [...loadedMessages];
+                const filePathResolved = await ensureMessagesEditOperationFilePaths(messages);
+                if (filePathResolved) {
+                    messages = [...messages];
+                    sessionModified = true;
+                }
 
                 // 【修复】检查多模型响应是否缺少选择，自动设置第一个非错误模型为选中
                 for (const msg of messages) {
@@ -7944,404 +9026,6 @@
         await saveSessions();
     }
 
-    // 保存到笔记相关函数
-    async function openSaveToNoteDialog(messageIndex: number | null = null) {
-        if (messages.length === 0) {
-            pushErrMsg(t('aiSidebar.errors.emptySession'));
-            return;
-        }
-
-        // 保存消息索引
-        saveMessageIndex = messageIndex;
-
-        // 初始化对话框数据
-        saveDocumentName = '';
-
-        // 解析默认路径
-        let defaultPath = settings.exportDefaultPath || '';
-        if (defaultPath) {
-            try {
-                // 使用 renderSprig 解析 sprig 语法
-                defaultPath = await renderSprig(defaultPath);
-            } catch (error) {
-                console.error('Parse default path error:', error);
-            }
-        }
-
-        // 记录是否有全局默认路径
-        hasDefaultPath = !!defaultPath;
-
-        // 获取当前文档信息
-        currentDocPath = '/';
-        currentDocNotebookId = '';
-        const focusedBlockId = getFocusedBlockId();
-        if (focusedBlockId) {
-            try {
-                const block = await getBlockByID(focusedBlockId);
-                if (block) {
-                    const hpath = await getHPathByID(block.root_id);
-                    currentDocPath = hpath;
-                    currentDocNotebookId = block.box;
-                }
-            } catch (error) {
-                console.error('Get current document info error:', error);
-            }
-        }
-
-        // 预先加载笔记本列表（在打开对话框前）
-        try {
-            const notebooks = await lsNotebooks();
-            if (notebooks?.notebooks && notebooks.notebooks.length > 0) {
-                // 过滤掉已关闭的笔记本
-                saveDialogNotebooks = notebooks.notebooks.filter(n => !n.closed);
-            } else {
-                saveDialogNotebooks = [];
-            }
-        } catch (error) {
-            console.error('Get notebooks error:', error);
-            saveDialogNotebooks = [];
-        }
-
-        // 如果全局保存文档位置为空，使用当前文档路径和笔记本（优先使用当前文档的笔记本）
-        if (!defaultPath) {
-            savePath = toRelativePath(currentDocPath);
-            // 优先使用当前文档所在笔记本（如果能取得），并验证该笔记本存在于系统中；若不存在或未取得则回退到第一个笔记本
-            // 只有当 currentDocNotebookId 有值时才赋值，否则保持为空，让后续逻辑处理
-            if (currentDocNotebookId) {
-                saveNotebookId = currentDocNotebookId;
-            }
-
-            if (saveDialogNotebooks.length > 0) {
-                if (saveNotebookId) {
-                    const found = saveDialogNotebooks.find(
-                        n => String(n.id) === String(saveNotebookId)
-                    );
-                    if (!found) {
-                        // 当前文档的笔记本ID没有在笔记本列表中找到，使用第一个作为回退
-                        saveNotebookId = saveDialogNotebooks[0].id;
-                    }
-                } else {
-                    // 没有获取到当前文档的笔记本ID，回退到第一个笔记本
-                    saveNotebookId = saveDialogNotebooks[0].id;
-                }
-            }
-        } else {
-            // 如果有全局默认路径，使用全局配置
-            savePath = defaultPath;
-            // 笔记本优先使用设置中的默认笔记本
-            if (settings.exportNotebook) {
-                saveNotebookId = settings.exportNotebook;
-            } else if (settings.exportLastNotebook) {
-                saveNotebookId = settings.exportLastNotebook;
-            } else {
-                // 使用已加载的笔记本列表
-                if (saveDialogNotebooks.length > 0) {
-                    saveNotebookId = saveDialogNotebooks[0].id;
-                }
-            }
-        }
-
-        // 重置搜索状态
-        savePathSearchKeyword = savePath;
-        savePathSearchResults = [];
-        showSavePathDropdown = false;
-
-        isSaveToNoteDialogOpen = true;
-    }
-
-    function closeSaveToNoteDialog() {
-        isSaveToNoteDialogOpen = false;
-    }
-
-    // 切换到当前文档路径
-    function useCurrentDocPath() {
-        if (currentDocPath && currentDocNotebookId) {
-            savePath = toRelativePath(currentDocPath);
-            saveNotebookId = currentDocNotebookId;
-            savePathSearchKeyword = savePath;
-            savePathSearchResults = [];
-            showSavePathDropdown = false;
-        }
-    }
-
-    // 搜索保存路径
-    // 说明：默认使用 searchDocs() 进行服务器端全文搜索（匹配标题等），
-    // 但在某些情况下（例如输入像 `2025` 的年份/目录片段）searchDocs 可能不会匹配到 hPath。
-    // 因此我们在 searchDocs 没有返回结果时，针对仅包含数字或路径片段的关键字，
-    // 退回到使用 SQL 查询 blocks.hpath 字段做模糊匹配，合并到搜索结果中以提升匹配率。
-    async function searchSavePath() {
-        if (!savePathSearchKeyword.trim()) {
-            savePathSearchResults = [];
-            return;
-        }
-
-        isSavePathSearching = true;
-        try {
-            const results = await searchDocs(savePathSearchKeyword);
-
-            // 过滤：只显示选中笔记本中的文档
-            if (results && saveNotebookId) {
-                savePathSearchResults = (
-                    results.filter(doc => doc.box === saveNotebookId) || []
-                ).map((doc: any) => ({
-                    ...doc,
-                    // 将 hPath 规范化为相对于所选笔记本的路径（如果 hPath 包含笔记本名则去掉它）
-                    hPath: toRelativePath(doc.hPath || ''),
-                }));
-            } else {
-                savePathSearchResults = (results || []).map((doc: any) => ({
-                    ...doc,
-                    hPath: toRelativePath(doc.hPath || ''),
-                }));
-            }
-
-            // 如果 searchDocs 没有返回结果，针对数值或仅路径片段的情况，退回到使用 SQL 的 hpath 模糊匹配
-            // 例如：当用户输入 "2025"（年份）时，hPath 里通常会是 /.../2025/...，searchDocs 可能不会匹配到
-            // 我们在这里尝试 SQL 查询 blocks.hpath 字段进行模糊匹配以丰富搜索结果
-            const isLikelyPathFragment = /^[0-9\-\/]+$/.test(savePathSearchKeyword.trim());
-
-            if (
-                (savePathSearchResults.length === 0 ||
-                    (savePathSearchResults && savePathSearchResults.length === 0)) &&
-                isLikelyPathFragment
-            ) {
-                try {
-                    const kw = savePathSearchKeyword.trim().replace(/'/g, "''");
-                    const boxFilter = saveNotebookId
-                        ? ` AND box = '${String(saveNotebookId).replace(/'/g, "''")}'`
-                        : '';
-                    const sqlQuery = `SELECT id, path, hpath, box FROM blocks WHERE type='d' AND hpath LIKE '%${kw}%' ${boxFilter} ORDER BY updated DESC LIMIT 200`;
-                    const sqlResults = await sql(sqlQuery);
-                    if (sqlResults && sqlResults.length > 0) {
-                        // 将 SQL 的结果映射为 searchDocs 的返回格式（hPath 和 path）
-                        const mapped = sqlResults.map((r: any) => ({
-                            hPath: toRelativePath(r.hpath || r.hPath || ''),
-                            path: r.path,
-                            box: r.box,
-                        }));
-                        // 合并并去重
-                        const existingHPaths = new Set(
-                            savePathSearchResults.map((d: any) => String(d.hPath))
-                        );
-                        for (const doc of mapped) {
-                            if (!existingHPaths.has(String(doc.hPath))) {
-                                savePathSearchResults.push(doc);
-                            }
-                        }
-                    }
-                } catch (sqlError) {
-                    console.error('Fallback SQL search save path error:', sqlError);
-                }
-            }
-        } catch (error) {
-            console.error('Search save path error:', error);
-            savePathSearchResults = [];
-        } finally {
-            isSavePathSearching = false;
-        }
-    }
-
-    // 自动搜索保存路径（带防抖）
-    function autoSearchSavePath() {
-        if (savePathSearchTimeout) {
-            clearTimeout(savePathSearchTimeout);
-        }
-        savePathSearchTimeout = window.setTimeout(() => {
-            searchSavePath();
-        }, 300);
-    }
-
-    // 监听路径搜索关键词变化
-    $: {
-        if (isSaveToNoteDialogOpen && savePathSearchKeyword !== savePath) {
-            autoSearchSavePath();
-        }
-    }
-
-    // 选择路径
-    function selectSavePath(path: string) {
-        // `path` may come from `doc.path` (relative path) or be an hPath.
-        // Normalize to a relative path (without notebook prefix) so it won't duplicate the notebook name
-        // when used as the document path for createDocWithMd(notebook, path, ...)
-        savePath = toRelativePath(path);
-        savePathSearchKeyword = savePath;
-        showSavePathDropdown = false;
-        savePathSearchResults = [];
-    }
-
-    // 将 hPath（例如 "收集箱Inbox/2025/202510" 或 "/收集箱Inbox/2025/202510"）转换为相对于笔记本的路径
-    function toRelativePath(hpath: string): string {
-        if (!hpath) return '';
-        let p = String(hpath).trim();
-        // 移除开头的斜杠
-        p = p.replace(/^\/+/, '');
-        const parts = p.split('/');
-
-        // If the path is already a relative path (e.g., '2025/202510'), it shouldn't
-        // remove the first segment. Only strip the notebook name if it matches the
-        // currently selected notebook's name.
-        const currentNotebook = saveDialogNotebooks?.find(
-            n => String(n.id) === String(saveNotebookId)
-        );
-        const currentNotebookName = currentNotebook?.name;
-        if (currentNotebookName && parts[0] === currentNotebookName) {
-            parts.shift();
-            return parts.join('/');
-        }
-
-        // Otherwise return the path unchanged
-        return p;
-    }
-
-    // 确认保存到笔记
-    async function confirmSaveToNote() {
-        if (!saveNotebookId) {
-            pushErrMsg('请选择笔记本');
-            return;
-        }
-
-        if (!savePath) {
-            pushErrMsg('请输入保存路径');
-            return;
-        }
-
-        try {
-            // 生成文档名称
-            let docName = saveDocumentName.trim();
-            if (!docName) {
-                // 优先使用当前会话的标题
-                const currentSession = sessions.find(s => s.id === currentSessionId);
-                if (currentSession) {
-                    docName = currentSession.title;
-                } else {
-                    // 如果没有会话，才使用默认生成方法
-                    docName = generateSessionTitle();
-                }
-            }
-
-            // 生成 Markdown 内容（不需要一级标题，思源会自动使用文档名作为标题）
-            let markdown = '';
-
-            // 确定要保存的消息
-            const messagesToSave =
-                saveMessageIndex !== null
-                    ? [messages[saveMessageIndex]].filter(m => m !== undefined && m !== null)
-                    : messages.filter(
-                          m =>
-                              m &&
-                              m !== null &&
-                              m !== undefined &&
-                              (m.role === 'user' || m.role === 'assistant')
-                      );
-
-            for (const message of messagesToSave) {
-                if (!message || !message.role) {
-                    continue;
-                }
-                if (message.role === 'user') {
-                    markdown += `## User\n\n`;
-                } else if (message.role === 'assistant') {
-                    markdown += `## AI\n\n`;
-                } else {
-                    // 跳过其他类型的消息（如 system, tool）
-                    continue;
-                }
-
-                // 处理消息内容（包括多模型响应）
-                const content = getActualMessageContent(message);
-                markdown += content + '\n\n';
-
-                // 如果有多模型响应，添加所有模型的回答
-                if (message.multiModelResponses && message.multiModelResponses.length > 0) {
-                    markdown += `### 多模型对比\n\n`;
-                    for (const response of message.multiModelResponses) {
-                        const selectedMark = response.isSelected ? ' ✅' : '';
-                        markdown += `#### ${response.modelName}${selectedMark}\n\n`;
-                        if (response.thinking) {
-                            markdown += `**思考过程：**\n\n${response.thinking}\n\n`;
-                        }
-                        if (response.content) {
-                            markdown += `${getMessageText(response.content)}\n\n`;
-                        }
-                        if (response.error) {
-                            markdown += `**错误：** ${response.error}\n\n`;
-                        }
-                    }
-                }
-
-                // 如果有思考内容，添加思考信息
-                if (message.thinking) {
-                    markdown += `### 思考过程\n\n`;
-                    markdown += message.thinking + '\n\n';
-                }
-
-                // 如果有工具调用后的最终回复
-                if (message.finalReply) {
-                    markdown += `### 最终回复\n\n`;
-                    markdown += message.finalReply + '\n\n';
-                }
-
-                // 如果有附件，添加附件信息
-                if (message.attachments && message.attachments.length > 0) {
-                    markdown += `### 附件\n\n`;
-                    for (const attachment of message.attachments) {
-                        if (attachment.type === 'image') {
-                            markdown += `![${attachment.name}](${attachment.url || attachment.data})\n\n`;
-                        } else {
-                            markdown += `- ${attachment.name}\n`;
-                        }
-                    }
-                    markdown += '\n';
-                }
-
-                // 如果有上下文文档
-                if (message.contextDocuments && message.contextDocuments.length > 0) {
-                    markdown += `### 相关上下文\n\n`;
-                    for (const doc of message.contextDocuments) {
-                        markdown += `- [${doc.title}](siyuan://blocks/${doc.id})\n`;
-                    }
-                    markdown += '\n';
-                }
-            }
-
-            // 检查是否有内容需要保存
-            if (!markdown.trim()) {
-                const errorMsg =
-                    messagesToSave.length === 0
-                        ? '当前会话没有可保存的消息（user/assistant）'
-                        : '消息内容为空，无法保存';
-                pushErrMsg(errorMsg);
-                return;
-            }
-
-            // 创建文档 - sanitize savePath to ensure it is relative (no notebook prefix)
-            const sanitizedPath = toRelativePath(savePath);
-            const fullPath = `${sanitizedPath}/${docName}`.replace(/\/+/g, '/');
-            const docId = await createDocWithMd(saveNotebookId, fullPath, markdown);
-
-            // 记住上次选择
-            settings.exportLastPath = savePath;
-            settings.exportLastNotebook = saveNotebookId;
-            await plugin.saveSettings(settings);
-
-            pushMsg(t('aiSidebar.success.saveToNoteSuccess'));
-            closeSaveToNoteDialog();
-
-            // 如果选择了保存后打开笔记，则打开文档
-            if (openAfterSave && docId) {
-                try {
-                    await openBlock(docId);
-                } catch (error) {
-                    console.error('Open document error:', error);
-                    pushErrMsg(t('aiSidebar.errors.openDocumentFailed'));
-                }
-            }
-        } catch (error) {
-            console.error('Save to note error:', error);
-            pushErrMsg('保存失败: ' + error.message);
-        }
-    }
-
     // 打开插件设置
     function openSettings() {
         plugin.openSetting();
@@ -8413,6 +9097,32 @@
         return name === key ? toolName : name;
     }
 
+    function getToolCallNameSummary(
+        toolCalls: Array<ToolCall> | undefined,
+        maxNames = 3
+    ): string {
+        if (!toolCalls || toolCalls.length === 0) return '';
+        const names = toolCalls
+            .map(call => getToolDisplayName(call?.function?.name || 'tool'))
+            .filter(Boolean);
+        const uniqueNames = Array.from(new Set(names));
+        if (uniqueNames.length === 0) return '';
+        const head = uniqueNames.slice(0, maxNames).join('、');
+        return uniqueNames.length > maxNames ? `${head}...` : head;
+    }
+
+    function getCodexTraceNameSummary(
+        traceCalls: Array<CodexTraceCall> | undefined,
+        maxNames = 3
+    ): string {
+        if (!traceCalls || traceCalls.length === 0) return '';
+        const names = traceCalls.map(item => String(item?.name || '').trim()).filter(Boolean);
+        const uniqueNames = Array.from(new Set(names));
+        if (uniqueNames.length === 0) return '';
+        const head = uniqueNames.slice(0, maxNames).join('、');
+        return uniqueNames.length > maxNames ? `${head}...` : head;
+    }
+
     // 批准工具调用
     function approveToolCall() {
         if ((window as any).__toolApprovalResolve) {
@@ -8480,6 +9190,9 @@
                             operations.push({
                                 operationType: op.operationType || 'update', // 默认为update
                                 blockId: op.blockId,
+                                filePath: normalizeEditOperationFilePath(
+                                    op.filePath || op.path || op.file || ''
+                                ),
                                 newContent: op.newContent,
                                 oldContent: undefined, // 稍后获取
                                 status: 'pending',
@@ -8497,6 +9210,9 @@
                             operations.push({
                                 operationType: op.operationType || 'update', // 默认为update
                                 blockId: op.blockId,
+                                filePath: normalizeEditOperationFilePath(
+                                    op.filePath || op.path || op.file || ''
+                                ),
                                 newContent: op.newContent,
                                 oldContent: undefined,
                                 status: 'pending',
@@ -8669,6 +9385,7 @@
 
     // 查看差异
     async function viewDiff(operation: EditOperation) {
+        await ensureEditOperationFilePath(operation);
         const operationType = operation.operationType || 'update';
 
         if (operationType === 'insert') {
@@ -8732,90 +9449,110 @@
         oldText: string,
         newText: string
     ): { type: 'removed' | 'added' | 'unchanged'; line: string }[] {
-        const oldLines = oldText.split('\n');
-        const newLines = newText.split('\n');
+        const oldLines = String(oldText || '').split('\n');
+        const newLines = String(newText || '').split('\n');
         const result: { type: 'removed' | 'added' | 'unchanged'; line: string }[] = [];
 
-        // 简单的行对比（可以使用更复杂的diff算法）
-        const maxLen = Math.max(oldLines.length, newLines.length);
-        let oldIdx = 0;
-        let newIdx = 0;
+        // LCS 行级对比，效果更接近 git diff
+        const oldLen = oldLines.length;
+        const newLen = newLines.length;
+        const lcs: number[][] = Array.from({ length: oldLen + 1 }, () =>
+            new Array<number>(newLen + 1).fill(0)
+        );
 
-        while (oldIdx < oldLines.length || newIdx < newLines.length) {
-            const oldLine = oldLines[oldIdx] || '';
-            const newLine = newLines[newIdx] || '';
-
-            if (oldLine === newLine) {
-                result.push({ type: 'unchanged', line: oldLine });
-                oldIdx++;
-                newIdx++;
-            } else if (oldIdx < oldLines.length && newIdx < newLines.length) {
-                // 两行都存在但不同
-                result.push({ type: 'removed', line: oldLine });
-                result.push({ type: 'added', line: newLine });
-                oldIdx++;
-                newIdx++;
-            } else if (oldIdx < oldLines.length) {
-                // 只有旧行
-                result.push({ type: 'removed', line: oldLine });
-                oldIdx++;
-            } else {
-                // 只有新行
-                result.push({ type: 'added', line: newLine });
-                newIdx++;
+        for (let i = oldLen - 1; i >= 0; i -= 1) {
+            for (let j = newLen - 1; j >= 0; j -= 1) {
+                if (oldLines[i] === newLines[j]) {
+                    lcs[i][j] = lcs[i + 1][j + 1] + 1;
+                } else {
+                    lcs[i][j] = Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+                }
             }
+        }
+
+        let i = 0;
+        let j = 0;
+        while (i < oldLen && j < newLen) {
+            if (oldLines[i] === newLines[j]) {
+                result.push({ type: 'unchanged', line: oldLines[i] });
+                i += 1;
+                j += 1;
+                continue;
+            }
+            if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+                result.push({ type: 'removed', line: oldLines[i] });
+                i += 1;
+            } else {
+                result.push({ type: 'added', line: newLines[j] });
+                j += 1;
+            }
+        }
+
+        while (i < oldLen) {
+            result.push({ type: 'removed', line: oldLines[i] });
+            i += 1;
+        }
+        while (j < newLen) {
+            result.push({ type: 'added', line: newLines[j] });
+            j += 1;
         }
 
         return result;
     }
 
-    // 消息操作函数
-    // 开始编辑消息
-    function startEditMessage(index: number) {
-        editingMessageIndex = index;
-        editingMessageContent = getActualMessageContent(messages[index]);
-        isEditDialogOpen = true;
-    }
+    type SplitDiffRow = {
+        leftLine: string;
+        rightLine: string;
+        leftType: 'removed' | 'unchanged' | 'empty';
+        rightType: 'added' | 'unchanged' | 'empty';
+    };
 
-    // 取消编辑消息
-    function cancelEditMessage() {
-        editingMessageIndex = null;
-        editingMessageContent = '';
-        isEditDialogOpen = false;
-    }
-
-    // 保存编辑的消息
-    function saveEditMessage() {
-        if (editingMessageIndex === null) return;
-
-        const message = messages[editingMessageIndex];
-        const newContent = editingMessageContent.trim();
-
-        // 如果是多模型响应，更新被选中的模型的内容
-        if (message.multiModelResponses && message.multiModelResponses.length > 0) {
-            const selectedIndex = message.multiModelResponses.findIndex(r => r.isSelected);
-            if (selectedIndex !== -1) {
-                // 更新被选中模型的内容
-                message.multiModelResponses[selectedIndex].content = newContent;
-                // 记录用户对该模型答案的手动编辑，便于切换时保留改动
-                if (!message._editedSelections) message._editedSelections = {};
-                message._editedSelections[selectedIndex] = newContent;
+    function generateSplitDiffRows(oldText: string, newText: string): SplitDiffRow[] {
+        const lines = generateSimpleDiff(oldText, newText);
+        const rows: SplitDiffRow[] = [];
+        for (let i = 0; i < lines.length; i += 1) {
+            const line = lines[i];
+            if (!line) continue;
+            if (line.type === 'unchanged') {
+                rows.push({
+                    leftLine: line.line,
+                    rightLine: line.line,
+                    leftType: 'unchanged',
+                    rightType: 'unchanged',
+                });
+                continue;
             }
-            // 同时更新主 content 字段（用于显示和其他操作）
-            message.content = newContent;
-        } else {
-            // 普通消息，直接更新 content
-            message.content = newContent;
+            if (line.type === 'removed') {
+                const nextLine = lines[i + 1];
+                if (nextLine && nextLine.type === 'added') {
+                    rows.push({
+                        leftLine: line.line,
+                        rightLine: nextLine.line,
+                        leftType: 'removed',
+                        rightType: 'added',
+                    });
+                    i += 1;
+                    continue;
+                }
+                rows.push({
+                    leftLine: line.line,
+                    rightLine: '',
+                    leftType: 'removed',
+                    rightType: 'empty',
+                });
+                continue;
+            }
+            rows.push({
+                leftLine: '',
+                rightLine: line.line,
+                leftType: 'empty',
+                rightType: 'added',
+            });
         }
-
-        messages = [...messages];
-        hasUnsavedChanges = true;
-
-        editingMessageIndex = null;
-        editingMessageContent = '';
-        isEditDialogOpen = false;
+        return rows;
     }
 
+    // 消息操作函数
     // 在历史消息的多模型响应中选择某个模型的答案（支持切换并保留手动编辑）
     function selectHistoryMultiModelAnswer(absMessageIndex: number, responseIndex: number) {
         const msg = messages[absMessageIndex];
@@ -8994,7 +9731,10 @@
         isLoading = true;
         isAborted = false; // 重置中断标志
         streamingMessage = '';
-        streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+        streamingSearchCalls = [];
         isThinkingPhase = false;
         autoScroll = true; // 重新生成时启用自动滚动
 
@@ -9461,7 +10201,10 @@
 
                         messages = [...messages, assistantMessage];
                         streamingMessage = '';
-                        streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+                        streamingSearchCalls = [];
                         isThinkingPhase = false;
                         isLoading = false;
                         abortController = null;
@@ -9482,7 +10225,10 @@
                         }
                         isLoading = false;
                         streamingMessage = '';
-                        streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+                        streamingSearchCalls = [];
                         isThinkingPhase = false;
                         abortController = null;
                     },
@@ -9509,7 +10255,10 @@
                 hasUnsavedChanges = true;
                 isLoading = false;
                 streamingMessage = '';
-                streamingThinking = '';
+ streamingThinking = '';
+ streamingCodexTimeline = [];
+ streamingToolCalls = [];
+                streamingSearchCalls = [];
                 isThinkingPhase = false;
             }
             abortController = null;
@@ -9570,38 +10319,507 @@
         return groups;
     }
 
-    function getStreamingThinkingPreview(text: string, maxLines = 24, maxChars = 2400): string {
-        const normalized = normalizeThinkingText(text)
-            .replace(/\r\n/g, '\n')
-            .split('\n')
-            .map(line => line.replace(/[ \t]+$/g, ''));
+    function getCodexTraceText(
+        text: string | null | undefined,
+        maxLines = 24,
+        maxChars = 2400
+    ): string {
+        void maxLines;
+        void maxChars;
+        return normalizeThinkingText(String(text || '')).replace(/\r\n/g, '\n');
+    }
 
-        const compactLines: string[] = [];
-        let lastBlank = false;
-        for (const line of normalized) {
-            const isBlank = line.trim().length === 0;
-            if (isBlank) {
-                if (!lastBlank) {
-                    compactLines.push('');
-                }
-                lastBlank = true;
-                continue;
+    function getEditOperationDisplayTexts(operation: EditOperation): {
+        oldText: string;
+        newText: string;
+    } {
+        const operationType = operation.operationType || 'update';
+        const oldText =
+            operationType === 'insert'
+                ? ''
+                : String(operation.oldContentForDisplay || operation.oldContent || '');
+        const newText = String(
+            operation.newContentForDisplay ||
+                stripKramdownIdMarkersForDisplay(operation.newContent || '')
+        );
+        return { oldText, newText };
+    }
+
+    const SIYUAN_BLOCK_ID_PATTERN = /^\d{14}-[a-z0-9]+$/i;
+    const editOperationBlockFilePathCache = new Map<string, string>();
+    const editOperationBlockFilePathTasks = new Map<string, Promise<string>>();
+
+    function normalizeDocFilePath(notebook: string, path: string): string {
+        const box = String(notebook || '').trim();
+        const rawPath = String(path || '').trim().replace(/^\/+/, '');
+        if (!box || !rawPath) return '';
+        return `${box}/${rawPath}`;
+    }
+
+    function normalizeDocDisplayPath(notebook: string, hpath: string): string {
+        const box = String(notebook || '').trim();
+        const rawPath = String(hpath || '').trim().replace(/^\/+/, '');
+        if (!box || !rawPath) return '';
+        return `${box}/${rawPath}`;
+    }
+
+    async function resolveDocFilePathFromBlockId(rawBlockId: unknown): Promise<string> {
+        const blockId = String(rawBlockId || '').trim();
+        if (!blockId) return '';
+
+        if (blockId.includes(':') && !SIYUAN_BLOCK_ID_PATTERN.test(blockId)) {
+            const sepIdx = blockId.indexOf(':');
+            if (sepIdx > 0) {
+                const notebook = blockId.slice(0, sepIdx).trim();
+                const path = blockId.slice(sepIdx + 1).trim();
+                return normalizeDocFilePath(notebook, path);
             }
-            compactLines.push(line);
-            lastBlank = false;
         }
 
-        while (compactLines.length > 0 && compactLines[0] === '') compactLines.shift();
-        while (compactLines.length > 0 && compactLines[compactLines.length - 1] === '')
-            compactLines.pop();
+        if (!SIYUAN_BLOCK_ID_PATTERN.test(blockId)) return '';
 
-        if (compactLines.length === 0) return '';
+        const cachedPath = editOperationBlockFilePathCache.get(blockId);
+        if (cachedPath) return cachedPath;
 
-        const compactText = compactLines.join('\n');
-        const tail = compactText.length > maxChars ? compactText.slice(-maxChars) : compactText;
-        const lines = tail.split('\n');
-        if (lines.length <= maxLines) return lines.join('\n');
-        return ['...（仅显示最近片段）', ...lines.slice(-maxLines)].join('\n');
+        const existingTask = editOperationBlockFilePathTasks.get(blockId);
+        if (existingTask) return existingTask;
+
+        const task = (async () => {
+            try {
+                const block = await getBlockByID(blockId);
+                if (!block) return '';
+                const docId =
+                    String(block.type || '').toLowerCase() === 'd'
+                        ? String(block.id || '').trim()
+                        : String(block.root_id || '').trim();
+                if (!docId) return '';
+
+                let docBlock = block;
+                if (
+                    String(docBlock.id || '').trim() !== docId ||
+                    String(docBlock.type || '').toLowerCase() !== 'd'
+                ) {
+                    const root = await getBlockByID(docId);
+                    if (root) docBlock = root;
+                }
+
+                const resolvedPath = normalizeDocFilePath(
+                    String(docBlock.box || block.box || ''),
+                    String(docBlock.path || block.path || '')
+                );
+                const displayPath = normalizeDocDisplayPath(
+                    String(docBlock.box || block.box || ''),
+                    String(docBlock.hpath || block.hpath || '')
+                );
+                const finalPath = displayPath || resolvedPath;
+                if (finalPath) {
+                    editOperationBlockFilePathCache.set(blockId, finalPath);
+                }
+                return finalPath;
+            } catch {
+                return '';
+            } finally {
+                editOperationBlockFilePathTasks.delete(blockId);
+            }
+        })();
+
+        editOperationBlockFilePathTasks.set(blockId, task);
+        return task;
+    }
+
+    async function ensureEditOperationFilePath(operation: EditOperation | null | undefined): Promise<void> {
+        if (!operation) return;
+        const explicitPath = normalizeEditOperationFilePath(operation.filePath);
+        if (explicitPath) {
+            operation.filePath = explicitPath;
+            return;
+        }
+        const resolvedPath = await resolveDocFilePathFromBlockId(operation.blockId);
+        if (resolvedPath) {
+            operation.filePath = resolvedPath;
+        }
+    }
+
+    async function ensureEditOperationFilePaths(
+        operations: EditOperation[] | null | undefined
+    ): Promise<void> {
+        if (!Array.isArray(operations) || operations.length === 0) return;
+        await Promise.allSettled(operations.map(operation => ensureEditOperationFilePath(operation)));
+    }
+
+    async function ensureTraceEditOperationFilePaths(
+        traces: CodexTraceCall[] | null | undefined
+    ): Promise<void> {
+        if (!Array.isArray(traces) || traces.length === 0) return;
+        const tasks: Promise<void>[] = [];
+        for (const trace of traces) {
+            if (trace?.editOperations?.length) {
+                tasks.push(ensureEditOperationFilePaths(trace.editOperations));
+            }
+        }
+        if (tasks.length > 0) {
+            await Promise.allSettled(tasks);
+        }
+    }
+
+    function collectMessageEditOperations(message: Message | null | undefined): EditOperation[] {
+        if (!message || typeof message !== 'object') return [];
+        const operations: EditOperation[] = [];
+        if (Array.isArray(message.editOperations)) {
+            operations.push(...message.editOperations);
+        }
+        const traceCollections: Array<CodexTraceCall[] | undefined> = [
+            message.codexTimeline,
+            message.codexSearchCalls,
+            message.codexToolCalls,
+        ];
+        for (const traces of traceCollections) {
+            if (!Array.isArray(traces)) continue;
+            for (const trace of traces) {
+                if (Array.isArray(trace?.editOperations)) {
+                    operations.push(...trace.editOperations);
+                }
+            }
+        }
+        return operations;
+    }
+
+    function countMissingEditOperationFilePaths(
+        operations: EditOperation[] | null | undefined
+    ): number {
+        if (!Array.isArray(operations) || operations.length === 0) return 0;
+        return operations.reduce((count, operation) => {
+            return normalizeEditOperationFilePath(operation?.filePath) ? count : count + 1;
+        }, 0);
+    }
+
+    async function ensureMessagesEditOperationFilePaths(
+        sourceMessages: Message[] | null | undefined
+    ): Promise<boolean> {
+        if (!Array.isArray(sourceMessages) || sourceMessages.length === 0) return false;
+        const allOperations = sourceMessages.flatMap(message => collectMessageEditOperations(message));
+        if (allOperations.length === 0) return false;
+        const missingBefore = countMissingEditOperationFilePaths(allOperations);
+        if (missingBefore === 0) return false;
+        await ensureEditOperationFilePaths(allOperations);
+        const missingAfter = countMissingEditOperationFilePaths(allOperations);
+        return missingAfter < missingBefore;
+    }
+
+    type EditOperationFileGroup = {
+        fileKey: string;
+        fileLabel: string;
+        operations: EditOperation[];
+        oldCombined: string;
+        newCombined: string;
+        added: number;
+        removed: number;
+        pendingCount: number;
+        appliedCount: number;
+        rejectedCount: number;
+    };
+
+    function getEditOperationFileKey(operation: EditOperation): string {
+        const explicitPath = normalizeEditOperationFilePath(operation.filePath);
+        if (explicitPath) return explicitPath;
+        const rawBlockId = String(operation.blockId || '').trim();
+        if (!rawBlockId) return 'note/unknown';
+        const cachedFilePath = editOperationBlockFilePathCache.get(rawBlockId);
+        if (cachedFilePath) return cachedFilePath;
+        if (rawBlockId.includes(':') && !/^\d{14}-[a-z0-9]+$/i.test(rawBlockId)) {
+            return rawBlockId.replace(':', '/');
+        }
+        if (/^\d{14}-[a-z0-9]+$/i.test(rawBlockId)) {
+            return `note/${rawBlockId}`;
+        }
+        return 'note/unknown';
+    }
+
+    function extractMarkdownTitleFromText(rawText: string): string {
+        const text = String(rawText || '').trim();
+        if (!text) return '';
+        const lines = text.split('\n');
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const heading = trimmed.match(/^#\s+(.+)$/);
+            if (heading?.[1]) {
+                return heading[1].trim();
+            }
+            break;
+        }
+        return '';
+    }
+
+    function getEditOperationFileLabel(fileKey: string, operations: EditOperation[]): string {
+        for (const operation of operations) {
+            const { oldText, newText } = getEditOperationDisplayTexts(operation);
+            const title = extractMarkdownTitleFromText(newText) || extractMarkdownTitleFromText(oldText);
+            if (title) return title;
+        }
+
+        const normalized = normalizeEditOperationFilePath(fileKey);
+        if (normalized && normalized !== 'note/unknown') {
+            const slashIdx = normalized.indexOf('/');
+            if (slashIdx > -1 && slashIdx < normalized.length - 1) {
+                const tail = normalized.slice(slashIdx + 1).replace(/\.sy$/i, '');
+                const segs = tail.split('/').filter(Boolean);
+                return segs.length > 0 ? segs[segs.length - 1] : tail;
+            }
+            const cleaned = normalized.replace(/\.sy$/i, '');
+            const segs = cleaned.split('/').filter(Boolean);
+            return segs.length > 0 ? segs[segs.length - 1] : cleaned;
+        }
+
+        const blockId = operations
+            .map(operation => String(operation.blockId || '').trim())
+            .find(id => !!id && id !== 'unknown');
+        if (blockId) return blockId;
+        return 'note/unknown';
+    }
+
+    function getTraceDiffFileNameSummary(
+        operations: EditOperation[] | null | undefined,
+        maxNames = 2
+    ): string {
+        const source = Array.isArray(operations) ? operations : [];
+        if (!source.length) return '';
+        const grouped = new Map<string, EditOperation[]>();
+        for (const operation of source) {
+            const key = getEditOperationFileKey(operation);
+            const list = grouped.get(key) || [];
+            list.push(operation);
+            grouped.set(key, list);
+        }
+        const labels = Array.from(grouped.entries())
+            .map(([key, groupOps]) => getEditOperationFileLabel(key, groupOps))
+            .filter(Boolean);
+        const uniqueLabels = Array.from(new Set(labels));
+        if (!uniqueLabels.length) return '';
+        const head = uniqueLabels.slice(0, maxNames).join('、');
+        return uniqueLabels.length > maxNames ? `${head}...` : head;
+    }
+
+    function isLikelyFullDocumentSnapshot(text: string): boolean {
+        const normalized = String(text || '').trim();
+        if (!normalized) return false;
+        const lineCount = normalized.split('\n').length;
+        if (lineCount >= 12) return true;
+        if (/^#\s+/m.test(normalized) && lineCount >= 4) return true;
+        return normalized.length >= 500;
+    }
+
+    function buildMergedEditOperationTexts(operations: EditOperation[]): { oldText: string; newText: string } {
+        if (!operations.length) return { oldText: '', newText: '' };
+
+        const snapshots = operations.map(operation => {
+            const { oldText, newText } = getEditOperationDisplayTexts(operation);
+            return {
+                operation,
+                oldText,
+                newText,
+                isSnapshot:
+                    operation.operationType === 'update' &&
+                    (isLikelyFullDocumentSnapshot(oldText) || isLikelyFullDocumentSnapshot(newText)),
+            };
+        });
+
+        const snapshotUpdates = snapshots.filter(item => item.isSnapshot);
+        if (snapshotUpdates.length > 0) {
+            const firstWithOld =
+                snapshotUpdates.find(item => String(item.oldText || '').trim().length > 0) ||
+                snapshotUpdates[0];
+            const lastWithNew =
+                [...snapshotUpdates].reverse().find(item => String(item.newText || '').trim().length > 0) ||
+                snapshotUpdates[snapshotUpdates.length - 1];
+            return {
+                oldText: String(firstWithOld.oldText || ''),
+                newText: String(lastWithNew.newText || ''),
+            };
+        }
+
+        if (operations.length === 1) {
+            return getEditOperationDisplayTexts(operations[0]);
+        }
+
+        const oldParts = snapshots
+            .map(item => String(item.oldText || '').trim())
+            .filter(Boolean);
+        const newParts = snapshots
+            .map(item => String(item.newText || '').trim())
+            .filter(Boolean);
+        return {
+            oldText: oldParts.join('\n'),
+            newText: newParts.join('\n'),
+        };
+    }
+
+    function compactTraceDiffLines(
+        lines: { type: 'removed' | 'added' | 'unchanged'; line: string }[],
+        maxLines: number
+    ): { type: 'removed' | 'added' | 'unchanged'; line: string }[] {
+        if (!Array.isArray(lines) || lines.length === 0) return [];
+        if (maxLines <= 0 || lines.length <= maxLines) return lines;
+
+        const changedIndices: number[] = [];
+        for (let i = 0; i < lines.length; i += 1) {
+            if (lines[i].type !== 'unchanged') changedIndices.push(i);
+        }
+        if (!changedIndices.length) {
+            return lines.slice(0, maxLines);
+        }
+
+        const context = 1;
+        const picked = new Set<number>();
+        for (const idx of changedIndices) {
+            for (
+                let cursor = Math.max(0, idx - context);
+                cursor <= Math.min(lines.length - 1, idx + context);
+                cursor += 1
+            ) {
+                picked.add(cursor);
+            }
+        }
+
+        const sorted = Array.from(picked).sort((a, b) => a - b);
+        const compacted: { type: 'removed' | 'added' | 'unchanged'; line: string }[] = [];
+        let prev = -2;
+        for (const idx of sorted) {
+            if (idx - prev > 1) {
+                compacted.push({ type: 'unchanged', line: '...' });
+            }
+            compacted.push(lines[idx]);
+            prev = idx;
+        }
+
+        if (compacted.length <= maxLines) return compacted;
+        return compacted.slice(0, maxLines);
+    }
+
+    function buildEditOperationFileGroups(
+        operations: EditOperation[] | null | undefined
+    ): EditOperationFileGroup[] {
+        const source = Array.isArray(operations) ? operations : [];
+        if (!source.length) return [];
+        const grouped = new Map<string, EditOperationFileGroup>();
+        for (const operation of source) {
+            const fileKey = getEditOperationFileKey(operation);
+            const fileLabel = fileKey || 'unknown';
+            let group = grouped.get(fileKey);
+            if (!group) {
+                group = {
+                    fileKey,
+                    fileLabel,
+                    operations: [],
+                    oldCombined: '',
+                    newCombined: '',
+                    added: 0,
+                    removed: 0,
+                    pendingCount: 0,
+                    appliedCount: 0,
+                    rejectedCount: 0,
+                };
+                grouped.set(fileKey, group);
+            }
+            group.operations.push(operation);
+            if (operation.status === 'applied') group.appliedCount += 1;
+            else if (operation.status === 'rejected') group.rejectedCount += 1;
+            else group.pendingCount += 1;
+        }
+        for (const group of grouped.values()) {
+            group.fileLabel = getEditOperationFileLabel(group.fileKey, group.operations);
+            const mergedTexts = buildMergedEditOperationTexts(group.operations);
+            group.oldCombined = mergedTexts.oldText;
+            group.newCombined = mergedTexts.newText;
+            const mergedLines = generateSimpleDiff(group.oldCombined, group.newCombined);
+            for (const line of mergedLines) {
+                if (line.type === 'added') group.added += 1;
+                if (line.type === 'removed') group.removed += 1;
+            }
+        }
+        return Array.from(grouped.values());
+    }
+
+    function getEditOperationFileGroupStatus(
+        group: EditOperationFileGroup
+    ): 'pending' | 'applied' | 'rejected' | 'mixed' {
+        if (group.pendingCount > 0 && group.appliedCount === 0 && group.rejectedCount === 0)
+            return 'pending';
+        if (group.appliedCount > 0 && group.pendingCount === 0 && group.rejectedCount === 0)
+            return 'applied';
+        if (group.rejectedCount > 0 && group.pendingCount === 0 && group.appliedCount === 0)
+            return 'rejected';
+        return 'mixed';
+    }
+
+    async function applyEditOperationFileGroup(group: EditOperationFileGroup, messageIndex: number) {
+        for (const operation of group.operations) {
+            if (operation.status !== 'pending') continue;
+            await applyEditOperation(operation, messageIndex);
+        }
+    }
+
+    function rejectEditOperationFileGroup(group: EditOperationFileGroup, messageIndex: number) {
+        for (const operation of group.operations) {
+            if (operation.status !== 'pending') continue;
+            rejectEditOperation(operation, messageIndex);
+        }
+    }
+
+    function viewEditOperationFileGroupDiff(group: EditOperationFileGroup) {
+        if (!group.operations.length) return;
+        const first = group.operations[0];
+        currentDiffOperation = {
+            ...first,
+            operationType: 'update',
+            blockId: first.blockId || group.fileLabel || 'unknown',
+            filePath: group.fileLabel,
+            status: first.status,
+            oldContent: group.oldCombined,
+            oldContentForDisplay: group.oldCombined,
+            newContent: group.newCombined,
+            newContentForDisplay: group.newCombined,
+        };
+        isDiffDialogOpen = true;
+    }
+
+    function getTraceEditFileGroupLines(
+        group: EditOperationFileGroup,
+        maxLines = 14
+    ): { type: 'removed' | 'added' | 'unchanged'; line: string }[] {
+        const lines = generateSimpleDiff(String(group.oldCombined || ''), String(group.newCombined || ''));
+        return compactTraceDiffLines(lines, maxLines);
+    }
+
+    function buildCodexTraceKeyPart(trace: CodexTraceCall, traceIdx: number): string {
+        const raw = firstNonEmptyString(trace.id, trace.name, trace.eventType, String(traceIdx));
+        return raw.replace(/[^a-zA-Z0-9_:-]/g, '_').slice(0, 140);
+    }
+
+    function buildHistoryCodexTraceExpandKey(
+        section: 'timeline' | 'search' | 'tool',
+        messageSequence: number,
+        trace: CodexTraceCall,
+        traceIdx: number
+    ): string {
+        return `history_${section}_${messageSequence}_${trace.kind || 'tool'}_${buildCodexTraceKeyPart(trace, traceIdx)}_${traceIdx}`;
+    }
+
+    function buildStreamingCodexTraceExpandKey(
+        section: 'timeline' | 'search' | 'tool',
+        trace: CodexTraceCall,
+        traceIdx: number
+    ): string {
+        return `stream_${section}_${trace.kind || 'tool'}_${buildCodexTraceKeyPart(trace, traceIdx)}_${traceIdx}`;
+    }
+
+    function toggleCodexTraceExpanded(key: string) {
+        if (!key) return;
+        const currentState = codexTraceExpanded[key] ?? false;
+        codexTraceExpanded = {
+            ...codexTraceExpanded,
+            [key]: !currentState,
+        };
     }
 
     // 响应式计算消息组
@@ -9642,13 +10860,6 @@
                 title={t('aiSidebar.actions.copyAllChat')}
             >
                 <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-            </button>
-            <button
-                class="b3-button b3-button--text"
-                on:click={() => openSaveToNoteDialog()}
-                title={t('aiSidebar.actions.saveToNote')}
-            >
-                <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
             </button>
             <button
                 class="b3-button b3-button--text"
@@ -9725,7 +10936,7 @@
                         <!-- 不渲染 tool 消息 -->
                     {:else}
                         <!-- 显示思考过程 -->
-                        {#if message.role === 'assistant' && message.thinking && !(message.multiModelResponses && message.multiModelResponses.length > 0)}
+                        {#if message.role === 'assistant' && message.thinking && !(message.multiModelResponses && message.multiModelResponses.length > 0) && !(message.codexTimeline && message.codexTimeline.length > 0)}
                             {@const thinkingIndex = messageIndex + msgIndex}
                             {@const isCollapsed = thinkingCollapsed[thinkingIndex] ?? true}
                             <div class="ai-message__thinking">
@@ -9752,6 +10963,356 @@
                                         {@html thinkDisplay}
                                     </div>
                                 {/if}
+                            </div>
+                        {/if}
+
+                        {#if message.role === 'assistant' && message.codexTimeline && message.codexTimeline.length > 0}
+                            <div class="ai-message__trace ai-message__trace--timeline">
+                                <div class="ai-message__trace-title">
+                                    Execution ({message.codexTimeline.length})
+                                </div>
+                                {#each message.codexTimeline as trace, traceIdx}
+                                    {@const traceKey = buildHistoryCodexTraceExpandKey(
+                                        'timeline',
+                                        messageIndex + msgIndex,
+                                        trace,
+                                        traceIdx
+                                    )}
+                                    {@const traceExpanded = codexTraceExpanded[traceKey] ?? false}
+                                    {@const traceDiffTarget = trace.kind === 'diff'
+                                        ? getTraceDiffFileNameSummary(trace.editOperations, 1)
+                                        : ''}
+                                    <div
+                                        class="ai-message__trace-item"
+                                        class:ai-message__trace-item--diff={trace.kind === 'diff'}
+                                    >
+                                        <div
+                                            class="ai-message__trace-item-header"
+                                            class:ai-message__trace-item-header--diff={trace.kind === 'diff'}
+                                            on:click|stopPropagation={() =>
+                                                toggleCodexTraceExpanded(traceKey)}
+                                        >
+                                            <svg
+                                                class="ai-message__trace-item-icon"
+                                                class:collapsed={!traceExpanded}
+                                            >
+                                                <use xlink:href="#iconRight"></use>
+                                            </svg>
+                                            <span
+                                                class="ai-message__trace-item-kind"
+                                                class:ai-message__trace-item-kind--diff={trace.kind === 'diff'}
+                                            >
+                                                {getCodexTimelineTypeLabel(trace.kind)}
+                                            </span>
+                                            {#if getCodexTimelineEntryName(trace)}
+                                                <span
+                                                    class="ai-message__trace-item-name"
+                                                    class:ai-message__trace-item-name--diff={trace.kind === 'diff'}
+                                                >
+                                                    {getCodexTimelineEntryName(trace)}
+                                                </span>
+                                            {/if}
+                                            {#if trace.kind === 'diff' && traceDiffTarget}
+                                                <span
+                                                    class="ai-message__trace-item-target"
+                                                    title={traceDiffTarget}
+                                                >
+                                                    {traceDiffTarget}
+                                                </span>
+                                            {/if}
+                                            {#if trace.kind !== 'thinking'}
+                                                <span
+                                                    class="ai-message__trace-item-status ai-message__trace-item-status--{trace.status || 'running'}"
+                                                    class:ai-message__trace-item-status--with-target={trace.kind ===
+                                                        'diff' &&
+                                                        !!traceDiffTarget}
+                                                >
+                                                    {getCodexTraceStatusText(trace.status)}
+                                                </span>
+                                            {/if}
+                                        </div>
+                                        {#if traceExpanded}
+                                            <div
+                                                class="ai-message__trace-item-body"
+                                                class:ai-message__trace-item-body--diff={trace.kind === 'diff'}
+                                            >
+                                                {#if trace.kind === 'thinking'}
+                                                    {#if trace.text}
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.text, 18, 3200)}</pre>
+                                                    {/if}
+                                                {:else if trace.kind === 'diff'}
+                                                    {#if trace.editOperations && trace.editOperations.length > 0}
+                                                        {@const traceFileGroups = buildEditOperationFileGroups(
+                                                            trace.editOperations
+                                                        )}
+                                                        <div class="ai-message__trace-tool-diffs">
+                                                            {#each traceFileGroups as fileGroup}
+                                                                <div class="ai-message__trace-tool-diff ai-message__trace-tool-diff--flat">
+                                                                    <div class="ai-message__trace-tool-diff-header ai-message__trace-tool-diff-header--flat">
+                                                                        <span class="ai-message__trace-tool-diff-title">
+                                                                            {fileGroup.fileLabel}
+                                                                        </span>
+                                                                        <span class="ai-message__trace-tool-diff-stats">
+                                                                            +{fileGroup.added}
+                                                                            -{fileGroup.removed}
+                                                                        </span>
+                                                                        <button
+                                                                            class="b3-button b3-button--text b3-button--small ai-message__trace-tool-diff-open"
+                                                                            on:click|stopPropagation={() =>
+                                                                                viewEditOperationFileGroupDiff(
+                                                                                    fileGroup
+                                                                                )}
+                                                                            title={t(
+                                                                                'aiSidebar.actions.viewDiff'
+                                                                            )}
+                                                                        >
+                                                                            Diff
+                                                                        </button>
+                                                                    </div>
+                                                                    <div class="ai-message__trace-tool-diff-body">
+                                                                        {#each getTraceEditFileGroupLines(fileGroup, 12) as line}
+                                                                            <div
+                                                                                class="ai-message__trace-tool-diff-line ai-message__trace-tool-diff-line--{line.type}"
+                                                                            >
+                                                                                <span class="ai-message__trace-tool-diff-marker">
+                                                                                    {line.type === 'removed'
+                                                                                        ? '-'
+                                                                                        : line.type === 'added'
+                                                                                          ? '+'
+                                                                                          : '·'}
+                                                                                </span>
+                                                                                <span class="ai-message__trace-tool-diff-text">
+                                                                                    {line.line}
+                                                                                </span>
+                                                                            </div>
+                                                                        {/each}
+                                                                    </div>
+                                                                </div>
+                                                            {/each}
+                                                        </div>
+                                                    {/if}
+                                                {:else}
+                                                    {#if trace.query}
+                                                        <div class="ai-message__trace-field">
+                                                            <div class="ai-message__trace-field-label">
+                                                                Query
+                                                            </div>
+                                                            <pre class="ai-message__trace-pre"
+                                                                >{getCodexTraceText(trace.query, 10, 1600)}</pre>
+                                                        </div>
+                                                    {/if}
+                                                    {#if trace.input && trace.input !== trace.query}
+                                                        <div class="ai-message__trace-field">
+                                                            <div class="ai-message__trace-field-label">
+                                                                输入
+                                                            </div>
+                                                            <pre class="ai-message__trace-pre"
+                                                                >{getCodexTraceText(trace.input, 12, 2200)}</pre>
+                                                        </div>
+                                                    {/if}
+                                                    {#if trace.output}
+                                                        <div class="ai-message__trace-field">
+                                                            <div class="ai-message__trace-field-label">
+                                                                {trace.kind === 'search'
+                                                                    ? '结果'
+                                                                    : '输出'}
+                                                            </div>
+                                                            <pre class="ai-message__trace-pre"
+                                                                >{getCodexTraceText(trace.output, 18, 3200)}</pre>
+                                                        </div>
+                                                    {/if}
+                                                {/if}
+                                            </div>
+                                        {/if}
+                                    </div>
+                                {/each}
+                            </div>
+                        {/if}
+
+                        {#if message.role === 'assistant' && !(message.codexTimeline && message.codexTimeline.length > 0) && message.codexSearchCalls && message.codexSearchCalls.length > 0}
+                            <div class="ai-message__trace ai-message__trace--search">
+                                <div class="ai-message__trace-title">
+                                    Search ({message.codexSearchCalls.length})
+                                </div>
+                                {#each message.codexSearchCalls as trace, traceIdx}
+                                    {@const traceKey = buildHistoryCodexTraceExpandKey(
+                                        'search',
+                                        messageIndex + msgIndex,
+                                        trace,
+                                        traceIdx
+                                    )}
+                                    {@const traceExpanded = codexTraceExpanded[traceKey] ?? false}
+                                    <div class="ai-message__trace-item">
+                                        <div
+                                            class="ai-message__trace-item-header"
+                                            on:click|stopPropagation={() =>
+                                                toggleCodexTraceExpanded(traceKey)}
+                                        >
+                                            <svg
+                                                class="ai-message__trace-item-icon"
+                                                class:collapsed={!traceExpanded}
+                                            >
+                                                <use xlink:href="#iconRight"></use>
+                                            </svg>
+                                            <span class="ai-message__trace-item-name">
+                                                {trace.name || 'Search'}
+                                            </span>
+                                            <span
+                                                class="ai-message__trace-item-status ai-message__trace-item-status--{trace.status || 'running'}"
+                                            >
+                                                {getCodexTraceStatusText(trace.status)}
+                                            </span>
+                                        </div>
+                                        {#if traceExpanded}
+                                            <div class="ai-message__trace-item-body">
+                                                {#if trace.query}
+                                                    <div class="ai-message__trace-field">
+                                                        <div class="ai-message__trace-field-label">
+                                                            Query
+                                                        </div>
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.query, 10, 1600)}</pre>
+                                                    </div>
+                                                {/if}
+                                                {#if trace.input && trace.input !== trace.query}
+                                                    <div class="ai-message__trace-field">
+                                                        <div class="ai-message__trace-field-label">
+                                                            输入
+                                                        </div>
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.input, 12, 2200)}</pre>
+                                                    </div>
+                                                {/if}
+                                                {#if trace.output}
+                                                    <div class="ai-message__trace-field">
+                                                        <div class="ai-message__trace-field-label">
+                                                            结果
+                                                        </div>
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.output, 18, 3200)}</pre>
+                                                    </div>
+                                                {/if}
+                                            </div>
+                                        {/if}
+                                    </div>
+                                {/each}
+                            </div>
+                        {/if}
+
+                        {#if message.role === 'assistant' && !(message.codexTimeline && message.codexTimeline.length > 0) && message.codexToolCalls && message.codexToolCalls.length > 0}
+                            {@const codexToolSummary = getCodexTraceNameSummary(message.codexToolCalls)}
+                            <div class="ai-message__trace ai-message__trace--tool">
+                                <div class="ai-message__trace-title">
+                                    Tool Calls ({message.codexToolCalls.length})
+                                    {#if codexToolSummary}
+                                        <span class="ai-message__trace-title-summary">
+                                            {codexToolSummary}
+                                        </span>
+                                    {/if}
+                                </div>
+                                {#each message.codexToolCalls as trace, traceIdx}
+                                    {@const traceKey = buildHistoryCodexTraceExpandKey(
+                                        'tool',
+                                        messageIndex + msgIndex,
+                                        trace,
+                                        traceIdx
+                                    )}
+                                    {@const traceExpanded = codexTraceExpanded[traceKey] ?? false}
+                                    <div class="ai-message__trace-item">
+                                        <div
+                                            class="ai-message__trace-item-header"
+                                            on:click|stopPropagation={() =>
+                                                toggleCodexTraceExpanded(traceKey)}
+                                        >
+                                            <svg
+                                                class="ai-message__trace-item-icon"
+                                                class:collapsed={!traceExpanded}
+                                            >
+                                                <use xlink:href="#iconRight"></use>
+                                            </svg>
+                                            <span class="ai-message__trace-item-name">
+                                                {trace.name || 'Tool'}
+                                            </span>
+                                            <span
+                                                class="ai-message__trace-item-status ai-message__trace-item-status--{trace.status || 'running'}"
+                                            >
+                                                {getCodexTraceStatusText(trace.status)}
+                                            </span>
+                                        </div>
+                                        {#if traceExpanded}
+                                            <div class="ai-message__trace-item-body">
+                                                {#if trace.input}
+                                                    <div class="ai-message__trace-field">
+                                                        <div class="ai-message__trace-field-label">
+                                                            参数
+                                                        </div>
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.input, 12, 2200)}</pre>
+                                                    </div>
+                                                {/if}
+                                                {#if trace.output}
+                                                    <div class="ai-message__trace-field">
+                                                        <div class="ai-message__trace-field-label">
+                                                            输出
+                                                        </div>
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.output, 18, 3200)}</pre>
+                                                    </div>
+                                                {/if}
+                                                {#if trace.editOperations && trace.editOperations.length > 0}
+                                                    {@const traceFileGroups = buildEditOperationFileGroups(
+                                                        trace.editOperations
+                                                    )}
+                                                    <div class="ai-message__trace-tool-diffs">
+                                                        {#each traceFileGroups as fileGroup}
+                                                            <div class="ai-message__trace-tool-diff ai-message__trace-tool-diff--flat">
+                                                                <div class="ai-message__trace-tool-diff-header ai-message__trace-tool-diff-header--flat">
+                                                                    <span class="ai-message__trace-tool-diff-title">
+                                                                        {fileGroup.fileLabel}
+                                                                    </span>
+                                                                    <span class="ai-message__trace-tool-diff-stats">
+                                                                        +{fileGroup.added} -{fileGroup.removed}
+                                                                    </span>
+                                                                    <button
+                                                                        class="b3-button b3-button--text b3-button--small ai-message__trace-tool-diff-open"
+                                                                        on:click|stopPropagation={() =>
+                                                                            viewEditOperationFileGroupDiff(
+                                                                                fileGroup
+                                                                            )}
+                                                                        title={t(
+                                                                            'aiSidebar.actions.viewDiff'
+                                                                        )}
+                                                                    >
+                                                                        Diff
+                                                                    </button>
+                                                                </div>
+                                                                <div class="ai-message__trace-tool-diff-body">
+                                                                    {#each getTraceEditFileGroupLines(fileGroup, 12) as line}
+                                                                        <div
+                                                                            class="ai-message__trace-tool-diff-line ai-message__trace-tool-diff-line--{line.type}"
+                                                                        >
+                                                                            <span class="ai-message__trace-tool-diff-marker">
+                                                                                {line.type === 'removed'
+                                                                                    ? '-'
+                                                                                    : line.type === 'added'
+                                                                                      ? '+'
+                                                                                      : '·'}
+                                                                            </span>
+                                                                            <span class="ai-message__trace-tool-diff-text">
+                                                                                {line.line}
+                                                                            </span>
+                                                                        </div>
+                                                                    {/each}
+                                                                </div>
+                                                            </div>
+                                                        {/each}
+                                                    </div>
+                                                {/if}
+                                            </div>
+                                        {/if}
+                                    </div>
+                                {/each}
                             </div>
                         {/if}
 
@@ -10263,9 +11824,15 @@
 
                         <!-- 显示工具调用 -->
                         {#if message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0}
+                            {@const toolCallSummary = getToolCallNameSummary(message.tool_calls)}
                             <div class="ai-message__tool-calls">
                                 <div class="ai-message__tool-calls-title">
                                     🔧 {t('tools.calling')} ({message.tool_calls.length})
+                                    {#if toolCallSummary}
+                                        <span class="ai-message__tool-calls-summary">
+                                            {toolCallSummary}
+                                        </span>
+                                    {/if}
                                 </div>
                                 {#each message.tool_calls as toolCall}
                                     {@const toolResult = group.messages
@@ -10389,90 +11956,73 @@
                             </div>
                         {/if}
 
-                        <!-- 显示编辑操作 -->
+                        <!-- 显示编辑差异（按文件分组） -->
                         {#if message.role === 'assistant' && message.editOperations && message.editOperations.length > 0}
-                            <div class="ai-message__edit-operations">
-                                <div class="ai-message__edit-operations-title">
-                                    📝 {t('aiSidebar.edit.title')} ({message.editOperations.length})
+                            {@const editFileGroups = buildEditOperationFileGroups(message.editOperations)}
+                            {#if editFileGroups.length > 0}
+                                <div class="ai-message__edit-operations">
+                                    {#each editFileGroups as fileGroup}
+                                        {@const fileStatus = getEditOperationFileGroupStatus(fileGroup)}
+                                        <div
+                                            class="ai-message__edit-file-group ai-message__edit-file-group--{fileStatus}"
+                                        >
+                                            <div class="ai-message__edit-file-header">
+                                                <span class="ai-message__edit-file-path">
+                                                    {fileGroup.fileLabel}
+                                                </span>
+                                                <span class="ai-message__edit-file-stats">
+                                                    Δ{fileGroup.added + fileGroup.removed} (+{fileGroup.added} -{fileGroup.removed})
+                                                </span>
+                                                <span class="ai-message__edit-file-status">
+                                                    {#if fileStatus === 'applied'}
+                                                        ✓ 已应用
+                                                    {:else if fileStatus === 'rejected'}
+                                                        ✗ 已拒绝
+                                                    {:else if fileStatus === 'pending'}
+                                                        ⏳ 待处理
+                                                    {:else}
+                                                        • 混合
+                                                    {/if}
+                                                </span>
+                                            </div>
+                                            <div class="ai-message__edit-file-actions">
+                                                <button
+                                                    class="b3-button b3-button--text b3-button--small"
+                                                    on:click|stopPropagation={() =>
+                                                        viewEditOperationFileGroupDiff(fileGroup)}
+                                                    title={t('aiSidebar.actions.viewDiff')}
+                                                >
+                                                    Diff
+                                                </button>
+                                                {#if fileGroup.pendingCount > 0}
+                                                    <button
+                                                        class="b3-button b3-button--outline b3-button--small"
+                                                        on:click|stopPropagation={() =>
+                                                            applyEditOperationFileGroup(
+                                                                fileGroup,
+                                                                messageIndex + msgIndex
+                                                            )}
+                                                        title={t('aiSidebar.actions.applyEdit')}
+                                                    >
+                                                        应用该文件
+                                                    </button>
+                                                    <button
+                                                        class="b3-button b3-button--text b3-button--small"
+                                                        on:click|stopPropagation={() =>
+                                                            rejectEditOperationFileGroup(
+                                                                fileGroup,
+                                                                messageIndex + msgIndex
+                                                            )}
+                                                        title={t('aiSidebar.actions.rejectEdit')}
+                                                    >
+                                                        拒绝该文件
+                                                    </button>
+                                                {/if}
+                                            </div>
+                                        </div>
+                                    {/each}
                                 </div>
-                                {#each message.editOperations as operation}
-                                    <div
-                                        class="ai-message__edit-operation"
-                                        class:ai-message__edit-operation--applied={operation.status ===
-                                            'applied'}
-                                        class:ai-message__edit-operation--rejected={operation.status ===
-                                            'rejected'}
-                                    >
-                                        <div class="ai-message__edit-operation-header">
-                                            <span class="ai-message__edit-operation-id">
-                                                {#if operation.operationType === 'insert'}
-                                                    {t('aiSidebar.edit.insertBlock')}:
-                                                    {operation.position === 'before'
-                                                        ? t('aiSidebar.edit.before')
-                                                        : t('aiSidebar.edit.after')}
-                                                    {operation.blockId}
-                                                {:else}
-                                                    {t('aiSidebar.edit.blockId')}: {operation.blockId}
-                                                {/if}
-                                            </span>
-                                            <span class="ai-message__edit-operation-status">
-                                                {#if operation.status === 'applied'}
-                                                    ✓ {t('aiSidebar.actions.applied')}
-                                                {:else if operation.status === 'rejected'}
-                                                    ✗ {t('aiSidebar.actions.rejected')}
-                                                {:else}
-                                                    ⏳ {t('aiSidebar.edit.changes')}
-                                                {/if}
-                                            </span>
-                                        </div>
-                                        <div class="ai-message__edit-operation-actions">
-                                            <!-- 查看差异按钮：所有状态都可以查看 -->
-                                            <button
-                                                class="b3-button b3-button--text"
-                                                on:click={() => viewDiff(operation)}
-                                                title={t('aiSidebar.actions.viewDiff')}
-                                            >
-                                                <svg class="b3-button__icon">
-                                                    <use xlink:href="#iconEye"></use>
-                                                </svg>
-                                                {t('aiSidebar.actions.viewDiff')}
-                                            </button>
-
-                                            {#if operation.status === 'pending'}
-                                                <!-- 应用和拒绝按钮：仅在pending状态显示 -->
-                                                <button
-                                                    class="b3-button b3-button--outline"
-                                                    on:click={() =>
-                                                        applyEditOperation(
-                                                            operation,
-                                                            messageIndex + msgIndex
-                                                        )}
-                                                    title={t('aiSidebar.actions.applyEdit')}
-                                                >
-                                                    <svg class="b3-button__icon">
-                                                        <use xlink:href="#iconCheck"></use>
-                                                    </svg>
-                                                    {t('aiSidebar.actions.applyEdit')}
-                                                </button>
-                                                <button
-                                                    class="b3-button b3-button--text"
-                                                    on:click={() =>
-                                                        rejectEditOperation(
-                                                            operation,
-                                                            messageIndex + msgIndex
-                                                        )}
-                                                    title={t('aiSidebar.actions.rejectEdit')}
-                                                >
-                                                    <svg class="b3-button__icon">
-                                                        <use xlink:href="#iconClose"></use>
-                                                    </svg>
-                                                    {t('aiSidebar.actions.rejectEdit')}
-                                                </button>
-                                            {/if}
-                                        </div>
-                                    </div>
-                                {/each}
-                            </div>
+                            {/if}
                         {/if}
                     {/if}
                 {/each}
@@ -10487,22 +12037,6 @@
                             title={t('aiSidebar.actions.copyMessage')}
                         >
                             <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        </button>
-                        <button
-                            class="b3-button b3-button--text ai-message__action"
-                            on:click={() => openSaveToNoteDialog(messageIndex)}
-                            title={t('aiSidebar.actions.saveToNote')}
-                        >
-                            <svg class="b3-button__icon">
-                                <use xlink:href="#iconDownload"></use>
-                            </svg>
-                        </button>
-                        <button
-                            class="b3-button b3-button--text ai-message__action"
-                            on:click={() => startEditMessage(messageIndex)}
-                            title={t('aiSidebar.actions.editMessage')}
-                        >
-                            <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
                         </button>
                         <button
                             class="b3-button b3-button--text ai-message__action"
@@ -10542,7 +12076,7 @@
                 </div>
 
                 <!-- 显示流式思考过程 -->
-                {#if streamingThinking}
+                {#if streamingThinking && streamingCodexTimeline.length === 0}
                     <div class="ai-message__thinking ai-message__thinking--streaming">
                         <div
                             class="ai-message__thinking-header"
@@ -10565,7 +12099,399 @@
                             <pre
                                 class="ai-message__thinking-plain"
                                 class:ai-message__thinking-plain--streaming={isThinkingPhase}
-                            >{getStreamingThinkingPreview(streamingThinking, 16, 1400)}</pre>
+                            >{getCodexTraceText(streamingThinking)}</pre>
+                        {/if}
+                    </div>
+                {/if}
+
+                {#if streamingCodexTimeline.length > 0}
+                    <div class="ai-message__trace ai-message__trace--timeline ai-message__trace--streaming">
+                        <div
+                            class="ai-message__trace-title"
+                            on:click|stopPropagation={() =>
+                                (streamingCodexTimelineExpanded = !streamingCodexTimelineExpanded)}
+                        >
+                            <svg
+                                class="ai-message__trace-item-icon"
+                                class:collapsed={!streamingCodexTimelineExpanded}
+                            >
+                                <use xlink:href="#iconRight"></use>
+                            </svg>
+                            Execution ({streamingCodexTimeline.length})
+                        </div>
+                        {#if streamingCodexTimelineExpanded}
+                            <div class="ai-message__trace-stream-list">
+                                {#each streamingCodexTimeline as trace, traceIdx}
+                                    {@const streamTraceKey = buildStreamingCodexTraceExpandKey(
+                                        'timeline',
+                                        trace,
+                                        traceIdx
+                                    )}
+                                    {@const streamTraceExpanded =
+                                        codexTraceExpanded[streamTraceKey] ?? false}
+                                    {@const traceDiffTarget = trace.kind === 'diff'
+                                        ? getTraceDiffFileNameSummary(trace.editOperations, 1)
+                                        : ''}
+                                    <div
+                                        class="ai-message__trace-stream-item"
+                                        class:ai-message__trace-stream-item--diff={trace.kind === 'diff'}
+                                    >
+                                        <div
+                                            class="ai-message__trace-item-header"
+                                            class:ai-message__trace-item-header--diff={trace.kind === 'diff'}
+                                            on:click|stopPropagation={() =>
+                                                toggleCodexTraceExpanded(streamTraceKey)}
+                                        >
+                                            <svg
+                                                class="ai-message__trace-item-icon"
+                                                class:collapsed={!streamTraceExpanded}
+                                            >
+                                                <use xlink:href="#iconRight"></use>
+                                            </svg>
+                                            <span
+                                                class="ai-message__trace-item-kind"
+                                                class:ai-message__trace-item-kind--diff={trace.kind === 'diff'}
+                                            >
+                                                {getCodexTimelineTypeLabel(trace.kind)}
+                                            </span>
+                                            {#if getCodexTimelineEntryName(trace)}
+                                                <span
+                                                    class="ai-message__trace-item-name"
+                                                    class:ai-message__trace-item-name--diff={trace.kind === 'diff'}
+                                                >
+                                                    {getCodexTimelineEntryName(trace)}
+                                                </span>
+                                            {/if}
+                                            {#if trace.kind === 'diff' && traceDiffTarget}
+                                                <span
+                                                    class="ai-message__trace-item-target"
+                                                    title={traceDiffTarget}
+                                                >
+                                                    {traceDiffTarget}
+                                                </span>
+                                            {/if}
+                                            {#if trace.kind !== 'thinking'}
+                                                <span
+                                                    class="ai-message__trace-item-status ai-message__trace-item-status--{trace.status || 'running'}"
+                                                    class:ai-message__trace-item-status--with-target={trace.kind ===
+                                                        'diff' &&
+                                                        !!traceDiffTarget}
+                                                >
+                                                    {getCodexTraceStatusText(trace.status)}
+                                                </span>
+                                            {/if}
+                                        </div>
+                                        {#if streamTraceExpanded}
+                                            <div
+                                                class="ai-message__trace-item-body"
+                                                class:ai-message__trace-item-body--diff={trace.kind === 'diff'}
+                                            >
+                                                {#if trace.kind === 'thinking'}
+                                                    {#if trace.text}
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.text, 14, 2600)}</pre>
+                                                    {/if}
+                                                {:else if trace.kind === 'diff'}
+                                                    {#if trace.editOperations && trace.editOperations.length > 0}
+                                                        {@const traceFileGroups = buildEditOperationFileGroups(
+                                                            trace.editOperations
+                                                        )}
+                                                        <div class="ai-message__trace-tool-diffs">
+                                                            {#each traceFileGroups as fileGroup}
+                                                                <div class="ai-message__trace-tool-diff ai-message__trace-tool-diff--flat">
+                                                                    <div class="ai-message__trace-tool-diff-header ai-message__trace-tool-diff-header--flat">
+                                                                        <span class="ai-message__trace-tool-diff-title">
+                                                                            {fileGroup.fileLabel}
+                                                                        </span>
+                                                                        <span class="ai-message__trace-tool-diff-stats">
+                                                                            +{fileGroup.added}
+                                                                            -{fileGroup.removed}
+                                                                        </span>
+                                                                        <button
+                                                                            class="b3-button b3-button--text b3-button--small ai-message__trace-tool-diff-open"
+                                                                            on:click|stopPropagation={() =>
+                                                                                viewEditOperationFileGroupDiff(
+                                                                                    fileGroup
+                                                                                )}
+                                                                            title={t(
+                                                                                'aiSidebar.actions.viewDiff'
+                                                                            )}
+                                                                        >
+                                                                            Diff
+                                                                        </button>
+                                                                    </div>
+                                                                    <div class="ai-message__trace-tool-diff-body">
+                                                                        {#each getTraceEditFileGroupLines(fileGroup, 10) as line}
+                                                                            <div
+                                                                                class="ai-message__trace-tool-diff-line ai-message__trace-tool-diff-line--{line.type}"
+                                                                            >
+                                                                                <span class="ai-message__trace-tool-diff-marker">
+                                                                                    {line.type === 'removed'
+                                                                                        ? '-'
+                                                                                        : line.type === 'added'
+                                                                                          ? '+'
+                                                                                          : '·'}
+                                                                                </span>
+                                                                                <span class="ai-message__trace-tool-diff-text">
+                                                                                    {line.line}
+                                                                                </span>
+                                                                            </div>
+                                                                        {/each}
+                                                                    </div>
+                                                                </div>
+                                                            {/each}
+                                                        </div>
+                                                    {/if}
+                                                {:else}
+                                                    {#if trace.query}
+                                                        <div class="ai-message__trace-field">
+                                                            <div class="ai-message__trace-field-label">
+                                                                Query
+                                                            </div>
+                                                            <pre class="ai-message__trace-pre"
+                                                                >{getCodexTraceText(trace.query, 8, 1400)}</pre>
+                                                        </div>
+                                                    {/if}
+                                                    {#if trace.input && trace.input !== trace.query}
+                                                        <div class="ai-message__trace-field">
+                                                            <div class="ai-message__trace-field-label">
+                                                                输入
+                                                            </div>
+                                                            <pre class="ai-message__trace-pre"
+                                                                >{getCodexTraceText(trace.input, 8, 1400)}</pre>
+                                                        </div>
+                                                    {/if}
+                                                    {#if trace.output}
+                                                        <div class="ai-message__trace-field">
+                                                            <div class="ai-message__trace-field-label">
+                                                                {trace.kind === 'search'
+                                                                    ? '结果'
+                                                                    : '输出'}
+                                                            </div>
+                                                            <pre class="ai-message__trace-pre"
+                                                                >{getCodexTraceText(trace.output, 12, 2200)}</pre>
+                                                        </div>
+                                                    {/if}
+                                                {/if}
+                                            </div>
+                                        {/if}
+                                    </div>
+                                {/each}
+                            </div>
+                        {/if}
+                    </div>
+                {/if}
+
+                {#if streamingCodexTimeline.length === 0 && streamingSearchCalls.length > 0}
+                    <div class="ai-message__trace ai-message__trace--search ai-message__trace--streaming">
+                        <div
+                            class="ai-message__trace-title"
+                            on:click|stopPropagation={() =>
+                                (streamingSearchCallsExpanded = !streamingSearchCallsExpanded)}
+                        >
+                            <svg
+                                class="ai-message__trace-item-icon"
+                                class:collapsed={!streamingSearchCallsExpanded}
+                            >
+                                <use xlink:href="#iconRight"></use>
+                            </svg>
+                            Search ({streamingSearchCalls.length})
+                        </div>
+                        {#if streamingSearchCallsExpanded}
+                            <div class="ai-message__trace-stream-list">
+                                {#each streamingSearchCalls as trace, traceIdx}
+                                    {@const streamTraceKey = buildStreamingCodexTraceExpandKey(
+                                        'search',
+                                        trace,
+                                        traceIdx
+                                    )}
+                                    {@const streamTraceExpanded =
+                                        codexTraceExpanded[streamTraceKey] ?? false}
+                                    <div class="ai-message__trace-stream-item">
+                                        <div
+                                            class="ai-message__trace-item-header"
+                                            on:click|stopPropagation={() =>
+                                                toggleCodexTraceExpanded(streamTraceKey)}
+                                        >
+                                            <svg
+                                                class="ai-message__trace-item-icon"
+                                                class:collapsed={!streamTraceExpanded}
+                                            >
+                                                <use xlink:href="#iconRight"></use>
+                                            </svg>
+                                            <span class="ai-message__trace-item-name">
+                                                {trace.name || 'Search'}
+                                            </span>
+                                            <span
+                                                class="ai-message__trace-item-status ai-message__trace-item-status--{trace.status || 'running'}"
+                                            >
+                                                {getCodexTraceStatusText(trace.status)}
+                                            </span>
+                                        </div>
+                                        {#if streamTraceExpanded}
+                                            <div class="ai-message__trace-item-body">
+                                                {#if trace.query}
+                                                    <div class="ai-message__trace-field">
+                                                        <div class="ai-message__trace-field-label">
+                                                            Query
+                                                        </div>
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.query, 8, 1400)}</pre>
+                                                    </div>
+                                                {/if}
+                                                {#if trace.input && trace.input !== trace.query}
+                                                    <div class="ai-message__trace-field">
+                                                        <div class="ai-message__trace-field-label">
+                                                            输入
+                                                        </div>
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.input, 8, 1400)}</pre>
+                                                    </div>
+                                                {/if}
+                                                {#if trace.output}
+                                                    <div class="ai-message__trace-field">
+                                                        <div class="ai-message__trace-field-label">
+                                                            结果
+                                                        </div>
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.output, 12, 2200)}</pre>
+                                                    </div>
+                                                {/if}
+                                            </div>
+                                        {/if}
+                                    </div>
+                                {/each}
+                            </div>
+                        {/if}
+                    </div>
+                {/if}
+
+                {#if streamingCodexTimeline.length === 0 && streamingToolCalls.length > 0}
+                    {@const streamToolSummary = getCodexTraceNameSummary(streamingToolCalls)}
+                    <div class="ai-message__trace ai-message__trace--tool ai-message__trace--streaming">
+                        <div
+                            class="ai-message__trace-title"
+                            on:click|stopPropagation={() =>
+                                (streamingToolCallsExpanded = !streamingToolCallsExpanded)}
+                        >
+                            <svg
+                                class="ai-message__trace-item-icon"
+                                class:collapsed={!streamingToolCallsExpanded}
+                            >
+                                <use xlink:href="#iconRight"></use>
+                            </svg>
+                            Tool Calls ({streamingToolCalls.length})
+                            {#if streamToolSummary}
+                                <span class="ai-message__trace-title-summary">
+                                    {streamToolSummary}
+                                </span>
+                            {/if}
+                        </div>
+                        {#if streamingToolCallsExpanded}
+                            <div class="ai-message__trace-stream-list">
+                                {#each streamingToolCalls as trace, traceIdx}
+                                    {@const streamTraceKey = buildStreamingCodexTraceExpandKey(
+                                        'tool',
+                                        trace,
+                                        traceIdx
+                                    )}
+                                    {@const streamTraceExpanded =
+                                        codexTraceExpanded[streamTraceKey] ?? false}
+                                    <div class="ai-message__trace-stream-item">
+                                        <div
+                                            class="ai-message__trace-item-header"
+                                            on:click|stopPropagation={() =>
+                                                toggleCodexTraceExpanded(streamTraceKey)}
+                                        >
+                                            <svg
+                                                class="ai-message__trace-item-icon"
+                                                class:collapsed={!streamTraceExpanded}
+                                            >
+                                                <use xlink:href="#iconRight"></use>
+                                            </svg>
+                                            <span class="ai-message__trace-item-name">
+                                                {trace.name || 'Tool'}
+                                            </span>
+                                            <span
+                                                class="ai-message__trace-item-status ai-message__trace-item-status--{trace.status || 'running'}"
+                                            >
+                                                {getCodexTraceStatusText(trace.status)}
+                                            </span>
+                                        </div>
+                                        {#if streamTraceExpanded}
+                                            <div class="ai-message__trace-item-body">
+                                                {#if trace.input}
+                                                    <div class="ai-message__trace-field">
+                                                        <div class="ai-message__trace-field-label">
+                                                            参数
+                                                        </div>
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.input, 8, 1400)}</pre>
+                                                    </div>
+                                                {/if}
+                                                {#if trace.output}
+                                                    <div class="ai-message__trace-field">
+                                                        <div class="ai-message__trace-field-label">
+                                                            输出
+                                                        </div>
+                                                        <pre class="ai-message__trace-pre"
+                                                            >{getCodexTraceText(trace.output, 12, 2200)}</pre>
+                                                    </div>
+                                                {/if}
+                                                {#if trace.editOperations && trace.editOperations.length > 0}
+                                                    {@const traceFileGroups = buildEditOperationFileGroups(
+                                                        trace.editOperations
+                                                    )}
+                                                    <div class="ai-message__trace-tool-diffs">
+                                                        {#each traceFileGroups as fileGroup}
+                                                            <div class="ai-message__trace-tool-diff ai-message__trace-tool-diff--flat">
+                                                                <div class="ai-message__trace-tool-diff-header ai-message__trace-tool-diff-header--flat">
+                                                                    <span class="ai-message__trace-tool-diff-title">
+                                                                        {fileGroup.fileLabel}
+                                                                    </span>
+                                                                    <span class="ai-message__trace-tool-diff-stats">
+                                                                        +{fileGroup.added} -{fileGroup.removed}
+                                                                    </span>
+                                                                    <button
+                                                                        class="b3-button b3-button--text b3-button--small ai-message__trace-tool-diff-open"
+                                                                        on:click|stopPropagation={() =>
+                                                                            viewEditOperationFileGroupDiff(
+                                                                                fileGroup
+                                                                            )}
+                                                                        title={t(
+                                                                            'aiSidebar.actions.viewDiff'
+                                                                        )}
+                                                                    >
+                                                                        Diff
+                                                                    </button>
+                                                                </div>
+                                                                <div class="ai-message__trace-tool-diff-body">
+                                                                    {#each getTraceEditFileGroupLines(fileGroup, 12) as line}
+                                                                        <div
+                                                                            class="ai-message__trace-tool-diff-line ai-message__trace-tool-diff-line--{line.type}"
+                                                                        >
+                                                                            <span class="ai-message__trace-tool-diff-marker">
+                                                                                {line.type === 'removed'
+                                                                                    ? '-'
+                                                                                    : line.type === 'added'
+                                                                                      ? '+'
+                                                                                      : '·'}
+                                                                            </span>
+                                                                            <span class="ai-message__trace-tool-diff-text">
+                                                                                {line.line}
+                                                                            </span>
+                                                                        </div>
+                                                                    {/each}
+                                                                </div>
+                                                            </div>
+                                                        {/each}
+                                                    </div>
+                                                {/if}
+                                            </div>
+                                        {/if}
+                                    </div>
+                                {/each}
+                            </div>
                         {/if}
                     </div>
                 {/if}
@@ -10578,17 +12504,16 @@
                     >
                         {@html streamMsgDisplay}
                     </div>
-                {:else if !streamingThinking}
-                    <div class="ai-message__content b3-typography">
-                        <div class="ai-message__waiting-placeholder">
-                            <span class="jumping-dots">
-                                <span class="dot"></span>
-                                <span class="dot"></span>
-                                <span class="dot"></span>
-                            </span>
-                        </div>
-                    </div>
                 {/if}
+
+                <div class="ai-message__running-indicator" aria-live="polite">
+                    <span class="jumping-dots jumping-dots--small">
+                        <span class="dot"></span>
+                        <span class="dot"></span>
+                        <span class="dot"></span>
+                    </span>
+                    <span class="ai-message__running-text">运行中...</span>
+                </div>
             </div>
         {/if}
 
@@ -11402,37 +13327,6 @@
         </div>
     {/if}
 
-    <!-- 编辑消息弹窗 -->
-    {#if isEditDialogOpen}
-        <div class="ai-sidebar__edit-dialog">
-            <div class="ai-sidebar__edit-dialog-overlay" on:click={cancelEditMessage}></div>
-            <div class="ai-sidebar__edit-dialog-content">
-                <div class="ai-sidebar__edit-dialog-header">
-                    <h3>{t('aiSidebar.actions.editMessage')}</h3>
-                    <button class="b3-button b3-button--cancel" on:click={cancelEditMessage}>
-                        <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
-                    </button>
-                </div>
-                <div class="ai-sidebar__edit-dialog-body">
-                    <textarea
-                        class="ai-sidebar__edit-dialog-textarea"
-                        bind:value={editingMessageContent}
-                        rows="15"
-                        autofocus
-                    ></textarea>
-                </div>
-                <div class="ai-sidebar__edit-dialog-footer">
-                    <button class="b3-button b3-button--cancel" on:click={cancelEditMessage}>
-                        {t('aiSidebar.actions.cancel')}
-                    </button>
-                    <button class="b3-button b3-button--text" on:click={saveEditMessage}>
-                        {t('aiSidebar.actions.save')}
-                    </button>
-                </div>
-            </div>
-        </div>
-    {/if}
-
     <!-- 差异对比对话框 -->
     {#if isDiffDialogOpen && currentDiffOperation}
         <div class="ai-sidebar__diff-dialog">
@@ -11446,39 +13340,26 @@
                             {t('aiSidebar.actions.viewDiff')}
                         {/if}
                     </h3>
-                    {#if currentDiffOperation.operationType !== 'insert'}
-                        <div class="ai-sidebar__diff-mode-selector">
-                            <button
-                                class="b3-button b3-button--text"
-                                class:b3-button--primary={diffViewMode === 'diff'}
-                                on:click={() => (diffViewMode = 'diff')}
-                            >
-                                {t('aiSidebar.diff.modeUnified')}
-                            </button>
-                            <button
-                                class="b3-button b3-button--text"
-                                class:b3-button--primary={diffViewMode === 'split'}
-                                on:click={() => (diffViewMode = 'split')}
-                            >
-                                {t('aiSidebar.diff.modeSplit')}
-                            </button>
-                        </div>
-                    {/if}
                     <button class="b3-button b3-button--cancel" on:click={closeDiffDialog}>
                         <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
                     </button>
                 </div>
                 <div class="ai-sidebar__diff-dialog-body">
                     <div class="ai-sidebar__diff-info">
+                        {#if currentDiffOperation.filePath}
+                            <strong>File:</strong>
+                            {currentDiffOperation.filePath}
+                            <br />
+                        {:else}
+                            <strong>Target:</strong>
+                            {currentDiffOperation.blockId}
+                            <br />
+                        {/if}
                         {#if currentDiffOperation.operationType === 'insert'}
                             <strong>{t('aiSidebar.edit.insertBlock')}:</strong>
                             {currentDiffOperation.position === 'before'
                                 ? t('aiSidebar.edit.before')
                                 : t('aiSidebar.edit.after')}
-                            {currentDiffOperation.blockId}
-                        {:else}
-                            <strong>{t('aiSidebar.edit.blockId')}:</strong>
-                            {currentDiffOperation.blockId}
                         {/if}
                     </div>
                     {#if currentDiffOperation.operationType === 'insert'}
@@ -11508,105 +13389,84 @@
                             <pre
                                 class="ai-sidebar__diff-split-content"
                                 style="border: 1px solid var(--b3-theme-success); background-color: var(--b3-theme-success-lighter);">{currentDiffOperation.newContent}</pre>
-                        </div>
+                    </div>
                     {:else if currentDiffOperation.oldContent}
-                        {#if diffViewMode === 'diff'}
-                            <!-- Diff模式：传统的行对比视图 -->
-                            <div class="ai-sidebar__diff-actions">
-                                <button
-                                    class="b3-button b3-button--text b3-button--small"
-                                    on:click={() => {
-                                        navigator.clipboard.writeText(
-                                            currentDiffOperation.oldContent
-                                        );
-                                        pushMsg(t('aiSidebar.success.copySuccess'));
-                                    }}
-                                    title={t('aiSidebar.actions.copyOldContent')}
-                                >
-                                    <svg class="b3-button__icon">
-                                        <use xlink:href="#iconCopy"></use>
-                                    </svg>
-                                    {t('aiSidebar.actions.copyBefore')}
-                                </button>
-                                <button
-                                    class="b3-button b3-button--text b3-button--small"
-                                    on:click={() => {
-                                        navigator.clipboard.writeText(
-                                            currentDiffOperation.newContent
-                                        );
-                                        pushMsg(t('aiSidebar.success.copySuccess'));
-                                    }}
-                                    title={t('aiSidebar.actions.copyNewContent')}
-                                >
-                                    <svg class="b3-button__icon">
-                                        <use xlink:href="#iconCopy"></use>
-                                    </svg>
-                                    {t('aiSidebar.actions.copyAfter')}
-                                </button>
-                            </div>
-                            <div class="ai-sidebar__diff-content">
-                                {#each generateSimpleDiff(currentDiffOperation.oldContent, currentDiffOperation.newContent) as line}
-                                    <div
-                                        class="ai-sidebar__diff-line ai-sidebar__diff-line--{line.type}"
-                                    >
-                                        {#if line.type === 'removed'}
-                                            <span class="ai-sidebar__diff-marker">-</span>
-                                        {:else if line.type === 'added'}
-                                            <span class="ai-sidebar__diff-marker">+</span>
-                                        {:else}
-                                            <span class="ai-sidebar__diff-marker"></span>
-                                        {/if}
-                                        <span class="ai-sidebar__diff-text">{line.line}</span>
-                                    </div>
-                                {/each}
-                            </div>
-                        {:else}
-                            <!-- Split模式：左右分栏视图 -->
-                            <div class="ai-sidebar__diff-split">
-                                <div class="ai-sidebar__diff-split-column">
-                                    <div class="ai-sidebar__diff-split-header">
-                                        <span>{t('aiSidebar.edit.before')}</span>
-                                        <button
-                                            class="b3-button b3-button--text b3-button--small"
-                                            on:click={() => {
-                                                navigator.clipboard.writeText(
-                                                    currentDiffOperation.oldContent
-                                                );
-                                                pushMsg(t('aiSidebar.success.copySuccess'));
-                                            }}
-                                            title={t('aiSidebar.actions.copyOldContent')}
-                                        >
-                                            <svg class="b3-button__icon">
-                                                <use xlink:href="#iconCopy"></use>
-                                            </svg>
-                                        </button>
-                                    </div>
-                                    <pre
-                                        class="ai-sidebar__diff-split-content">{currentDiffOperation.oldContent}</pre>
+                        <div class="ai-sidebar__diff-actions">
+                            <button
+                                class="b3-button b3-button--text b3-button--small"
+                                on:click={() => {
+                                    navigator.clipboard.writeText(currentDiffOperation.oldContent);
+                                    pushMsg(t('aiSidebar.success.copySuccess'));
+                                }}
+                                title={t('aiSidebar.actions.copyOldContent')}
+                            >
+                                <svg class="b3-button__icon">
+                                    <use xlink:href="#iconCopy"></use>
+                                </svg>
+                                {t('aiSidebar.actions.copyBefore')}
+                            </button>
+                            <button
+                                class="b3-button b3-button--text b3-button--small"
+                                on:click={() => {
+                                    navigator.clipboard.writeText(currentDiffOperation.newContent);
+                                    pushMsg(t('aiSidebar.success.copySuccess'));
+                                }}
+                                title={t('aiSidebar.actions.copyNewContent')}
+                            >
+                                <svg class="b3-button__icon">
+                                    <use xlink:href="#iconCopy"></use>
+                                </svg>
+                                {t('aiSidebar.actions.copyAfter')}
+                            </button>
+                        </div>
+                        {@const splitRows = generateSplitDiffRows(
+                            currentDiffOperation.oldContent,
+                            currentDiffOperation.newContent
+                        )}
+                        <div class="ai-sidebar__diff-split ai-sidebar__diff-split--with-diff">
+                            <div class="ai-sidebar__diff-split-column">
+                                <div class="ai-sidebar__diff-split-header">
+                                    <span>{t('aiSidebar.edit.before')}</span>
                                 </div>
-                                <div class="ai-sidebar__diff-split-column">
-                                    <div class="ai-sidebar__diff-split-header">
-                                        <span>{t('aiSidebar.edit.after')}</span>
-                                        <button
-                                            class="b3-button b3-button--text b3-button--small"
-                                            on:click={() => {
-                                                navigator.clipboard.writeText(
-                                                    currentDiffOperation.newContent
-                                                );
-                                                pushMsg(t('aiSidebar.success.copySuccess'));
-                                            }}
-                                            title={t('aiSidebar.actions.copyNewContent')}
+                                <div class="ai-sidebar__diff-split-content ai-sidebar__diff-split-content--diff">
+                                    {#each splitRows as row}
+                                        <div
+                                            class="ai-sidebar__diff-split-line ai-sidebar__diff-split-line--{row.leftType}"
                                         >
-                                            <svg class="b3-button__icon">
-                                                <use xlink:href="#iconCopy"></use>
-                                            </svg>
-                                        </button>
-                                    </div>
-                                    <pre
-                                        class="ai-sidebar__diff-split-content">{currentDiffOperation.newContent}</pre>
+                                            <span class="ai-sidebar__diff-marker">
+                                                {row.leftType === 'removed'
+                                                    ? '-'
+                                                    : row.leftType === 'unchanged'
+                                                      ? '·'
+                                                      : ''}
+                                            </span>
+                                            <span class="ai-sidebar__diff-text">{row.leftLine}</span>
+                                        </div>
+                                    {/each}
                                 </div>
                             </div>
-                        {/if}
+                            <div class="ai-sidebar__diff-split-column">
+                                <div class="ai-sidebar__diff-split-header">
+                                    <span>{t('aiSidebar.edit.after')}</span>
+                                </div>
+                                <div class="ai-sidebar__diff-split-content ai-sidebar__diff-split-content--diff">
+                                    {#each splitRows as row}
+                                        <div
+                                            class="ai-sidebar__diff-split-line ai-sidebar__diff-split-line--{row.rightType}"
+                                        >
+                                            <span class="ai-sidebar__diff-marker">
+                                                {row.rightType === 'added'
+                                                    ? '+'
+                                                    : row.rightType === 'unchanged'
+                                                      ? '·'
+                                                      : ''}
+                                            </span>
+                                            <span class="ai-sidebar__diff-text">{row.rightLine}</span>
+                                        </div>
+                                    {/each}
+                                </div>
+                            </div>
+                        </div>
                     {:else}
                         <div class="ai-sidebar__diff-loading">
                             {t('common.loading')}
@@ -11709,25 +13569,10 @@
 
                 <button
                     class="ai-sidebar__context-menu-item"
-                    on:click={() => handleContextMenuAction('edit')}
-                >
-                    <svg class="b3-button__icon"><use xlink:href="#iconEdit"></use></svg>
-                    <span>{t('aiSidebar.actions.editMessage')}</span>
-                </button>
-                <button
-                    class="ai-sidebar__context-menu-item"
                     on:click={() => handleContextMenuAction('delete')}
                 >
                     <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
                     <span>{t('aiSidebar.actions.deleteMessage')}</span>
-                </button>
-                <div class="ai-sidebar__context-menu-divider"></div>
-                <button
-                    class="ai-sidebar__context-menu-item"
-                    on:click={() => handleContextMenuAction('save')}
-                >
-                    <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
-                    <span>{t('aiSidebar.actions.saveToNote')}</span>
                 </button>
                 <button
                     class="ai-sidebar__context-menu-item"
@@ -11747,125 +13592,6 @@
     <!-- 工具选择器对话框 -->
     {#if isToolSelectorOpen && !isCodexMode}
         <ToolSelector bind:selectedTools on:close={() => (isToolSelectorOpen = false)} />
-    {/if}
-
-    <!-- 保存到笔记对话框 -->
-    {#if isSaveToNoteDialogOpen}
-        <div class="save-to-note-dialog__overlay" on:click={closeSaveToNoteDialog}></div>
-        <div class="save-to-note-dialog">
-            <div class="save-to-note-dialog__header">
-                <h3>{t('aiSidebar.session.saveToNote.title')}</h3>
-                <button
-                    class="b3-button b3-button--text"
-                    on:click={closeSaveToNoteDialog}
-                    title={t('common.close')}
-                >
-                    <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
-                </button>
-            </div>
-
-            <!-- 如果有全局默认路径，显示切换到当前文档的按钮 -->
-            {#if hasDefaultPath && currentDocPath && currentDocNotebookId}
-                <div class="save-to-note-dialog__switch-bar">
-                    <button
-                        class="b3-button b3-button--outline"
-                        on:click={useCurrentDocPath}
-                        title={t('aiSidebar.session.saveToNote.useCurrentDoc')}
-                    >
-                        <svg class="b3-button__icon"><use xlink:href="#iconFile"></use></svg>
-                        <span>{t('aiSidebar.session.saveToNote.useCurrentDoc')}</span>
-                    </button>
-                </div>
-            {/if}
-
-            <div class="save-to-note-dialog__content">
-                <div class="save-to-note-dialog__field">
-                    <label>{t('aiSidebar.session.saveToNote.documentName')}</label>
-                    <input
-                        type="text"
-                        class="b3-text-field"
-                        bind:value={saveDocumentName}
-                        placeholder={t('aiSidebar.session.saveToNote.documentNamePlaceholder')}
-                    />
-                </div>
-
-                <div class="save-to-note-dialog__field">
-                    <label>{t('aiSidebar.session.saveToNote.notebook')}</label>
-                    <select
-                        class="b3-select"
-                        bind:value={saveNotebookId}
-                        on:change={searchSavePath}
-                    >
-                        {#if saveDialogNotebooks.length > 0}
-                            {#each saveDialogNotebooks as notebook}
-                                <option value={notebook.id}>{notebook.name}</option>
-                            {/each}
-                        {:else}
-                            <option value="">{t('common.loading')}</option>
-                        {/if}
-                    </select>
-                </div>
-
-                <div class="save-to-note-dialog__field">
-                    <label>{t('aiSidebar.session.saveToNote.path')}</label>
-                    <div class="save-to-note-dialog__path-input-wrapper">
-                        <input
-                            type="text"
-                            class="b3-text-field"
-                            bind:value={savePathSearchKeyword}
-                            on:focus={() => (showSavePathDropdown = true)}
-                            on:blur={() => {
-                                setTimeout(() => (showSavePathDropdown = false), 200);
-                            }}
-                            placeholder={t('aiSidebar.session.saveToNote.pathPlaceholder')}
-                        />
-                        <!-- 路径搜索结果下拉框 -->
-                        {#if showSavePathDropdown && (savePathSearchResults.length > 0 || isSavePathSearching)}
-                            <div class="save-to-note-dialog__path-dropdown">
-                                {#if isSavePathSearching}
-                                    <div class="save-to-note-dialog__path-loading">
-                                        {t('aiSidebar.session.saveToNote.searching')}
-                                    </div>
-                                {:else if savePathSearchResults.length > 0}
-                                    {#each savePathSearchResults as doc}
-                                        <div
-                                            class="save-to-note-dialog__path-item"
-                                            on:click={() => selectSavePath(doc.hPath)}
-                                            on:keydown={e => {
-                                                if (e.key === 'Enter') selectSavePath(doc.hPath);
-                                            }}
-                                            role="button"
-                                            tabindex="0"
-                                            title={doc.hPath}
-                                        >
-                                            <svg class="b3-button__icon">
-                                                <use xlink:href="#iconFile"></use>
-                                            </svg>
-                                            <span>{doc.hPath}</span>
-                                        </div>
-                                    {/each}
-                                {/if}
-                            </div>
-                        {/if}
-                    </div>
-                </div>
-            </div>
-
-            <div class="save-to-note-dialog__footer">
-                <label class="save-to-note-dialog__footer-option">
-                    <input type="checkbox" class="b3-switch" bind:checked={openAfterSave} />
-                    <span>{t('aiSidebar.session.saveToNote.openAfterSave')}</span>
-                </label>
-                <div class="save-to-note-dialog__footer-buttons">
-                    <button class="b3-button b3-button--cancel" on:click={closeSaveToNoteDialog}>
-                        {t('aiSidebar.session.saveToNote.cancel')}
-                    </button>
-                    <button class="b3-button b3-button--primary" on:click={confirmSaveToNote}>
-                        {t('aiSidebar.session.saveToNote.confirm')}
-                    </button>
-                </div>
-            </div>
-        </div>
     {/if}
 
     <!-- 工具批准对话框 -->
@@ -12447,6 +14173,344 @@
         animation: fadeIn 0.2s ease-out;
     }
 
+    .ai-message__trace {
+        margin: 4px 0 8px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 6px;
+        overflow: hidden;
+        background: transparent;
+    }
+
+    .ai-message__trace-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--b3-theme-on-surface-light);
+        background: transparent;
+        border-bottom: 1px solid var(--b3-border-color);
+        user-select: none;
+        letter-spacing: 0.01em;
+    }
+
+    .ai-message__trace-title-summary {
+        margin-left: auto;
+        font-size: 11px;
+        font-weight: 400;
+        color: var(--b3-theme-on-surface-light);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 48%;
+    }
+
+    .ai-message__trace--streaming .ai-message__trace-title {
+        cursor: pointer;
+    }
+
+    .ai-message__trace--streaming .ai-message__trace-title:hover {
+        background: var(--b3-list-hover);
+    }
+
+    .ai-message__trace--search .ai-message__trace-title {
+        color: var(--b3-theme-on-surface-light);
+    }
+
+    .ai-message__trace--timeline .ai-message__trace-title {
+        color: var(--b3-theme-on-surface-light);
+    }
+
+    .ai-message__trace--tool .ai-message__trace-title {
+        color: var(--b3-theme-on-surface-light);
+    }
+
+    .ai-message__trace-item {
+        border-bottom: 1px solid var(--b3-border-color);
+    }
+
+    .ai-message__trace-item:last-child {
+        border-bottom: none;
+    }
+
+    .ai-message__trace-item-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        cursor: pointer;
+        background: transparent;
+    }
+
+    .ai-message__trace-item-header:hover {
+        background: var(--b3-list-hover);
+    }
+
+    .ai-message__trace-item-icon {
+        width: 12px;
+        height: 12px;
+        color: var(--b3-theme-on-surface-light);
+        transform: rotate(90deg);
+        transition: transform 0.2s;
+        flex-shrink: 0;
+    }
+
+    .ai-message__trace-item-icon.collapsed {
+        transform: rotate(0deg);
+    }
+
+    .ai-message__trace-item-name {
+        font-size: 12px;
+        color: var(--b3-theme-on-surface);
+        font-weight: 500;
+        word-break: break-word;
+        line-height: 1.35;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .ai-message__trace-item-kind {
+        display: inline-flex;
+        align-items: center;
+        font-size: 11px;
+        color: var(--b3-theme-on-surface-light);
+        font-weight: 500;
+        flex-shrink: 0;
+    }
+
+    .ai-message__trace-item-status {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--b3-theme-on-surface-light);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+        text-transform: lowercase;
+    }
+
+    .ai-message__trace-item-target {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--b3-theme-on-surface-light);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 46%;
+    }
+
+    .ai-message__trace-item-status--with-target {
+        margin-left: 8px;
+    }
+
+    .ai-message__trace-item-status::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.9;
+    }
+
+    .ai-message__trace-item-status--completed {
+        color: #2f9b66;
+    }
+
+    .ai-message__trace-item-status--error {
+        color: var(--b3-theme-error);
+    }
+
+    .ai-message__trace-item-status--running {
+        color: var(--b3-theme-on-surface-light);
+    }
+
+    .ai-message__trace-item-body {
+        padding: 2px 10px 8px 28px;
+        background: transparent;
+        border-top: none;
+    }
+
+    .ai-message__trace-item--diff,
+    .ai-message__trace-stream-item--diff {
+        border-left: 2px solid color-mix(in srgb, var(--b3-theme-primary) 42%, var(--b3-border-color));
+        background: color-mix(in srgb, var(--b3-theme-primary) 4%, transparent);
+    }
+
+    .ai-message__trace-item-header--diff {
+        background: color-mix(in srgb, var(--b3-theme-primary) 8%, transparent);
+    }
+
+    .ai-message__trace-item-header--diff:hover {
+        background: color-mix(in srgb, var(--b3-theme-primary) 14%, transparent);
+    }
+
+    .ai-message__trace-item-kind--diff {
+        padding: 1px 6px;
+        border: 1px solid color-mix(in srgb, var(--b3-theme-primary) 42%, var(--b3-border-color));
+        border-radius: 999px;
+        font-size: 10px;
+        line-height: 1.2;
+        letter-spacing: 0.01em;
+        color: color-mix(in srgb, var(--b3-theme-primary) 74%, var(--b3-theme-on-surface));
+        background: color-mix(in srgb, var(--b3-theme-primary) 10%, transparent);
+    }
+
+    .ai-message__trace-item-name--diff {
+        font-family: var(--b3-font-family-code);
+        font-size: 11px;
+    }
+
+    .ai-message__trace-item-body--diff {
+        border-top: 1px dashed color-mix(in srgb, var(--b3-theme-primary) 28%, var(--b3-border-color));
+        padding-left: 18px;
+        background: color-mix(in srgb, var(--b3-theme-primary) 3%, transparent);
+    }
+
+    .ai-message__trace-field {
+        margin-bottom: 6px;
+    }
+
+    .ai-message__trace-field:last-child {
+        margin-bottom: 0;
+    }
+
+    .ai-message__trace-field-label {
+        font-size: 11px;
+        color: var(--b3-theme-on-surface-light);
+        margin-bottom: 2px;
+    }
+
+    .ai-message__trace-pre {
+        margin: 0;
+        padding: 6px 8px;
+        border: none;
+        border-left: 2px solid var(--b3-border-color);
+        border-radius: 0;
+        background: transparent;
+        font-family: var(--b3-font-family-code);
+        font-size: 11px;
+        line-height: 1.45;
+        color: var(--b3-theme-on-surface);
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 180px;
+        overflow: auto;
+    }
+
+    .ai-message__trace-tool-diffs {
+        margin-top: 6px;
+        border-top: 1px dashed var(--b3-border-color);
+        padding-top: 6px;
+    }
+
+    .ai-message__trace-tool-diff {
+        border: 1px solid var(--b3-border-color);
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--b3-theme-surface) 70%, transparent);
+        margin-bottom: 6px;
+        overflow: hidden;
+    }
+
+    .ai-message__trace-tool-diff:last-child {
+        margin-bottom: 0;
+    }
+
+    .ai-message__trace-tool-diff-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 8px;
+        cursor: pointer;
+        background: transparent;
+    }
+
+    .ai-message__trace-tool-diff-header:hover {
+        background: var(--b3-list-hover);
+    }
+
+    .ai-message__trace-tool-diff--flat .ai-message__trace-tool-diff-header {
+        cursor: default;
+    }
+
+    .ai-message__trace-tool-diff-header--flat:hover {
+        background: transparent;
+    }
+
+    .ai-message__trace-tool-diff-title {
+        font-size: 11px;
+        color: var(--b3-theme-on-surface);
+        font-family: var(--b3-font-family-code);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .ai-message__trace-tool-diff-stats {
+        margin-left: auto;
+        font-size: 10px;
+        color: var(--b3-theme-on-surface-light);
+        white-space: nowrap;
+    }
+
+    .ai-message__trace-tool-diff-open {
+        padding: 0 6px;
+        min-height: 20px;
+        font-size: 10px;
+    }
+
+    .ai-message__trace-tool-diff-body {
+        border-top: 1px solid var(--b3-border-color);
+        background: transparent;
+        max-height: 220px;
+        overflow: auto;
+    }
+
+    .ai-message__trace-tool-diff-line {
+        display: flex;
+        gap: 6px;
+        padding: 2px 8px;
+        font-size: 11px;
+        line-height: 1.4;
+        font-family: var(--b3-font-family-code);
+    }
+
+    .ai-message__trace-tool-diff-line--added {
+        background: color-mix(in srgb, var(--b3-theme-success-lightest) 52%, transparent);
+    }
+
+    .ai-message__trace-tool-diff-line--removed {
+        background: color-mix(in srgb, var(--b3-theme-error-lightest) 45%, transparent);
+    }
+
+    .ai-message__trace-tool-diff-marker {
+        width: 10px;
+        flex-shrink: 0;
+        color: var(--b3-theme-on-surface-light);
+    }
+
+    .ai-message__trace-tool-diff-text {
+        word-break: break-word;
+        color: var(--b3-theme-on-surface);
+    }
+
+    .ai-message__trace-stream-list {
+        padding: 0;
+        background: transparent;
+    }
+
+    .ai-message__trace-stream-item {
+        border-bottom: 1px solid var(--b3-border-color);
+        border-radius: 0;
+        background: transparent;
+        padding: 0;
+        margin-bottom: 0;
+    }
+
+    .ai-message__trace-stream-item:last-child {
+        border-bottom: none;
+    }
+
     // 工具调用样式
     .ai-message__tool-calls {
         border: 1px solid var(--b3-border-color);
@@ -12456,12 +14520,26 @@
     }
 
     .ai-message__tool-calls-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
         padding: 8px 12px;
         font-size: 12px;
         font-weight: 500;
         color: var(--b3-theme-on-surface);
         background: var(--b3-theme-surface);
         border-bottom: 1px solid var(--b3-border-color);
+    }
+
+    .ai-message__tool-calls-summary {
+        margin-left: auto;
+        font-size: 11px;
+        font-weight: 400;
+        color: var(--b3-theme-on-surface-light);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 48%;
     }
 
     .ai-message__tool-call {
@@ -12621,6 +14699,20 @@
         align-items: center;
         height: 24px;
         padding: 2px 0;
+    }
+
+    .ai-message__running-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 6px;
+        padding: 2px 0;
+        color: var(--b3-theme-on-surface-light);
+    }
+
+    .ai-message__running-text {
+        font-size: 11px;
+        line-height: 1.2;
     }
 
     .ai-message--user {
@@ -13487,130 +15579,98 @@
         color: var(--b3-theme-on-surface-light);
     }
 
-    // 编辑消息对话框样式
-    .ai-sidebar__edit-dialog {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        z-index: 1000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .ai-sidebar__edit-dialog-overlay {
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
-    }
-
-    .ai-sidebar__edit-dialog-content {
-        position: relative;
-        width: 90%;
-        max-width: 700px;
-        background: var(--b3-theme-background);
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        display: flex;
-        flex-direction: column;
-        max-height: 80vh;
-    }
-
-    .ai-sidebar__edit-dialog-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 16px;
-        border-bottom: 1px solid var(--b3-border-color);
-
-        h3 {
-            margin: 0;
-            font-size: 16px;
-            font-weight: 600;
-        }
-
-        .b3-button {
-            padding: 4px;
-            min-width: auto;
-        }
-    }
-
-    .ai-sidebar__edit-dialog-body {
-        padding: 16px;
-        overflow-y: auto;
-        flex: 1;
-    }
-
-    .ai-sidebar__edit-dialog-textarea {
-        width: 100%;
-        min-height: 300px;
-        padding: 12px;
-        border: 1px solid var(--b3-border-color);
-        border-radius: 4px;
-        background: var(--b3-theme-background);
-        color: var(--b3-theme-on-background);
-        font-family: var(--b3-font-family);
-        font-size: 14px;
-        line-height: 1.6;
-        resize: vertical;
-        transition: border-color 0.2s ease;
-
-        &:focus {
-            outline: none;
-            border-color: var(--b3-theme-primary);
-        }
-    }
-
-    .ai-sidebar__edit-dialog-footer {
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
-        padding: 16px;
-        border-top: 1px solid var(--b3-border-color);
-    }
-
     // 编辑操作样式
     .ai-message__edit-operations {
-        margin-top: 12px;
-        padding: 12px;
-        background: var(--b3-theme-surface);
+        margin-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .ai-message__edit-file-group {
         border: 1px solid var(--b3-border-color);
         border-radius: 6px;
+        background: transparent;
+        margin-bottom: 0;
+        padding: 6px 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        justify-content: space-between;
+        flex-wrap: wrap;
     }
 
-    .ai-message__edit-operations-title {
-        font-size: 13px;
-        font-weight: 600;
+    .ai-message__edit-file-group:last-child {
+        margin-bottom: 0;
+    }
+
+    .ai-message__edit-file-group--applied {
+        border-color: color-mix(in srgb, var(--b3-theme-success) 55%, var(--b3-border-color));
+    }
+
+    .ai-message__edit-file-group--rejected {
+        border-color: color-mix(in srgb, var(--b3-theme-error) 55%, var(--b3-border-color));
+    }
+
+    .ai-message__edit-file-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0;
+        background: transparent;
+        flex: 1;
+        min-width: 180px;
+    }
+
+    .ai-message__edit-file-path {
+        font-family: var(--b3-font-family-code);
+        font-size: 11px;
         color: var(--b3-theme-on-surface);
-        margin-bottom: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        flex: 1;
+        min-width: 0;
     }
 
+    .ai-message__edit-file-stats {
+        font-size: 10px;
+        color: var(--b3-theme-on-surface-light);
+        white-space: nowrap;
+    }
+
+    .ai-message__edit-file-status {
+        font-size: 10px;
+        color: var(--b3-theme-on-surface-light);
+        white-space: nowrap;
+    }
+
+    .ai-message__edit-file-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: auto;
+        flex-wrap: wrap;
+    }
+
+    @media (max-width: 768px) {
+        .ai-message__edit-file-group {
+            align-items: flex-start;
+        }
+
+        .ai-message__edit-file-actions {
+            width: 100%;
+            margin-left: 0;
+        }
+    }
+
+    // 兼容旧样式（历史数据）
     .ai-message__edit-operation {
         padding: 12px;
         background: var(--b3-theme-background);
         border: 1px solid var(--b3-border-color);
         border-radius: 6px;
         margin-bottom: 8px;
-
-        &:last-child {
-            margin-bottom: 0;
-        }
-
-        &--applied {
-            border-color: var(--b3-theme-success);
-            background: var(--b3-theme-success-lightest);
-        }
-
-        &--rejected {
-            border-color: var(--b3-theme-error);
-            background: var(--b3-theme-error-lightest);
-            opacity: 0.7;
-        }
     }
 
     .ai-message__edit-operation-header {
@@ -13695,16 +15755,6 @@
         .b3-button {
             padding: 4px;
             min-width: auto;
-        }
-    }
-
-    .ai-sidebar__diff-mode-selector {
-        display: flex;
-        gap: 4px;
-
-        .b3-button {
-            padding: 4px 12px;
-            font-size: 12px;
         }
     }
 
@@ -13814,230 +15864,42 @@
         color: var(--b3-theme-on-surface);
     }
 
+    .ai-sidebar__diff-split-content--diff {
+        padding: 0;
+    }
+
+    .ai-sidebar__diff-split-line {
+        display: flex;
+        gap: 6px;
+        padding: 2px 10px;
+        min-height: 22px;
+    }
+
+    .ai-sidebar__diff-split-line--removed {
+        background: rgba(255, 0, 0, 0.1);
+        color: var(--b3-theme-error);
+    }
+
+    .ai-sidebar__diff-split-line--added {
+        background: rgba(0, 255, 0, 0.1);
+        color: var(--b3-theme-success);
+    }
+
+    .ai-sidebar__diff-split-line--unchanged {
+        color: var(--b3-theme-on-surface);
+    }
+
+    .ai-sidebar__diff-split-line--empty {
+        background: color-mix(in srgb, var(--b3-theme-surface) 78%, transparent);
+        color: var(--b3-theme-on-surface-light);
+    }
+
     .ai-sidebar__diff-dialog-footer {
         display: flex;
         justify-content: flex-end;
         gap: 8px;
         padding: 16px;
         border-top: 1px solid var(--b3-border-color);
-    }
-
-    // 保存到笔记对话框样式
-    .save-to-note-dialog__overlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
-        z-index: 999;
-    }
-
-    .save-to-note-dialog {
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        display: flex;
-        flex-direction: column;
-        width: 90%;
-        max-width: 500px;
-        background: var(--b3-theme-background);
-        border-radius: 8px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-        z-index: 1000;
-        overflow: hidden;
-    }
-
-    .save-to-note-dialog__header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 16px;
-        border-bottom: 1px solid var(--b3-border-color);
-        background: var(--b3-theme-surface);
-
-        h3 {
-            margin: 0;
-            font-size: 16px;
-            font-weight: 500;
-            color: var(--b3-theme-on-surface);
-        }
-    }
-
-    .save-to-note-dialog__switch-bar {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        padding: 12px 16px;
-        background: var(--b3-theme-surface);
-        border-bottom: 1px solid var(--b3-border-color);
-
-        button {
-            padding: 6px 12px;
-            font-size: 13px;
-            color: var(--b3-theme-primary);
-            background: transparent;
-            border: 1px solid var(--b3-theme-primary);
-            border-radius: 4px;
-            cursor: pointer;
-            transition: all 0.2s;
-
-            &:hover {
-                background: var(--b3-theme-primary);
-                color: var(--b3-theme-on-primary);
-            }
-        }
-    }
-
-    .save-to-note-dialog__content {
-        flex: 1;
-        overflow-y: auto;
-        padding: 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-    }
-
-    .save-to-note-dialog__field {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-
-        label {
-            font-size: 13px;
-            font-weight: 500;
-            color: var(--b3-theme-on-surface);
-        }
-
-        input,
-        select {
-            width: 100%;
-            font-size: 14px;
-            border: 1px solid var(--b3-border-color);
-            border-radius: 4px;
-            background: var(--b3-theme-background);
-            color: var(--b3-theme-on-background);
-
-            &:focus {
-                outline: none;
-                border-color: var(--b3-theme-primary);
-                box-shadow: 0 0 0 2px var(--b3-theme-primary-lightest);
-            }
-        }
-    }
-
-    .save-to-note-dialog__path-input-wrapper {
-        position: relative;
-    }
-
-    .save-to-note-dialog__path-dropdown {
-        max-height: 300px;
-        overflow-y: auto;
-        background: var(--b3-theme-surface);
-        border: 1px solid var(--b3-border-color);
-        border-radius: 4px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-        z-index: 10;
-    }
-
-    // 路径搜索结果弹窗样式 - 作为独立popup显示在对话框上层
-    .save-to-note-dialog__path-popup {
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        width: 90%;
-        max-width: 500px;
-        max-height: 400px;
-        background: var(--b3-theme-surface);
-        border: 1px solid var(--b3-border-color);
-        border-radius: 8px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-        z-index: 1001; // 确保在对话框上层
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .save-to-note-dialog__path-results {
-        flex: 1;
-        overflow-y: auto;
-        padding: 4px;
-    }
-
-    .save-to-note-dialog__path-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 12px;
-        cursor: pointer;
-        transition: background 0.2s;
-        border-radius: 4px;
-        margin: 2px 0;
-
-        &:hover {
-            background: var(--b3-theme-primary-lightest);
-        }
-
-        .b3-button__icon {
-            width: 16px;
-            height: 16px;
-            flex-shrink: 0;
-            color: var(--b3-theme-on-surface-light);
-        }
-
-        span {
-            flex: 1;
-            font-size: 13px;
-            color: var(--b3-theme-on-surface);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-    }
-
-    .save-to-note-dialog__path-loading {
-        padding: 16px;
-        text-align: center;
-        font-size: 13px;
-        color: var(--b3-theme-on-surface-light);
-    }
-
-    .save-to-note-dialog__footer {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 16px;
-        padding: 16px;
-        border-top: 1px solid var(--b3-border-color);
-        background: var(--b3-theme-surface);
-
-        .save-to-note-dialog__footer-option {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            cursor: pointer;
-            user-select: none;
-
-            span {
-                color: var(--b3-theme-on-surface);
-                font-size: 14px;
-            }
-
-            .b3-switch {
-                cursor: pointer;
-            }
-        }
-
-        .save-to-note-dialog__footer-buttons {
-            display: flex;
-            gap: 8px;
-        }
-
-        .b3-button {
-            min-width: 100px;
-        }
     }
 
     // 工具批准对话框样式

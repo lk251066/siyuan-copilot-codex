@@ -12,12 +12,12 @@
   ],
   "disabledInPublish": false,
   "displayName": {
-    "default": "SiYuan Copilot Codex",
-    "zh_CN": "SiYuan Copilot Codex"
+    "default": "Codex",
+    "zh_CN": "Codex"
   },
   "description": {
-    "default": "Personal-use Copilot Codex edition. Updated when possible.",
-    "zh_CN": "个人自用，Copilot 的 Codex 版，随缘更新。"
+    "default": "Personal-use Codex plugin. Updated when possible.",
+    "zh_CN": "个人自用 Codex 插件，随缘更新。"
   },
   "readme": {
     "default": "README_en_US.md",
