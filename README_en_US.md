@@ -41,6 +41,29 @@ Compared with the original project <https://github.com/Achuan-2/siyuan-plugin-co
   - `siyuan_capture_webpage_screenshot`
   - `siyuan_insert_images_to_note`
 
+## Latest Changes Mapped (2026-02-13)
+
+- Timeline now follows real execution order: `Thought -> Search -> Tool Call -> Diff`, with expand/collapse support.
+- `Diff` is rendered as an independent timeline item (separate style from thought/tool rows).
+- Tool calls support inline diff previews; final diffs are grouped by note file with line-change stats.
+- The current note page auto-refreshes after one answer is fully completed.
+- In-chat "Save to Note / Edit Message" buttons are removed; writes are unified through tool calls.
+
+## Codex Image Workflow
+
+- Goal: let Codex complete image extraction/import/screenshot/note insertion with minimal manual steps.
+- Recommended flow:
+  - Extract image URLs from a page: `siyuan_extract_page_images`
+  - Import external image URLs: `siyuan_import_image_urls`
+  - Capture webpage screenshot and import: `siyuan_capture_webpage_screenshot`
+  - Insert image assets into a target note: `siyuan_insert_images_to_note`
+- Write safety: MCP can run in read-only mode; if you see “read-only 模式下不允许写入”, switch write permissions first.
+
+## Right-Click Context Injection
+
+- Supports right-click "Send to Codex" on text selections, blocks, and doc-tree items.
+- Selected content is added into chat references automatically.
+
 ## Development
 
 ```bash
