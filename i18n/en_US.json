@@ -165,9 +165,9 @@
             "title": "Auto-Rename Session",
             "description": "Automatically generate session title using AI when first message is sent",
             "modelTitle": "Rename Model",
-            "modelDescription": "Select the AI model to use for generating session titles",
+            "modelDescription": "Select the Codex model used for session title generation (via Codex CLI)",
             "selectProvider": "-- Select Platform --",
-            "selectModel": "-- Select Model --",
+            "selectModel": "-- Select Codex Model --",
             "promptTitle": "Custom Prompt",
             "promptDescription": "Customize the prompt for generating session titles. Use {message} as a placeholder for the user message",
             "promptPlaceholder": "Generate a concise session title (max 20 characters, no quotes) based on the following user message:\n\n{message}"
@@ -705,6 +705,37 @@
     "webSearch": {
         "enabled": "Web search enabled",
         "disabled": "Web search disabled"
+    },
+    "webview": {
+        "urlPlaceholder": "Enter URL or search history...",
+        "actions": {
+            "back": "Back",
+            "forward": "Forward",
+            "refresh": "Refresh",
+            "openInBrowser": "Open in default browser",
+            "openInNewTab": "Open in new tab",
+            "openDevtools": "Open developer tools",
+            "fullscreen": "Fullscreen (Alt+Y)",
+            "exitFullscreen": "Exit fullscreen (Esc or Alt+Y)"
+        },
+        "search": {
+            "placeholder": "Find...",
+            "prev": "Previous",
+            "next": "Next",
+            "close": "Close"
+        },
+        "errors": {
+            "loadFailed": "Page load failed (error code: {code}): {detail}",
+            "unknown": "Unknown error",
+            "redirectLoop": "Too many page redirects; possible redirect loop."
+        }
+    },
+    "migration": {
+        "v3Migrated": "Legacy V3 configuration detected and migrated to a custom provider",
+        "achuanFallback": "Legacy Achuan provider detected; switched to OpenAI automatically",
+        "autoSetModelCapabilities": "Model capabilities were auto-initialized for existing models",
+        "codexAutoConfigured": "Codex CLI baseline configuration was auto-completed",
+        "agentsPromptSynced": "Detected AGENTS.md update in working directory; system prompt has been synced"
     },
     "fullscreen": {
         "title": "Fullscreen View",

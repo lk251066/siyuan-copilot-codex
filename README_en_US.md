@@ -1,49 +1,48 @@
-# SiYuan Copilot (Codex Edition)
+# SiYuan Copilot Codex
 
-> Standalone Codex-focused plugin branch.
-> Repository: `https://github.com/lk251066/siyuan-plugin-copilot`.
+> Personal-use Codex edition, maintained in spare time.  
+> Repository: <https://github.com/lk251066/siyuan-plugin-copilot>  
+> Tribute to the original project: <https://github.com/Achuan-2/siyuan-plugin-copilot>
 
-## Positioning
+## Overview
 
-- Keep only the Codex workflow (`ask` and `agent` modes).
-- Remove legacy multi-model routing, applet, and translation entries.
-- Use OpenAI API key from "Platform Management -> OpenAI" to fetch Codex models.
-- Keep high-frequency features: session management, context references, file attachments, and MCP self-check.
+- Codex CLI only (`ask` / `agent` workflows).
+- Model list is read from local `~/.codex/config.toml` (no third-party model API dependency).
+- Keeps practical features: sessions, context references, file attachments, and MCP self-check.
+- System prompt can sync with `AGENTS.md` in the current Codex working directory.
 
-## Main Features
+## Install
 
-- Codex chat with `ask` / `agent` mode.
-- Auto-generated chat titles, manual rename support.
-- Better thinking display (compact view, proper newline rendering).
-- Model selectors are dropdowns in both settings and chat header.
-- MCP self-check panel for connectivity diagnostics.
-- System prompt sync with `codexWorkingDir/AGENTS.md` (current working dir only).
+1. Install `siyuan-copilot-codex` from SiYuan Bazaar, or copy build output to `data/plugins/siyuan-copilot-codex`.
+2. Ensure `codex` command is available on your machine.
+3. Enable `Codex CLI` in plugin settings and set the working directory (`--cd`).
 
-## Quick Start
+## Usage
 
-1. Install SiYuan and make sure `codex` CLI is available in terminal.
-2. Fill a valid API key at `Platform Management -> OpenAI`.
-3. Build and install this plugin into:
-   - `data/plugins/siyuan-copilot-codex`
-4. In plugin settings (`Codex CLI` section):
-   - Enable Codex CLI
-   - Set Codex path (`codex` or absolute path)
-   - Set working directory (`--cd`)
-   - Choose proper permission mode
+- Switch mode, model, and reasoning effort from the chat header.
+- "Fetch Models" reads model ids from local Codex config.
+- "Tool Check" verifies currently available tools.
 
-## Build
+## Development
 
 ```bash
 npm install
+npm run dev
 npm run build
 ```
 
-Build outputs are in `dist/`.
+Build output: `dist/`
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md).
+<https://github.com/lk251066/siyuan-plugin-copilot/blob/main/CHANGELOG.md>
 
 ## License
 
 GPL-3.0
+
+## Credits
+
+- SiYuan plugin template: <https://github.com/siyuan-note/plugin-sample-vite-svelte>
+- sy-f-misc: <https://github.com/frostime/sy-f-misc>
+- Cherry Studio: <https://github.com/CherryHQ/cherry-studio>

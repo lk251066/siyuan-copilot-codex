@@ -164,9 +164,9 @@
             "title": "会话自动重命名",
             "description": "在首次发送消息时，自动使用AI生成会话标题",
             "modelTitle": "重命名模型",
-            "modelDescription": "选择用于生成会话标题的AI模型",
+            "modelDescription": "选择用于生成会话标题的 Codex 模型（通过 Codex CLI 调用）",
             "selectProvider": "-- 选择平台 --",
-            "selectModel": "-- 选择模型 --",
+            "selectModel": "-- 选择 Codex 模型 --",
             "promptTitle": "自定义提示词",
             "promptDescription": "自定义生成会话标题的提示词，使用 {message} 作为用户消息的占位符",
             "promptPlaceholder": "请根据以下用户消息生成一个简洁的会话标题（不超过20个字，不要使用引号）：\n\n{message}"
@@ -704,6 +704,37 @@
     "webSearch": {
         "enabled": "联网搜索已启用",
         "disabled": "联网搜索已禁用"
+    },
+    "webview": {
+        "urlPlaceholder": "输入 URL 或搜索历史记录...",
+        "actions": {
+            "back": "后退",
+            "forward": "前进",
+            "refresh": "刷新",
+            "openInBrowser": "在默认浏览器打开",
+            "openInNewTab": "在新标签页打开",
+            "openDevtools": "打开开发者工具",
+            "fullscreen": "全屏 (Alt+Y)",
+            "exitFullscreen": "退出全屏 (Esc 或 Alt+Y)"
+        },
+        "search": {
+            "placeholder": "查找...",
+            "prev": "上一个",
+            "next": "下一个",
+            "close": "关闭"
+        },
+        "errors": {
+            "loadFailed": "页面加载失败 (错误代码: {code}): {detail}",
+            "unknown": "未知错误",
+            "redirectLoop": "页面重定向次数过多，可能存在循环重定向问题"
+        }
+    },
+    "migration": {
+        "v3Migrated": "检测到旧的 V3 配置，已迁移为自定义平台",
+        "achuanFallback": "检测到旧平台 Achuan，已自动切换到 OpenAI",
+        "autoSetModelCapabilities": "已自动为现有模型设置能力",
+        "codexAutoConfigured": "已自动完成 Codex CLI 基础配置",
+        "agentsPromptSynced": "检测到工作目录 AGENTS.md 已更新，系统提示词已同步为文件内容"
     },
     "fullscreen": {
         "title": "全屏查看",

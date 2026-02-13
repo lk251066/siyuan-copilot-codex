@@ -19,7 +19,6 @@ import {
 } from "siyuan";
 
 import { appendBlock, deleteBlock, setBlockAttrs, getBlockAttrs, pushMsg, pushErrMsg, sql, renderSprig, getChildBlocks, insertBlock, renameDocByID, prependBlock, updateBlock, createDocWithMd, getBlockKramdown, getBlockDOM, putFile, getFileBlob, readDir } from "./api";
-import "@/index.scss";
 
 import SettingPanel from "./SettingsPannel.svelte";
 import { getDefaultSettings } from "./defaultSettings";
@@ -39,6 +38,10 @@ const WEBVIEW_HISTORY_FILE = "webview-history.json";
 const WEBAPP_ICON_DIR = "/data/storage/petal/siyuan-plugin-copilot/webappIcon";
 const MAX_HISTORY_COUNT = 200;
 const ADD_CHAT_CONTEXT_EVENT = "siyuan-copilot:add-chat-context";
+const ICON_COPILOT_ID = "iconCopilotCodex";
+const ICON_MODEL_SETTING_ID = "iconModelSettingCodex";
+const ICON_TRANSLATE_ID = "iconTranslateCodex";
+const ICON_WEBAPP_ID = "iconCopilotWebAppCodex";
 
 const AI_SIDEBAR_TYPE = "ai-chat-sidebar";
 export const AI_TAB_TYPE = "ai-chat-tab";
@@ -366,7 +369,7 @@ export default class PluginSample extends Plugin {
         const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         icon.setAttribute("class", "b3-menu__icon");
         const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-        use.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "#iconCopilot");
+        use.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", `#${ICON_COPILOT_ID}`);
         icon.appendChild(use);
         const span = document.createElement("span");
         span.className = "b3-menu__label";
@@ -507,7 +510,7 @@ export default class PluginSample extends Plugin {
     private addSubmitToCodexMenu(menu: any, onClick: () => void) {
         if (!menu || typeof menu.addItem !== "function") return;
         menu.addItem({
-            icon: "iconCopilot",
+            icon: ICON_COPILOT_ID,
             label: t("toolbar.submitToCodex") || "提交给 Codex",
             id: "copilot-submit-codex",
             click: () => {
@@ -809,7 +812,7 @@ export default class PluginSample extends Plugin {
     private async getOrCreateIconForDomain(url: string): Promise<string> {
         try {
             const domain = this.getDomainFromUrl(url);
-            if (!domain) return 'iconCopilotWebApp';
+            if (!domain) return ICON_WEBAPP_ID;
 
             // 优先检查是否有已配置的 WebApp 使用此域名
             // 这样用户自定义的图标优先级最高
@@ -906,7 +909,7 @@ export default class PluginSample extends Plugin {
             console.warn('getOrCreateIconForDomain 出错:', e);
         }
 
-        return 'iconCopilotWebApp';
+        return ICON_WEBAPP_ID;
     }
 
     async onload() {
@@ -924,22 +927,22 @@ export default class PluginSample extends Plugin {
         // 加载设置
         await this.loadSettings();
         this.addIcons(`
-    <symbol id="iconCopilot" viewBox="0 0 1024 1024">
+    <symbol id="${ICON_COPILOT_ID}" viewBox="0 0 1024 1024">
     <path d="M369.579 617.984a42.71 42.71 0 1 1 85.461 0v85.205a42.71 42.71 0 1 1-85.461 0v-85.205z m284.8 0a42.71 42.71 0 1 0-85.462 0v85.205a42.71 42.71 0 1 0 85.462 0v-85.205zM511.957 171.861c-36.053-52.01-110.848-55.893-168.32-50.688-65.834 6.571-121.301 29.227-152.49 62.464-54.102 59.136-56.576 183.083-30.507 251.307-2.603 11.69-5.12 23.51-6.912 36.053C105.515 483.67 56.32 551.98 56.32 600.832v92.245c0 25.6 11.947 48.982 33.067 64.939 120.49 89.515 270.677 158.89 422.613 158.89 151.893 0 302.08-69.375 422.57-158.89a80.64 80.64 0 0 0 33.067-64.896v-92.288c0-48.853-49.194-117.163-97.408-129.835-1.792-12.544-4.266-24.32-6.912-36.01 26.07-68.267 23.552-192.214-30.506-251.307-31.19-33.28-86.614-55.893-152.491-62.507-57.472-5.162-132.267-1.28-168.363 50.688z m284.8 574.294c-65.493 36.437-174.293 85.333-284.8 85.333S292.693 782.592 227.2 746.155V498.73c105.685 40.96 227.285 19.84 284.715-75.008H512c57.43 94.848 179.03 115.925 284.715 75.008v247.381z m-341.76-454.827c0 67.67-20.48 141.312-113.92 141.312s-111.189-22.357-111.189-85.205c0-99.67 15.19-142.336 141.483-142.336 72.96 0 83.626 23.466 83.626 86.272z m113.92 0c0-62.805 10.667-86.187 83.67-86.187 126.293 0 141.482 42.667 141.482 142.294 0 62.848-17.792 85.205-111.232 85.205s-113.92-73.643-113.92-141.27z" p-id="5384"></path>
     </symbol>
     `);
         this.addIcons(`
-    <symbol id="iconModelSetting" viewBox="0 0 1024 1024">
+    <symbol id="${ICON_MODEL_SETTING_ID}" viewBox="0 0 1024 1024">
     <path d="M1165.18 856.258H444.69c-15.086-57.882-67.556-100.843-130.03-100.843-73.95 0-134.292 60.178-134.292 134.293 0 73.95 60.178 134.292 134.293 134.292 62.473 0 115.107-42.796 130.029-100.678h720.653c18.529 0 33.614-15.086 33.614-33.614-0.164-18.53-15.25-33.45-33.778-33.45zM314.66 956.936c-37.057 0-67.064-30.17-67.064-67.064 0-37.058 30.171-67.065 67.065-67.065s67.064 30.171 67.064 67.065c0 36.893-30.17 67.064-67.064 67.064z m851.175-478.468H1062.37c-14.921-57.882-67.556-100.678-130.029-100.678s-115.108 42.796-130.029 100.678H218.246c-18.53 0-33.614 15.085-33.614 33.614 0 18.529 15.085 33.614 33.614 33.614H802.31c14.921 57.882 67.556 100.678 130.03 100.678 62.472 0 115.107-42.796 130.028-100.678h103.466c18.529 0 33.614-15.085 33.614-33.614 0-18.693-15.085-33.614-33.614-33.614zM932.34 579.146c-37.057 0-67.064-30.17-67.064-67.064s30.17-67.064 67.064-67.064c37.058 0 67.064 30.17 67.064 67.064s-30.006 67.064-67.064 67.064zM314.66 268.421c62.474 0 115.108-42.797 130.03-100.678h720.653c18.529 0 33.614-15.086 33.614-33.615 0-18.528-15.085-33.614-33.614-33.614H444.69C429.604 42.796 377.134 0 314.66 0c-74.114 0-134.292 60.177-134.292 134.292 0 73.951 60.178 134.129 134.293 134.129z m0-201.357c37.058 0 67.065 30.17 67.065 67.064 0 37.058-30.17 67.065-67.064 67.065s-67.065-30.171-67.065-67.065c-0.163-36.893 30.007-67.064 67.065-67.064z m0 0" p-id="4685"></path>
     </symbol>
     `);
         this.addIcons(`
-    <symbol id="iconTranslate" viewBox="0 0 1024 1024">
+    <symbol id="${ICON_TRANSLATE_ID}" viewBox="0 0 1024 1024">
 <path d="M608 416h288c35.36 0 64 28.48 64 64v416c0 35.36-28.48 64-64 64H480c-35.36 0-64-28.48-64-64v-288H128c-35.36 0-64-28.48-64-64V128c0-35.36 28.48-64 64-64h416c35.36 0 64 28.48 64 64v288z m0 64v64c0 35.36-28.48 64-64 64h-64v256.032c0 17.664 14.304 31.968 31.968 31.968H864a31.968 31.968 0 0 0 31.968-31.968V512a31.968 31.968 0 0 0-31.968-31.968H608zM128 159.968V512c0 17.664 14.304 31.968 31.968 31.968H512a31.968 31.968 0 0 0 31.968-31.968V160A31.968 31.968 0 0 0 512.032 128H160A31.968 31.968 0 0 0 128 159.968z m64 244.288V243.36h112.736V176h46.752c6.4 0.928 9.632 1.824 9.632 2.752a10.56 10.56 0 0 1-1.376 4.128c-2.752 7.328-4.128 16.032-4.128 26.112v34.368h119.648v156.768h-50.88v-20.64h-68.768v118.272H306.112v-118.272H238.752v24.768H192z m46.72-122.368v60.48h67.392V281.92H238.752z m185.664 60.48V281.92h-68.768v60.48h68.768z m203.84 488H576L668.128 576h64.64l89.344 254.4h-54.976l-19.264-53.664h-100.384l-19.232 53.632z m33.024-96.256h72.864l-34.368-108.608h-1.376l-37.12 108.608zM896 320h-64a128 128 0 0 0-128-128V128a192 192 0 0 1 192 192zM128 704h64a128 128 0 0 0 128 128v64a192 192 0 0 1-192-192z" p-id="5072"></path>
     </symbol>
     `);
         this.addIcons(`
-    <symbol id="iconCopilotWebApp" viewBox="0 0 1024 1024">
+    <symbol id="${ICON_WEBAPP_ID}" viewBox="0 0 1024 1024">
 <path d="M878.159424 565.40635l-327.396585 0c-11.307533 0-20.466124 9.168824-20.466124 20.466124l0 327.396585c0 11.307533 9.15859 20.466124 20.466124 20.466124l327.396585 0c11.2973 0 20.466124-9.15859 20.466124-20.466124l0-327.396585C898.625548 574.575174 889.456724 565.40635 878.159424 565.40635zM857.6933 892.802936l-286.464337 0 0-286.464337 286.464337 0L857.6933 892.802936z" p-id="7151"></path><path d="M430.606225 565.40635l-327.396585 0c-11.2973 0-20.466124 9.168824-20.466124 20.466124l0 327.396585c0 11.307533 9.168824 20.466124 20.466124 20.466124l327.396585 0c11.307533 0 20.466124-9.15859 20.466124-20.466124l0-327.396585C451.072349 574.575174 441.913758 565.40635 430.606225 565.40635zM410.140101 892.802936l-286.464337 0 0-286.464337 286.464337 0L410.140101 892.802936z" p-id="7152"></path><path d="M430.606225 115.601878l-327.396585 0c-11.2973 0-20.466124 9.15859-20.466124 20.466124l0 327.386352c0 11.307533 9.168824 20.466124 20.466124 20.466124l327.396585 0c11.307533 0 20.466124-9.15859 20.466124-20.466124l0-327.386352C451.072349 124.760468 441.913758 115.601878 430.606225 115.601878zM410.140101 442.98823l-286.464337 0 0-286.454104 286.464337 0L410.140101 442.98823z" p-id="7153"></path><path d="M965.529307 277.744745l-214.433814-214.433814c-3.837398-3.837398-9.046027-5.996574-14.46955-5.996574-5.433756 0-10.632151 2.159176-14.479783 5.996574l-214.433814 214.433814c-7.992021 7.992021-7.992021 20.957311 0 28.949332l214.433814 214.433814c4.001127 3.990894 9.240455 5.996574 14.479783 5.996574 5.229095 0 10.468422-2.00568 14.46955-5.996574l214.433814-214.433814c3.837398-3.837398 5.996574-9.046027 5.996574-14.46955C971.525881 286.790772 969.366705 281.582143 965.529307 277.744745zM736.625944 477.709009l-185.494715-185.484482 185.494715-185.494715 185.484482 185.494715L736.625944 477.709009z" p-id="7154"></path>
     </symbol>
     `);
@@ -1000,7 +1003,7 @@ export default class PluginSample extends Plugin {
                     // 后退按钮
                     const backBtn = document.createElement('button');
                     backBtn.className = 'b3-button b3-button--text';
-                    backBtn.title = '后退';
+                    backBtn.title = t("webview.actions.back") || t("common.back") || "Back";
                     backBtn.innerHTML = '<svg class="b3-button__icon"><use xlink:href="#iconLeft"></use></svg>';
                     backBtn.disabled = true;
                     navbar.appendChild(backBtn);
@@ -1008,7 +1011,7 @@ export default class PluginSample extends Plugin {
                     // 前进按钮
                     const forwardBtn = document.createElement('button');
                     forwardBtn.className = 'b3-button b3-button--text';
-                    forwardBtn.title = '前进';
+                    forwardBtn.title = t("webview.actions.forward") || "Forward";
                     forwardBtn.innerHTML = '<svg class="b3-button__icon"><use xlink:href="#iconRight"></use></svg>';
                     forwardBtn.disabled = true;
                     navbar.appendChild(forwardBtn);
@@ -1016,7 +1019,7 @@ export default class PluginSample extends Plugin {
                     // 刷新按钮
                     const refreshBtn = document.createElement('button');
                     refreshBtn.className = 'b3-button b3-button--text';
-                    refreshBtn.title = '刷新';
+                    refreshBtn.title = t("webview.actions.refresh") || "Refresh";
                     refreshBtn.innerHTML = '<svg class="b3-button__icon"><use xlink:href="#iconRefresh"></use></svg>';
                     navbar.appendChild(refreshBtn);
 
@@ -1034,7 +1037,7 @@ export default class PluginSample extends Plugin {
                     urlInput.style.fontSize = '13px';
                     urlInput.spellcheck = false;
                     urlInput.autocomplete = 'off';
-                    urlInput.placeholder = '输入 URL 或搜索历史记录...';
+                    urlInput.placeholder = t("webview.urlPlaceholder") || "Enter URL or search history...";
 
                     // 建议列表容器
                     const suggestionList = document.createElement('div');
@@ -1302,14 +1305,15 @@ export default class PluginSample extends Plugin {
                     // 在默认浏览器打开按钮
                     const openInBrowserBtn = document.createElement('button');
                     openInBrowserBtn.className = 'b3-button b3-button--text';
-                    openInBrowserBtn.title = '在默认浏览器打开';
+                    openInBrowserBtn.title =
+                        t("webview.actions.openInBrowser") || "Open in default browser";
                     openInBrowserBtn.innerHTML = '<svg class="b3-button__icon"><use xlink:href="#iconOpenWindow"></use></svg>';
                     navbar.appendChild(openInBrowserBtn);
 
                     // 复制标签页按钮
                     const duplicateTabBtn = document.createElement('button');
                     duplicateTabBtn.className = 'b3-button b3-button--text';
-                    duplicateTabBtn.title = '在新标签页打开';
+                    duplicateTabBtn.title = t("webview.actions.openInNewTab") || "Open in new tab";
                     duplicateTabBtn.innerHTML = '<svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>';
                     navbar.appendChild(duplicateTabBtn);
 
@@ -1323,7 +1327,8 @@ export default class PluginSample extends Plugin {
                     // 打开开发者工具按钮
                     const devtoolsBtn = document.createElement('button');
                     devtoolsBtn.className = 'b3-button b3-button--text';
-                    devtoolsBtn.title = '打开开发者工具';
+                    devtoolsBtn.title =
+                        t("webview.actions.openDevtools") || "Open developer tools";
                     devtoolsBtn.innerHTML = '<svg class="b3-button__icon"><use xlink:href="#iconCode"></use></svg>';
 
                     devtoolsBtn.addEventListener('click', (e) => {
@@ -1370,7 +1375,7 @@ export default class PluginSample extends Plugin {
 
                     const searchInput = document.createElement('input');
                     searchInput.className = 'b3-text-field';
-                    searchInput.placeholder = '查找...';
+                    searchInput.placeholder = t("webview.search.placeholder") || "Find...";
                     searchInput.style.fontSize = '12px';
                     searchInput.style.padding = '2px 4px';
                     searchInput.style.width = '160px';
@@ -1394,9 +1399,18 @@ export default class PluginSample extends Plugin {
                         return btn;
                     };
 
-                    const prevBtn = createSearchBtn('iconUp', '上一个');
-                    const nextBtn = createSearchBtn('iconDown', '下一个');
-                    const closeSearchBtn = createSearchBtn('iconClose', '关闭');
+                    const prevBtn = createSearchBtn(
+                        'iconUp',
+                        t("webview.search.prev") || "Previous"
+                    );
+                    const nextBtn = createSearchBtn(
+                        'iconDown',
+                        t("webview.search.next") || "Next"
+                    );
+                    const closeSearchBtn = createSearchBtn(
+                        'iconClose',
+                        t("webview.search.close") || t("common.close") || "Close"
+                    );
 
                     searchBar.appendChild(searchInput);
                     searchBar.appendChild(searchCount);
@@ -1559,7 +1573,7 @@ export default class PluginSample extends Plugin {
                             const tabPromise = openTab({
                                 app: pluginInstance.app,
                                 custom: {
-                                    icon: "iconCopilotWebApp",
+                                    icon: ICON_WEBAPP_ID,
                                     title: initialTitle,
                                     data: {
                                         app: {
@@ -1591,7 +1605,7 @@ export default class PluginSample extends Plugin {
                             openTab({
                                 app: pluginInstance.app,
                                 custom: {
-                                    icon: "iconCopilotWebApp",
+                                    icon: ICON_WEBAPP_ID,
                                     title: initialTitle,
                                     data: {
                                         app: {
@@ -1679,7 +1693,10 @@ export default class PluginSample extends Plugin {
                             if (redirectCount > MAX_REDIRECTS) {
                                 console.error('检测到重定向循环，停止加载:', newUrl);
                                 webview.stop();
-                                pushErrMsg(`页面重定向次数过多，可能存在循环重定向问题`);
+                                pushErrMsg(
+                                    t("webview.errors.redirectLoop") ||
+                                    "Too many page redirects; possible redirect loop."
+                                );
                                 return;
                             }
                         } else {
@@ -1745,7 +1762,15 @@ export default class PluginSample extends Plugin {
                         // errorCode -3 是 ERR_ABORTED，通常是正常的页面跳转，不需要报错
                         if (event.errorCode !== -3 && event.errorCode !== 0) {
                             console.error('Webview 加载失败:', event);
-                            pushErrMsg(`页面加载失败 (错误代码: ${event.errorCode}): ${event.errorDescription || '未知错误'}`);
+                            const errorTemplate =
+                                t("webview.errors.loadFailed") ||
+                                "Page load failed (error code: {code}): {detail}";
+                            const unknownError = t("webview.errors.unknown") || "Unknown error";
+                            pushErrMsg(
+                                errorTemplate
+                                    .replace("{code}", String(event.errorCode))
+                                    .replace("{detail}", String(event.errorDescription || unknownError))
+                            );
                         }
                     });
 
@@ -1782,7 +1807,7 @@ export default class PluginSample extends Plugin {
                             container.style.zIndex = '9999';
                             container.style.background = 'var(--b3-theme-background)';
                             fullscreenBtn.innerHTML = '<svg class="b3-button__icon"><use xlink:href="#iconContract"></use></svg>';
-                            fullscreenBtn.title = '退出全屏 (Esc 或 Alt+Y)';
+                            fullscreenBtn.title = t("webview.actions.exitFullscreen") || "Exit fullscreen (Esc or Alt+Y)";
                         } else {
                             // 退出全屏
                             container.style.position = '';
@@ -1795,7 +1820,7 @@ export default class PluginSample extends Plugin {
                             container.style.zIndex = '';
                             container.style.background = '';
                             fullscreenBtn.innerHTML = '<svg class="b3-button__icon"><use xlink:href="#iconFullscreen"></use></svg>';
-                            fullscreenBtn.title = '全屏 (Alt+Y)';
+                            fullscreenBtn.title = t("webview.actions.fullscreen") || "Fullscreen (Alt+Y)";
                         }
                     };
 
@@ -1854,7 +1879,7 @@ export default class PluginSample extends Plugin {
                         }
 
                         // 使用当前 Tab 的 icon，如果没有则使用默认 icon
-                        const currentIcon = this.tab?.icon || "iconCopilotWebApp";
+                        const currentIcon = this.tab?.icon || ICON_WEBAPP_ID;
 
                         openTab({
                             app: pluginInstance.app,
@@ -2063,7 +2088,7 @@ export default class PluginSample extends Plugin {
             config: {
                 position: "RightBottom",
                 size: { width: 400, height: 0 },
-                icon: "iconCopilot",
+                icon: ICON_COPILOT_ID,
                 title: "Copilot",
             },
             data: {
@@ -2202,7 +2227,7 @@ export default class PluginSample extends Plugin {
                         const tabPromise = openTab({
                             app: this.app,
                             custom: {
-                                icon: "iconCopilotWebApp",
+                                icon: ICON_WEBAPP_ID,
                                 title: appData.name,
                                 data: {
                                     app: appData
@@ -2241,10 +2266,10 @@ export default class PluginSample extends Plugin {
         toolbar.push("|");
         toolbar.push({
             name: "ai-chat-with-selection",
-            icon: "iconCopilot",
+            icon: ICON_COPILOT_ID,
             hotkey: "⌥⌘C",
             tipPosition: "n",
-            tip: "AI 问答",
+            tip: t("toolbar.aiChat") || "AI Chat",
             click: (protyle: any) => {
                 this.openChatDialog(protyle);
             }
@@ -2501,7 +2526,10 @@ export default class PluginSample extends Plugin {
 
                 // 持久化迁移结果
                 await this.saveData(SETTINGS_FILE, settings);
-                pushMsg('检测到旧的 V3 配置，已迁移为自定义平台');
+                pushMsg(
+                    t("migration.v3Migrated") ||
+                    "Legacy V3 configuration detected and migrated to a custom provider"
+                );
             }
         } catch (e) {
             console.error('Settings migration failed:', e);
@@ -2523,7 +2551,10 @@ export default class PluginSample extends Plugin {
                 settings.currentProvider = 'openai';
                 settings.currentModelId = '';
                 await this.saveData(SETTINGS_FILE, settings);
-                pushMsg('检测到旧平台 Achuan，已自动切换到 OpenAI');
+                pushMsg(
+                    t("migration.achuanFallback") ||
+                    "检测到旧平台 Achuan，已自动切换到 OpenAI"
+                );
             }
             if (settings.selectedProviderId === 'Achuan') {
                 settings.selectedProviderId = 'openai';
@@ -2558,7 +2589,10 @@ export default class PluginSample extends Plugin {
 
                 settings.dataTransfer.autoSetModelCapabilities = true;
                 await this.saveData(SETTINGS_FILE, settings);
-                pushMsg('已自动为现有模型设置能力');
+                pushMsg(
+                    t("migration.autoSetModelCapabilities") ||
+                    "已自动为现有模型设置能力"
+                );
             }
         } catch (e) {
             console.error('Auto set model capabilities failed:', e);
@@ -2604,7 +2638,10 @@ export default class PluginSample extends Plugin {
         if (codexAutoResult.changed) {
             needsSave = true;
             if (codexAutoResult.autoEnabled) {
-                pushMsg('已自动完成 Codex CLI 基础配置');
+                pushMsg(
+                    t("migration.codexAutoConfigured") ||
+                    "已自动完成 Codex CLI 基础配置"
+                );
             }
         }
 
@@ -2644,7 +2681,10 @@ export default class PluginSample extends Plugin {
             const syncResult = bidirectionalSyncPromptWithWorkingDirAgentsFile(nextSettings);
             nextSettings = syncResult.settings;
             if (syncResult.reason === 'external_file_changed' && syncResult.changed) {
-                pushMsg(`检测到工作目录 AGENTS.md 已更新，系统提示词已同步为文件内容`);
+                pushMsg(
+                    t("migration.agentsPromptSynced") ||
+                    "检测到工作目录 AGENTS.md 已更新，系统提示词已同步为文件内容"
+                );
             }
         } catch (e) {
             console.error('Sync AGENTS.md failed:', e);
@@ -2674,7 +2714,7 @@ export default class PluginSample extends Plugin {
             app: this.app,
             custom: {
                 title: 'Siyuan Copilot',
-                icon: 'iconCopilot',
+                icon: ICON_COPILOT_ID,
                 id: tabId,
                 data: {
                     time: Date.now()
@@ -2692,7 +2732,7 @@ export default class PluginSample extends Plugin {
             app: this.app,
             custom: {
                 title: 'Siyuan Copilot',
-                icon: 'iconCopilot',
+                icon: ICON_COPILOT_ID,
                 id: tabId,
             }
         });
