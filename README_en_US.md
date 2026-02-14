@@ -6,6 +6,7 @@
 
 ## Overview
 
+- Current release: `v1.6.30` (2026-02-14)
 - Codex CLI only (`ask` / `agent` workflows).
 - Model list is loaded from local `CODEX_HOME/config.toml` (fallback: `~/.codex/config.toml`) with no third-party model API dependency.
 - Keeps practical features: sessions, context references, file attachments, and MCP self-check.
@@ -41,8 +42,10 @@ Compared with the original project <https://github.com/Achuan-2/siyuan-plugin-co
   - `siyuan_capture_webpage_screenshot`
   - `siyuan_insert_images_to_note`
 
-## Latest Changes Mapped (2026-02-13)
+## Latest Changes Mapped (2026-02-14)
 
+- Released `v1.6.30`: uninstall cleanup now removes plugin config/data residues (including legacy namespace directories).
+- Full i18n parity check completed: recursive keys are aligned (`zh_CN=612`, `en_US=612`) with no missing keys.
 - Timeline now follows real execution order: `Thought -> Search -> Tool Call -> Diff`, with expand/collapse support.
 - Sub-agent outputs now stay in the execution timeline only, and are no longer appended into the final assistant answer body.
 - `Diff` is rendered as an independent timeline item (separate style from thought/tool rows).

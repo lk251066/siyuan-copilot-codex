@@ -1,4 +1,6 @@
 ## v1.6.30 / 20260214
+- 🛠️ 卸载清理补齐：`uninstall()` 现在会清理 `settings/webview-history/chat-sessions/prompts/agent-tools-config`，并递归删除 `/data/storage/petal/{namespace}/sessions|assets|webappIcon`（含历史命名目录）
+- 🌍 i18n 一致性核对：`zh_CN` 与 `en_US` 递归键数量对齐（`612/612`），无缺失键
 - 🧩 标识隔离：侧栏/页签类型改为 `codex-*` 命名（`codex-ai-chat-sidebar`、`codex-ai-chat-tab`、`codex-webapp-tab`），避免与原 Copilot 插件并存冲突
 - 🧩 事件隔离：`提交给 Codex` 事件名改为基于插件名动态命名（`${pluginName}:add-chat-context`），并同步隔离 DOM 兜底菜单标记属性
 - 🧩 WebView 隔离：共享会话分区改为 `persist:siyuan-copilot-codex-webapp-shared`，避免与同类插件共用分区
