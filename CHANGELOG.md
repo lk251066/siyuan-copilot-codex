@@ -1,4 +1,4 @@
-## Unreleased / 20260213
+## v1.6.30 / 20260214
 - 🧩 标识隔离：侧栏/页签类型改为 `codex-*` 命名（`codex-ai-chat-sidebar`、`codex-ai-chat-tab`、`codex-webapp-tab`），避免与原 Copilot 插件并存冲突
 - 🧩 事件隔离：`提交给 Codex` 事件名改为基于插件名动态命名（`${pluginName}:add-chat-context`），并同步隔离 DOM 兜底菜单标记属性
 - 🧩 WebView 隔离：共享会话分区改为 `persist:siyuan-copilot-codex-webapp-shared`，避免与同类插件共用分区

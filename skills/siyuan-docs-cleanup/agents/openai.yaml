@@ -1,0 +1,5 @@
+interface:
+  display_name: "SiYuan 文档治理"
+  short_description: "去重、合并、归档并保留溯源"
+  default_prompt: "使用 $siyuan-docs-cleanup 清理这批笔记并给出合并与验证结果。"
+

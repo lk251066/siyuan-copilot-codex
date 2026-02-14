@@ -1,0 +1,5 @@
+interface:
+  display_name: "SiYuan 调研笔记"
+  short_description: "双来源调研并沉淀为可复现笔记"
+  default_prompt: "使用 $siyuan-research-notes 产出含来源、复现步骤和验证结果的调研笔记。"
+

@@ -7,7 +7,7 @@
 ## Overview
 
 - Codex CLI only (`ask` / `agent` workflows).
-- Model list is read from local `~/.codex/config.toml` (no third-party model API dependency).
+- Model list is loaded from local `CODEX_HOME/config.toml` (fallback: `~/.codex/config.toml`) with no third-party model API dependency.
 - Keeps practical features: sessions, context references, file attachments, and MCP self-check.
 - System prompt can sync with `AGENTS.md` in the current Codex working directory.
 - Adds a Codex image workflow via MCP tools: extract page images, import image URLs, capture webpage screenshots, and insert them into notes.
@@ -17,7 +17,7 @@
 Compared with the original project <https://github.com/Achuan-2/siyuan-plugin-copilot>, this branch differs as follows:
 
 - Engine strategy: Codex CLI is the only chat engine; this branch no longer acts as a multi-provider AI hub.
-- Model source: model options are loaded from local `~/.codex/config.toml`, not external model-list APIs.
+- Model source: model options come from local Codex config (`CODEX_HOME/config.toml` or `~/.codex/config.toml`), not external model-list APIs.
 - Settings focus: the settings panel is streamlined for Codex workflows; platform management is disabled by default and kept only for compatibility.
 - Prompt sync: system prompt can sync with `AGENTS.md` in the active working directory.
 - Interaction: context menus include “Send to Codex” to add selected text/blocks into chat references.
@@ -44,6 +44,7 @@ Compared with the original project <https://github.com/Achuan-2/siyuan-plugin-co
 ## Latest Changes Mapped (2026-02-13)
 
 - Timeline now follows real execution order: `Thought -> Search -> Tool Call -> Diff`, with expand/collapse support.
+- Sub-agent outputs now stay in the execution timeline only, and are no longer appended into the final assistant answer body.
 - `Diff` is rendered as an independent timeline item (separate style from thought/tool rows).
 - Tool calls support inline diff previews; final diffs are grouped by note file with line-change stats.
 - The current note page auto-refreshes after one answer is fully completed.

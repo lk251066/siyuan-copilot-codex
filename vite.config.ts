@@ -38,6 +38,7 @@ export default defineConfig({
                 { src: "./assets/*", dest: "./assets/" },
                 { src: "./i18n/*", dest: "./i18n/" },
                 { src: "./mcp/**", dest: "./mcp/" },
+                { src: "./skills/*", dest: "./skills/" },
             ],
         }),
 

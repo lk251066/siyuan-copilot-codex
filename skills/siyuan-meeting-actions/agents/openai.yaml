@@ -1,0 +1,5 @@
+interface:
+  display_name: "SiYuan 会议行动项"
+  short_description: "会议纪要结构化输出与行动项拆解"
+  default_prompt: "使用 $siyuan-meeting-actions 将本次会议内容整理为决策与行动项。"
+

@@ -25,6 +25,8 @@
                 "description": "On Windows this is usually `C:\\\\Users\\\\<you>\\\\AppData\\\\Roaming\\\\npm\\\\codex.cmd`. Leave empty to use `codex` from PATH"
             },
             "detectCliPath": "Auto detect",
+            "notFoundInPath": "Codex not found. Please confirm it is installed and available in PATH",
+            "detectCliFailed": "Auto detection failed. Please enter codex path manually",
             "workingDir": {
                 "title": "Working Directory (--cd)",
                 "description": "Codex working root (`-C/--cd`). Recommended: your SiYuan workspace directory"
@@ -42,6 +44,45 @@
                     "fullyOpen": "Fully open (Dangerous)"
                 },
                 "fullyOpenWarning": "Fully open mode bypasses approvals and sandboxing. EXTREMELY dangerous. Enable only if you fully understand the risk."
+            },
+            "skills": {
+                "enabled": {
+                    "title": "Enable Skills Injection",
+                    "description": "Inject discovered skills into Codex system prompt"
+                },
+                "includePlugin": {
+                    "title": "Include Plugin Built-in Skills",
+                    "description": "When off, only `skills/` under working directory is used (exclude `plugin/skills/`)"
+                },
+                "maxCount": {
+                    "title": "Skills Injection Limit",
+                    "description": "Limit how many skills are injected into prompt (1-100)"
+                },
+                "editor": {
+                    "title": "Skills Editor",
+                    "description": "Override injected skill name/description for each skill",
+                    "count": "${count} skills",
+                    "selectPlaceholder": "Select a skill",
+                    "refresh": "Refresh Skills",
+                    "refreshing": "Refreshing...",
+                    "refreshed": "Skills refreshed (${count})",
+                    "refreshFailed": "Failed to refresh skills: ${error}",
+                    "empty": "No skills found. Check whether `skills/` exists in working directory.",
+                    "sourceLabel": "Source",
+                    "defaultDescriptionLabel": "Default Description",
+                    "nameLabel": "Display Name",
+                    "descriptionLabel": "Display Description",
+                    "namePlaceholder": "Override name (empty = default)",
+                    "descriptionPlaceholder": "Override description (empty = default)",
+                    "save": "Save",
+                    "reset": "Reset"
+                }
+            },
+            "promptTemplate": {
+                "title": "Codex Recommended Prompt",
+                "description": "Reset system prompt to the optimized Codex template",
+                "apply": "Apply Template",
+                "applied": "Codex recommended prompt template applied"
             },
             "modelOverride": {
                 "title": "Model override (Optional)",
@@ -251,6 +292,9 @@
             "copy": "Copy",
             "copyMessage": "Copy Message",
             "copyAsMarkdown": "Copy as Markdown",
+            "copyMarkdownDefault": "Copy (Markdown, default)",
+            "copyPlainText": "Copy (Plain Text)",
+            "copyRichText": "Copy (Rich Text)",
             "copyAllChat": "Copy All Chat",
             "copyImage": "Copy Image",
             "download": "Download",
@@ -267,6 +311,9 @@
             "settings": "Open Settings",
             "upload": "Upload File",
             "search": "Search and Add Document",
+            "addWebLink": "Add Web Link",
+            "openInTab": "Open in Tab",
+            "openInNewWindow": "Open in New Window",
             "send": "Send",
             "stop": "Stop",
             "scrollToBottom": "Scroll to Bottom",
@@ -282,6 +329,15 @@
             "viewDiff": "View Diff",
             "applied": "Applied",
             "rejected": "Rejected"
+        },
+        "webLink": {
+            "title": "Add Web Link",
+            "label": "Web links (one per line)",
+            "placeholder": "Enter one or more web links, one per line\nExample:\nhttps://example.com\nhttps://example.org/page",
+            "hintTitle": "Tip:",
+            "hintCors": "Due to browser security restrictions, some websites may not be directly accessible",
+            "fetch": "Fetch Web Content",
+            "fetching": "Fetching..."
         },
         "translate": {
             "title": "Translation",
@@ -532,10 +588,15 @@
         "add": "+ Add Platform",
         "cancel": "Cancel",
         "namePlaceholder": "e.g.: Claude API, Local LLM",
+        "nameInputPlaceholder": "Enter platform name",
         "nameRequired": "Please enter platform name",
         "management": "Platform Management",
+        "noAvailable": "No available platforms",
         "name": "Platform Name",
         "confirmAdd": "Confirm Add",
+        "visitWebsite": "Visit platform website",
+        "visitWebsiteLabel": "Visit platform",
+        "editName": "Edit name",
         "type": {
             "builtin": "Built-in",
             "custom": "Custom"
@@ -554,7 +615,13 @@
             "modelsUrlPlaceholder": "Leave empty to use default, e.g.: https://api.example.com/v1/models",
             "chatUrl": "Chat Endpoint URL",
             "chatUrlPlaceholder": "Leave empty to use default, e.g.: https://api.example.com/v1/chat/completions",
-            "hint": "Advanced settings allow complete customization of API endpoints, suitable for special API proxies or non-standard implementations"
+            "hint": "Advanced settings allow complete customization of API endpoints, suitable for special API proxies or non-standard implementations",
+            "formatJson": "Format JSON",
+            "jsonFormatted": "JSON formatted",
+            "customBodyPlaceholder": "Nested JSON is supported, for example:\n{\n  \"key\": \"value\",\n  \"nested\": { \"a\": 1 }\n}",
+            "jsonObjectRequired": "JSON object is required",
+            "jsonInvalid": "Invalid JSON",
+            "jsonInvalidAt": "Invalid JSON at character ${pos}"
         }
     },
     "common": {
@@ -574,7 +641,8 @@
         "configComplete": "Configuration loading completed",
         "expand": "Expand",
         "collapse": "Collapse",
-        "required": "Required"
+        "required": "Required",
+        "back": "Back"
     },
     "toolbar": {
         "aiChat": "AI Chat",
@@ -628,6 +696,7 @@
             "selected": "Selected",
             "parameters": "Parameters"
         },
+        "approvalWarning": "Please review parameters carefully and approve only when they are correct",
         "autoApprove": {
             "label": "Auto Approve",
             "tooltip": "When enabled, this tool call will not require manual confirmation",
@@ -705,6 +774,9 @@
         "loading": "Generating...",
         "error": "Generation failed",
         "thinking": "Thinking...",
+        "thinkingToggle": "Thinking Mode",
+        "thinkingLabel": "Thinking",
+        "decreaseSelectionHint": "Click to reduce selection count",
         "layout": {
             "card": "Card View",
             "tab": "Tab View"

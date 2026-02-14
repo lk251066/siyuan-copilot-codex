@@ -46,6 +46,7 @@
         getDefaultSiyuanMcpScriptPath,
     } from './codex/codex-runner';
     import { fetchCodexModels } from './codex/codex-models';
+    import { buildWorkspaceSkillsPrompt } from './codex/workspace-skills';
 
     export let plugin: any;
     export let initialMessage: string = ''; // 初始消息
@@ -4210,8 +4211,16 @@
 
         const promptParts: string[] = [];
 
-        const effectiveSystemPrompt =
+        const baseSystemPrompt =
             (tempModelSettings.systemPrompt || '').trim() || String(settings.aiSystemPrompt || '').trim();
+        const skillsPrompt = buildWorkspaceSkillsPrompt(workingDir, {
+            maxSkills: 100,
+            skillOverrides:
+                settings.codexSkillOverrides && typeof settings.codexSkillOverrides === 'object'
+                    ? settings.codexSkillOverrides
+                    : {},
+        });
+        const effectiveSystemPrompt = [baseSystemPrompt, skillsPrompt].filter(Boolean).join('\n\n');
         if (effectiveSystemPrompt) {
             promptParts.push(`# System\n${effectiveSystemPrompt}`);
         }
@@ -4620,6 +4629,46 @@
                     scheduleScroll();
                 };
 
+                const appendSubAgentTrace = (
+                    text: string,
+                    status: CodexTraceCall['status'],
+                    payload: any,
+                    eventType: string,
+                    itemType: string
+                ) => {
+                    const raw = String(text ?? '');
+                    if (!raw.trim() && status !== 'completed') return;
+                    const subAgentId = firstNonEmptyString(
+                        payload?.agent_id,
+                        payload?.agentId,
+                        payload?.subagent_id,
+                        payload?.subagentId,
+                        payload?.delegate_id,
+                        payload?.delegateId
+                    );
+                    const subAgentName = firstNonEmptyString(
+                        payload?.agent_name,
+                        payload?.agentName,
+                        payload?.subagent_name,
+                        payload?.subagentName,
+                        payload?.delegate_name,
+                        payload?.delegateName,
+                        subAgentId
+                    );
+                    const callId =
+                        extractToolCallIdFromUnknown(payload) || (subAgentId ? `sub-agent:${subAgentId}` : '');
+                    appendTraceFromToolEvent({
+                        phase: status === 'completed' ? 'completed' : 'started',
+                        toolName: subAgentName ? `sub-agent: ${subAgentName}` : 'sub-agent',
+                        itemType,
+                        eventType,
+                        callId,
+                        argsRaw: subAgentId ? { agentId: subAgentId } : undefined,
+                        outputRaw: raw || undefined,
+                        status,
+                    });
+                };
+
                 // Codex --json output is primarily item-based.
                 const item = (event as any)?.item;
                 if (
@@ -4637,7 +4686,21 @@
                     // Non-thinking items start a new chronological phase.
                     finishActiveThinkingSegment();
 
-                    if (itemTypeLower === 'agent_message' || itemTypeLower === 'assistant_message') {
+                    if (
+                        itemTypeLower.includes('agent_message') &&
+                        !itemTypeLower.includes('assistant')
+                    ) {
+                        appendSubAgentTrace(
+                            itemText,
+                            type === 'item.completed' ? 'completed' : 'running',
+                            item,
+                            type,
+                            itemType
+                        );
+                        return;
+                    }
+
+                    if (itemTypeLower === 'assistant_message') {
                         appendAssistant(itemText);
                         return;
                     }
@@ -4743,6 +4806,11 @@
 
                     // Fallback: if item has text, prefer showing it as assistant content.
                     if (itemText) {
+                        const itemRole = String(item?.role || item?.author || '').toLowerCase();
+                        if (itemRole.includes('agent') && !itemRole.includes('assistant')) {
+                            appendSubAgentTrace(itemText, 'running', item, type, itemType);
+                            return;
+                        }
                         appendAssistant(itemText);
                         return;
                     }
@@ -4824,6 +4892,20 @@
                     return;
                 }
 
+                const isSubAgentEvent =
+                    !typeLower.includes('assistant_message') &&
+                    (typeLower.includes('agent_message') ||
+                        typeLower.includes('subagent') ||
+                        typeLower.includes('sub_agent'));
+                if (isSubAgentEvent) {
+                    const status: CodexTraceCall['status'] =
+                        typeLower.includes('completed') || typeLower.includes('done')
+                            ? 'completed'
+                            : 'running';
+                    appendSubAgentTrace(delta, status, event, type, type);
+                    return;
+                }
+
                 // Default: treat as assistant output
                 appendAssistant(delta);
             },
@@ -4872,15 +4954,29 @@
         finishActiveThinkingSegment();
         markThinkingTimelineCompleted();
 
-        const convertedText = convertLatexToMarkdown(streamingMessage);
+        const resolveSubAgentFallbackText = (): string => {
+            const traces = [...streamingCodexTimeline, ...streamingToolCalls];
+            for (let i = traces.length - 1; i >= 0; i -= 1) {
+                const trace = traces[i];
+                if (trace?.kind !== 'tool') continue;
+                if (!/sub-agent/i.test(String(trace?.name || ''))) continue;
+                const output = stringifyCodexTraceValue(trace?.output);
+                if (output.trim()) return output;
+            }
+            return '';
+        };
 
-        if (!convertedText.trim() && stderrLines.length > 0) {
+        const primaryText = String(streamingMessage || '').trim();
+        const fallbackSubAgentText = primaryText ? '' : resolveSubAgentFallbackText();
+        const finalText = convertLatexToMarkdown(primaryText || fallbackSubAgentText);
+
+        if (!finalText.trim() && stderrLines.length > 0) {
             throw new Error(stderrLines.slice(-10).join('\n'));
         }
 
         const assistantMessage: Message = {
             role: 'assistant',
-            content: convertedText || '(no output)',
+            content: finalText || '(no output)',
         };
 
         if (streamingThinking) assistantMessage.thinking = streamingThinking;
@@ -11013,7 +11109,7 @@
                     class="b3-button b3-button--text"
                     bind:this={openWindowMenuButton}
                     on:click={toggleOpenWindowMenu}
-                    title="在新窗口打开"
+                    title={t('aiSidebar.actions.openInNewWindow')}
                 >
                     <svg class="b3-button__icon"><use xlink:href="#iconOpenWindow"></use></svg>
                 </button>
@@ -11023,13 +11119,15 @@
                             <svg class="b3-menu__icon">
                                 <use xlink:href="#iconOpenWindow"></use>
                             </svg>
-                            <span class="b3-menu__label">在页签打开</span>
+                            <span class="b3-menu__label">{t('aiSidebar.actions.openInTab')}</span>
                         </button>
                         <button class="b3-menu__item" on:click={openInNewWindow}>
                             <svg class="b3-menu__icon">
                                 <use xlink:href="#iconOpenWindow"></use>
                             </svg>
-                            <span class="b3-menu__label">在新窗口打开</span>
+                            <span class="b3-menu__label">
+                                {t('aiSidebar.actions.openInNewWindow')}
+                            </span>
                         </button>
                     </div>
                 {/if}
@@ -11037,7 +11135,7 @@
             <button
                 class="b3-button b3-button--text"
                 on:click={toggleFullscreen}
-                title={isFullscreen ? '退出全屏' : '全屏查看'}
+                title={isFullscreen ? t('fullscreen.exit') : t('fullscreen.title')}
             >
                 <svg class="b3-button__icon">
                     <use
@@ -13271,25 +13369,6 @@
                         ? t('aiSidebar.codex.refreshModelsLoading') || 'Refreshing...'
                         : t('aiSidebar.codex.refreshModels') || 'Refresh'}
                 </button>
-                <button
-                    class="b3-button b3-button--text ai-sidebar__codex-toolcheck-btn"
-                    on:click={runCodexToolSelfCheck}
-                    disabled={isCheckingCodexTools}
-                    title={t('aiSidebar.codex.toolCheck') || '工具自检'}
-                >
-                    {#if isCheckingCodexTools}
-                        {t('aiSidebar.codex.toolCheckRunning') || '自检中...'}
-                    {:else}
-                        {t('aiSidebar.codex.toolCheck') || '自检'}
-                    {/if}
-                </button>
-                <button
-                    class="b3-button b3-button--text ai-sidebar__codex-settings-btn"
-                    on:click={openSettings}
-                    title={t('aiSidebar.actions.settings')}
-                >
-                    <svg class="b3-button__icon"><use xlink:href="#iconSettings"></use></svg>
-                </button>
                 {#if codexNativeContextPercent !== null}
                     <span
                         class="ai-sidebar__codex-context-usage"
@@ -13376,7 +13455,7 @@
                 class="b3-button b3-button--text ai-sidebar__weblink-btn"
                 on:click={openWebLinkDialog}
                 disabled={isFetchingWebContent || isLoading}
-                title="添加网页链接"
+                title={t('aiSidebar.actions.addWebLink')}
             >
                 {#if isFetchingWebContent}
                     <svg class="b3-button__icon ai-sidebar__loading-icon">
@@ -13399,6 +13478,26 @@
             >
                 <svg class="b3-button__icon"><use xlink:href="#iconSearch"></use></svg>
             </button>
+            <button
+                class="b3-button b3-button--text ai-sidebar__codex-toolcheck-btn ai-sidebar__bottom-action-btn"
+                on:click={runCodexToolSelfCheck}
+                disabled={isCheckingCodexTools || isLoading}
+                title={t('aiSidebar.codex.toolCheck') || '工具自检'}
+            >
+                {#if isCheckingCodexTools}
+                    {t('aiSidebar.codex.toolCheckRunning') || '自检中...'}
+                {:else}
+                    {t('aiSidebar.codex.toolCheck') || '自检'}
+                {/if}
+            </button>
+            <button
+                class="b3-button b3-button--text ai-sidebar__codex-settings-btn ai-sidebar__bottom-action-btn"
+                on:click={openSettings}
+                disabled={isLoading}
+                title={t('aiSidebar.actions.settings')}
+            >
+                <svg class="b3-button__icon"><use xlink:href="#iconSettings"></use></svg>
+            </button>
         </div>
     </div>
 
@@ -13408,7 +13507,7 @@
             <div class="ai-sidebar__prompt-dialog-overlay" on:click={closeWebLinkDialog}></div>
             <div class="ai-sidebar__prompt-dialog-content">
                 <div class="ai-sidebar__prompt-dialog-header">
-                    <h4>添加网页链接</h4>
+                    <h4>{t('aiSidebar.webLink.title')}</h4>
                     <button class="b3-button b3-button--text" on:click={closeWebLinkDialog}>
                         <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
                     </button>
@@ -13416,10 +13515,12 @@
                 <div class="ai-sidebar__prompt-dialog-body">
                     <div class="ai-sidebar__prompt-form">
                         <div class="ai-sidebar__prompt-form-field">
-                            <div class="ai-sidebar__prompt-form-label">网页链接（每行一个）</div>
+                            <div class="ai-sidebar__prompt-form-label">
+                                {t('aiSidebar.webLink.label')}
+                            </div>
                             <textarea
                                 bind:value={webLinkInput}
-                                placeholder="输入一个或多个网页链接，每行一个&#10;示例：&#10;https://example.com&#10;https://example.org/page"
+                                placeholder={t('aiSidebar.webLink.placeholder')}
                                 class="b3-text-field ai-sidebar__prompt-textarea"
                                 rows="10"
                                 disabled={isFetchingWebContent}
@@ -13427,9 +13528,9 @@
                             <div
                                 style="margin-top: 8px; font-size: 12px; color: var(--b3-theme-on-surface-light);"
                             >
-                                💡 提示：
+                                💡 {t('aiSidebar.webLink.hintTitle')}
                                 <ul style="margin: 4px 0; padding-left: 20px;">
-                                    <li>由于浏览器安全限制，某些网站可能无法直接访问</li>
+                                    <li>{t('aiSidebar.webLink.hintCors')}</li>
                                 </ul>
                             </div>
                         </div>
@@ -13439,14 +13540,16 @@
                                 on:click={closeWebLinkDialog}
                                 disabled={isFetchingWebContent}
                             >
-                                取消
+                                {t('common.cancel')}
                             </button>
                             <button
                                 class="b3-button b3-button--primary"
                                 on:click={fetchWebPages}
                                 disabled={isFetchingWebContent || !webLinkInput.trim()}
                             >
-                                {isFetchingWebContent ? '获取中...' : '获取网页内容'}
+                                {isFetchingWebContent
+                                    ? t('aiSidebar.webLink.fetching')
+                                    : t('aiSidebar.webLink.fetch')}
                             </button>
                         </div>
                     </div>
@@ -13702,21 +13805,21 @@
                         on:click={() => handleContextMenuAction('copy_md')}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        <span>复制（Markdown，默认）</span>
+                        <span>{t('aiSidebar.actions.copyMarkdownDefault')}</span>
                     </button>
                     <button
                         class="ai-sidebar__context-menu-item"
                         on:click={() => handleContextMenuAction('copy_plain')}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        <span>复制（纯文本）</span>
+                        <span>{t('aiSidebar.actions.copyPlainText')}</span>
                     </button>
                     <button
                         class="ai-sidebar__context-menu-item"
                         on:click={() => handleContextMenuAction('copy_html')}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        <span>复制（富文本）</span>
+                        <span>{t('aiSidebar.actions.copyRichText')}</span>
                     </button>
                 {:else}
                     <button
@@ -13724,21 +13827,21 @@
                         on:click={() => handleContextMenuAction('copy_md')}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        <span>复制（Markdown，默认）</span>
+                        <span>{t('aiSidebar.actions.copyMarkdownDefault')}</span>
                     </button>
                     <button
                         class="ai-sidebar__context-menu-item"
                         on:click={() => handleContextMenuAction('copy_plain')}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        <span>复制（纯文本）</span>
+                        <span>{t('aiSidebar.actions.copyPlainText')}</span>
                     </button>
                     <button
                         class="ai-sidebar__context-menu-item"
                         on:click={() => handleContextMenuAction('copy_html')}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        <span>复制（富文本）</span>
+                        <span>{t('aiSidebar.actions.copyRichText')}</span>
                     </button>
                 {/if}
             {:else}
@@ -13748,21 +13851,21 @@
                         on:click={() => handleContextMenuAction('copy_md')}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        <span>复制（Markdown，默认）</span>
+                        <span>{t('aiSidebar.actions.copyMarkdownDefault')}</span>
                     </button>
                     <button
                         class="ai-sidebar__context-menu-item"
                         on:click={() => handleContextMenuAction('copy_plain')}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        <span>复制（纯文本）</span>
+                        <span>{t('aiSidebar.actions.copyPlainText')}</span>
                     </button>
                     <button
                         class="ai-sidebar__context-menu-item"
                         on:click={() => handleContextMenuAction('copy_html')}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconCopy"></use></svg>
-                        <span>复制（富文本）</span>
+                        <span>{t('aiSidebar.actions.copyRichText')}</span>
                     </button>
                 {:else}
                     <button
@@ -13839,7 +13942,7 @@
 
                 <div class="tool-approval-dialog__warning">
                     <svg class="b3-button__icon"><use xlink:href="#iconInfo"></use></svg>
-                    <span>请仔细检查参数，确认无误后再批准执行</span>
+                    <span>{t('tools.approvalWarning')}</span>
                 </div>
             </div>
 
@@ -14968,8 +15071,8 @@
     .ai-sidebar__input-container {
         display: flex;
         flex-direction: column;
-        gap: 4px;
-        padding: 8px 12px;
+        gap: 3px;
+        padding: 6px 10px;
         border-top: 1px solid var(--b3-border-color);
         background: var(--b3-theme-background);
         flex-shrink: 0;
@@ -14980,8 +15083,8 @@
     .ai-sidebar__mode-selector {
         display: flex;
         align-items: center;
-        gap: 6px;
-        padding: 2px 0;
+        gap: 4px;
+        padding: 1px 0;
         flex-wrap: nowrap;
         overflow-x: auto;
         overflow-y: hidden;
@@ -14989,7 +15092,7 @@
     }
 
     .ai-sidebar__mode-label {
-        font-size: 12px;
+        font-size: 11px;
         color: var(--b3-theme-on-surface);
         font-weight: 500;
         flex-shrink: 0;
@@ -14998,10 +15101,12 @@
 
     .ai-sidebar__mode-select {
         flex: 0 0 auto;
-        min-width: 96px;
-        height: 24px;
-        font-size: 12px;
-        padding: 1px 6px;
+        width: 86px;
+        min-width: 86px;
+        height: 22px;
+        font-size: 11px;
+        padding: 0 20px 0 6px;
+        border-radius: 6px;
     }
 
     .ai-sidebar__auto-approve-label {
@@ -15022,7 +15127,7 @@
         margin-left: auto;
         display: flex;
         align-items: center;
-        gap: 4px;
+        gap: 3px;
         flex-wrap: nowrap;
         justify-content: flex-end;
         flex-shrink: 0;
@@ -15036,9 +15141,9 @@
     }
 
     .ai-sidebar__codex-context-usage {
-        font-size: 11px;
+        font-size: 10px;
         color: var(--b3-theme-on-surface-light);
-        padding: 0 4px;
+        padding: 0 3px;
         border-radius: 6px;
         border: 1px solid var(--b3-border-color);
         background: var(--b3-theme-surface);
@@ -15048,8 +15153,8 @@
     .ai-sidebar__codex-field {
         display: flex;
         align-items: center;
-        gap: 3px;
-        font-size: 11px;
+        gap: 2px;
+        font-size: 10px;
         color: var(--b3-theme-on-surface);
         min-width: 0;
 
@@ -15059,25 +15164,27 @@
     }
 
     .ai-sidebar__codex-input {
-        width: 112px;
-        height: 24px;
+        width: 90px;
+        height: 22px;
         font-size: 11px;
-        padding: 1px 6px;
+        padding: 0 20px 0 6px;
+        border-radius: 6px;
     }
 
     .ai-sidebar__codex-toolcheck-btn {
-        height: 24px;
-        padding: 0 6px;
-        font-size: 11px;
+        height: 22px;
+        padding: 0 5px;
+        font-size: 10px;
         white-space: nowrap;
+        border-radius: 6px;
     }
 
     .ai-sidebar__codex-settings-btn {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 24px;
-        height: 24px;
+        width: 22px;
+        height: 22px;
         padding: 0;
         border-radius: 5px;
     }
@@ -15170,15 +15277,30 @@
     .ai-sidebar__bottom-row {
         display: flex;
         align-items: center;
-        gap: 6px;
-        margin-top: 2px;
-        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 4px;
+        margin-top: 3px;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: thin;
     }
 
     .ai-sidebar__upload-btn,
     .ai-sidebar__weblink-btn,
-    .ai-sidebar__search-btn {
+    .ai-sidebar__search-btn,
+    .ai-sidebar__bottom-action-btn {
         flex-shrink: 0;
+        height: 24px;
+        min-height: 24px;
+        border-radius: 6px;
+        padding: 0 6px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .ai-sidebar__bottom-action-btn {
+        font-size: 11px;
     }
 
     .ai-sidebar__model-selector-wrapper {
@@ -16996,7 +17118,7 @@
         }
 
         .ai-sidebar__codex-toolcheck-btn {
-            width: 100%;
+            width: auto;
             justify-content: center;
         }
 

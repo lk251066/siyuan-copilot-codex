@@ -35,6 +35,18 @@ export interface CustomProviderConfig extends ProviderConfig {
     name: string;
 }
 
+export const DEFAULT_CODEX_SYSTEM_PROMPT = `You are Codex running inside SiYuan.
+
+Priorities:
+1. Follow AGENTS.md in current codex working directory first.
+2. Prefer minimal, verifiable changes over broad rewrites.
+3. For note edits, prefer block-level updates and read-back verification.
+4. Keep reproducible context: sources, commands, key paths, and validation output.
+
+Output requirements:
+- Every round includes progress percentage and remaining work estimate.
+- Key changes must include minimal regression checks and executable verification results.`;
+
 export const getDefaultSettings = () => ({
     textinput: t('settings.textinput.value'),
     slider: 0.5,
@@ -74,7 +86,7 @@ export const getDefaultSettings = () => ({
     selectedProviderId: 'openai' as string,  // 设置面板中选中的平台
     currentProvider: 'openai' as string,      // 对话中当前使用的平台
     currentModelId: '' as string,
-    aiSystemPrompt: 'You are a helpful AI assistant.',
+    aiSystemPrompt: DEFAULT_CODEX_SYSTEM_PROMPT,
 
     // 操作设置
     sendMessageShortcut: 'ctrl+enter' as 'ctrl+enter' | 'enter', // 发送消息的快捷键
@@ -125,6 +137,13 @@ export const getDefaultSettings = () => ({
     codexChatMode: 'ask' as 'ask' | 'agent',
     codexModelOverride: '' as string,
     codexReasoningEffort: '' as '' | 'low' | 'medium' | 'high' | 'xhigh',
+    codexSkillOverrides: {} as Record<
+        string,
+        {
+            name?: string;
+            description?: string;
+        }
+    >,
     codexRunMode: 'read_only' as 'read_only' | 'workspace_write' | 'fully_open',
     // Siyuan API（用于 codex 注入的 siyuan-mcp 工具）
     siyuanApiUrl: 'http://127.0.0.1:6806' as string,

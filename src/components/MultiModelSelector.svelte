@@ -721,7 +721,8 @@
                                         {#if getModelCapabilities(model.provider, model.modelId)?.thinking}
                                             <label
                                                 class="multi-model-selector__thinking-toggle"
-                                                title="思考模式"
+                                                title={t('multiModel.thinkingToggle') ||
+                                                    t('thinking.effort.title')}
                                             >
                                                 <input
                                                     type="checkbox"
@@ -731,7 +732,8 @@
                                                         toggleModelInstanceThinking(index)}
                                                 />
                                                 <span class="multi-model-selector__thinking-label">
-                                                    思考
+                                                    {t('multiModel.thinkingLabel') ||
+                                                        t('models.thinking')}
                                                 </span>
                                             </label>
                                             {#if model.thinkingEnabled}
@@ -741,15 +743,23 @@
                                                     on:change={e =>
                                                         handleThinkingEffortChange(index, e)}
                                                     on:click|stopPropagation
-                                                    title="思考程度"
+                                                    title={t('thinking.effort.title')}
                                                 >
-                                                    <option value="low">低</option>
+                                                    <option value="low">
+                                                        {t('thinking.effort.low')}
+                                                    </option>
                                                     {#if !isGemini3Model(model.modelId)}
-                                                        <option value="medium">中</option>
+                                                        <option value="medium">
+                                                            {t('thinking.effort.medium')}
+                                                        </option>
                                                     {/if}
-                                                    <option value="high">高</option>
+                                                    <option value="high">
+                                                        {t('thinking.effort.high')}
+                                                    </option>
                                                     {#if !isGemini3Model(model.modelId)}
-                                                        <option value="auto">自动</option>
+                                                        <option value="auto">
+                                                            {t('thinking.effort.auto')}
+                                                        </option>
                                                     {/if}
                                                 </select>
                                             {/if}
@@ -867,7 +877,9 @@
                                                         class="multi-model-selector__model-count-badge"
                                                         role="button"
                                                         tabindex="0"
-                                                        title="点击减少选择次数"
+                                                        title={t(
+                                                            'multiModel.decreaseSelectionHint'
+                                                        )}
                                                         on:click={e =>
                                                             decreaseModelSelection(
                                                                 provider.id,

@@ -25,6 +25,8 @@
                 "description": "Windows 通常为 `C:\\\\Users\\\\<你>\\\\AppData\\\\Roaming\\\\npm\\\\codex.cmd`；留空则尝试使用 PATH 中的 `codex`"
             },
             "detectCliPath": "自动探测",
+            "notFoundInPath": "未找到 codex，请确认已安装并在 PATH 中可用",
+            "detectCliFailed": "自动探测失败，请手动填写 codex 路径",
             "workingDir": {
                 "title": "工作目录（--cd）",
                 "description": "Codex 的工作根目录（`-C/--cd`）。建议指向你的思源 workspace 目录"
@@ -42,6 +44,45 @@
                     "fullyOpen": "完全放开（危险）"
                 },
                 "fullyOpenWarning": "完全放开模式会跳过审批与沙箱，风险极高（可能误改/泄露/执行本机命令）。请仅在你明确理解风险且环境可控时启用。"
+            },
+            "skills": {
+                "enabled": {
+                    "title": "启用 Skills 注入",
+                    "description": "将扫描到的 skills 列表注入到 Codex 系统提示词"
+                },
+                "includePlugin": {
+                    "title": "包含插件内置 Skills",
+                    "description": "关闭后仅使用工作目录 `skills/`，不包含 `plugin/skills/`"
+                },
+                "maxCount": {
+                    "title": "Skills 注入上限",
+                    "description": "限制注入提示词的 skills 数量（1-100）"
+                },
+                "editor": {
+                    "title": "Skills 编辑",
+                    "description": "按技能逐条覆盖注入提示词中的名称与说明",
+                    "count": "共 ${count} 个技能",
+                    "selectPlaceholder": "请选择 Skill",
+                    "refresh": "刷新技能",
+                    "refreshing": "刷新中...",
+                    "refreshed": "Skills 已刷新（${count}）",
+                    "refreshFailed": "Skills 刷新失败：${error}",
+                    "empty": "未读取到技能，请检查工作目录下是否存在 skills/",
+                    "sourceLabel": "来源",
+                    "defaultDescriptionLabel": "默认说明",
+                    "nameLabel": "显示名称",
+                    "descriptionLabel": "显示说明",
+                    "namePlaceholder": "覆盖名称（留空使用默认）",
+                    "descriptionPlaceholder": "覆盖说明（留空使用默认）",
+                    "save": "保存",
+                    "reset": "恢复默认"
+                }
+            },
+            "promptTemplate": {
+                "title": "Codex 推荐提示词",
+                "description": "将系统提示词重置为当前 Codex 优化模板",
+                "apply": "应用模板",
+                "applied": "已应用 Codex 推荐提示词模板"
             },
             "modelOverride": {
                 "title": "模型覆盖（可选）",
@@ -157,6 +198,7 @@
             "title": "重置设置",
             "description": "重置所有设置为默认值",
             "label": "重置",
+            "confirm": "确定要将所有设置重置为默认值吗？",
             "confirmMessage": "确定要将所有设置重置为默认值吗？此操作无法撤销。",
             "message": "已重置所有设置为默认值"
         },
@@ -250,6 +292,9 @@
             "copy": "复制",
             "copyMessage": "复制消息",
             "copyAsMarkdown": "复制为 Markdown",
+            "copyMarkdownDefault": "复制（Markdown，默认）",
+            "copyPlainText": "复制（纯文本）",
+            "copyRichText": "复制（富文本）",
             "copyAllChat": "复制全部对话",
             "copyImage": "复制图片",
             "download": "下载",
@@ -266,6 +311,9 @@
             "settings": "打开设置",
             "upload": "上传文件",
             "search": "搜索并添加文档",
+            "addWebLink": "添加网页链接",
+            "openInTab": "在页签打开",
+            "openInNewWindow": "在新窗口打开",
             "send": "发送",
             "stop": "停止",
             "scrollToBottom": "回到底部",
@@ -281,6 +329,15 @@
             "viewDiff": "查看差异",
             "applied": "已应用",
             "rejected": "已拒绝"
+        },
+        "webLink": {
+            "title": "添加网页链接",
+            "label": "网页链接（每行一个）",
+            "placeholder": "输入一个或多个网页链接，每行一个\n示例：\nhttps://example.com\nhttps://example.org/page",
+            "hintTitle": "提示：",
+            "hintCors": "由于浏览器安全限制，某些网站可能无法直接访问",
+            "fetch": "获取网页内容",
+            "fetching": "获取中..."
         },
         "translate": {
             "title": "翻译",
@@ -522,7 +579,8 @@
             "deepseek": "DeepSeek",
             "moonshot": "月之暗面 (Kimi)",
             "openai": "OpenAI",
-            "volcano": "火山引擎"
+            "volcano": "火山引擎",
+            "v3Description": "为 OpenAI ChatGPT、Gemini、Claude、DeepSeek、Grok 等提供稳定可靠的 API 直连中转服务"
         },
         "select": "请选择平台",
         "selectHint": "请选择一个平台以查看或编辑其配置",
@@ -530,10 +588,15 @@
         "add": "+ 添加平台",
         "cancel": "取消",
         "namePlaceholder": "例如: Claude API, 本地LLM",
+        "nameInputPlaceholder": "输入平台名称",
         "nameRequired": "请输入平台名称",
         "management": "平台管理",
+        "noAvailable": "暂无可用平台",
         "name": "平台名称",
         "confirmAdd": "确认添加",
+        "visitWebsite": "访问平台官网",
+        "visitWebsiteLabel": "访问平台",
+        "editName": "编辑名称",
         "type": {
             "builtin": "内置",
             "custom": "自定义"
@@ -552,7 +615,13 @@
             "modelsUrlPlaceholder": "留空使用默认接口，例如: https://api.example.com/v1/models",
             "chatUrl": "对话接口 URL",
             "chatUrlPlaceholder": "留空使用默认接口，例如: https://api.example.com/v1/chat/completions",
-            "hint": "高级设置允许完全自定义 API 端点，适用于特殊的 API 代理或非标准实现"
+            "hint": "高级设置允许完全自定义 API 端点，适用于特殊的 API 代理或非标准实现",
+            "formatJson": "格式化 JSON",
+            "jsonFormatted": "JSON 已格式化",
+            "customBodyPlaceholder": "支持嵌套 JSON，例如：\n{\n  \"key\": \"value\",\n  \"nested\": { \"a\": 1 }\n}",
+            "jsonObjectRequired": "必须是 JSON 对象格式",
+            "jsonInvalid": "JSON 格式错误",
+            "jsonInvalidAt": "JSON 格式错误：第 ${pos} 个字符处"
         }
     },
     "common": {
@@ -627,6 +696,7 @@
             "selected": "已选择",
             "parameters": "参数"
         },
+        "approvalWarning": "请仔细检查参数，确认无误后再批准执行",
         "autoApprove": {
             "label": "自动批准",
             "tooltip": "启用后，此工具调用不需要手动确认",
@@ -704,6 +774,9 @@
         "loading": "正在生成...",
         "error": "生成失败",
         "thinking": "思考中...",
+        "thinkingToggle": "思考模式",
+        "thinkingLabel": "思考",
+        "decreaseSelectionHint": "点击减少选择次数",
         "layout": {
             "card": "卡片视图",
             "tab": "页签视图"

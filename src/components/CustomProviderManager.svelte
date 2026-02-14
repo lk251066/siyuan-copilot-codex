@@ -2,6 +2,7 @@
     import { createEventDispatcher } from 'svelte';
     import { pushMsg, pushErrMsg } from '../api';
     import type { CustomProviderConfig } from '../defaultSettings';
+    import { t } from '../utils/i18n';
 
     export let customProviders: CustomProviderConfig[];
 
@@ -30,7 +31,7 @@
 
         customProviders = [...customProviders, newProvider];
         dispatch('change');
-        pushMsg(`已添加自定义平台: ${newProviderName}`);
+        pushMsg(`${t('aiSidebar.success.addPromptSuccess')}: ${newProviderName}`);
 
         newProviderName = '';
         showAddForm = false;
@@ -41,7 +42,7 @@
         if (provider) {
             customProviders = customProviders.filter(p => p.id !== id);
             dispatch('change');
-            pushMsg(`已删除平台: ${provider.name}`);
+            pushMsg(`${t('aiSidebar.success.deletePromptSuccess')}: ${provider.name}`);
         }
     }
 
@@ -57,21 +58,21 @@
 
 <div class="custom-provider-manager">
     <div class="manager-header">
-        <h5>自定义平台</h5>
+        <h5>{t('platform.management')}</h5>
         <button class="b3-button b3-button--outline" on:click={() => (showAddForm = !showAddForm)}>
-            {showAddForm ? '取消' : '+ 添加平台'}
+            {showAddForm ? t('platform.cancel') : t('platform.add')}
         </button>
     </div>
 
     {#if showAddForm}
         <div class="add-form">
             <div class="b3-label">
-                <div class="b3-label__text">平台名称</div>
+                <div class="b3-label__text">{t('platform.name')}</div>
                 <input
                     class="b3-text-field fn__flex-1"
                     type="text"
                     bind:value={newProviderName}
-                    placeholder="例如: Claude API, 本地LLM"
+                    placeholder={t('platform.namePlaceholder')}
                     on:keydown={e => e.key === 'Enter' && addCustomProvider()}
                 />
             </div>
@@ -80,7 +81,7 @@
                 on:click={addCustomProvider}
                 disabled={!newProviderName.trim()}
             >
-                确认添加
+                {t('platform.confirmAdd')}
             </button>
         </div>
     {/if}
@@ -97,14 +98,14 @@
                 <button
                     class="b3-button b3-button--text b3-button--error"
                     on:click={() => removeCustomProvider(provider.id)}
-                    title="删除平台"
+                    title={t('dialogs.confirm.deletePlatform.title')}
                 >
                     <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
                 </button>
             </div>
         {/each}
         {#if customProviders.length === 0}
-            <div class="empty-hint">暂无自定义平台</div>
+            <div class="empty-hint">{t('platform.noAvailable')}</div>
         {/if}
     </div>
 </div>

@@ -1,0 +1,5 @@
+interface:
+  display_name: "SiYuan 块级安全编辑"
+  short_description: "最小改动 + 回读验证 + 回滚"
+  default_prompt: "使用 $siyuan-block-edit-safe 修改笔记并给出回读验证与回滚信息。"
+

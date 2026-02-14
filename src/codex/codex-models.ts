@@ -127,11 +127,6 @@ function resolveCodexConfigCandidates(options: FetchCodexModelsOptions = {}): st
         candidates.push(explicitPath);
     }
 
-    const workingDir = String(options.workingDir || '').trim();
-    if (workingDir) {
-        candidates.push(path.join(workingDir, '.codex', 'config.toml'));
-    }
-
     const codexHome = String(procEnv.CODEX_HOME || '').trim();
     if (codexHome) {
         candidates.push(path.join(codexHome, 'config.toml'));

@@ -46,20 +46,28 @@
             const parsed = JSON.parse(str);
             // 确保是对象类型
             if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-                return { valid: false, error: '必须是 JSON 对象格式' };
+                return { valid: false, error: t('platform.advancedConfig.jsonObjectRequired') };
             }
             // 返回格式化的 JSON（保持嵌套结构）
             return { valid: true, formatted: JSON.stringify(parsed, null, 2) };
         } catch (e: any) {
             // 提取更友好的错误信息
-            const message = e.message || '无效的 JSON 格式';
+            const message = e.message || t('platform.advancedConfig.jsonInvalid');
             // 尝试提取位置信息
             const posMatch = message.match(/position\s+(\d+)/i);
             if (posMatch) {
                 const pos = parseInt(posMatch[1]);
-                return { valid: false, error: `JSON 格式错误：第 ${pos} 个字符处` };
+                return {
+                    valid: false,
+                    error:
+                        t('platform.advancedConfig.jsonInvalidAt', { pos: String(pos) }) ||
+                        `${t('platform.advancedConfig.jsonInvalidAt')}${pos}`,
+                };
             }
-            return { valid: false, error: `JSON 格式错误：${message}` };
+            return {
+                valid: false,
+                error: `${t('platform.advancedConfig.jsonInvalid')}: ${message}`,
+            };
         }
     }
 
@@ -78,7 +86,7 @@
             updateModel(modelId, 'customBody', result.formatted);
             customBodyErrors[modelId] = null;
             customBodyErrors = { ...customBodyErrors };
-            pushMsg('JSON 已格式化');
+            pushMsg(t('platform.advancedConfig.jsonFormatted'));
         }
     }
 
@@ -348,14 +356,22 @@
                         if (e.key === 'Enter') saveName();
                         if (e.key === 'Escape') cancelEditName();
                     }}
-                    placeholder="输入平台名称"
+                    placeholder={t('platform.nameInputPlaceholder')}
                 />
-                <button class="b3-button b3-button--text" on:click={saveName} title="保存">
+                <button
+                    class="b3-button b3-button--text"
+                    on:click={saveName}
+                    title={t('common.save')}
+                >
                     <svg class="b3-button__icon">
                         <use xlink:href="#iconCheck"></use>
                     </svg>
                 </button>
-                <button class="b3-button b3-button--text" on:click={cancelEditName} title="取消">
+                <button
+                    class="b3-button b3-button--text"
+                    on:click={cancelEditName}
+                    title={t('common.cancel')}
+                >
                     <svg class="b3-button__icon">
                         <use xlink:href="#iconClose"></use>
                     </svg>
@@ -371,12 +387,12 @@
                             target="_blank"
                             rel="noopener noreferrer"
                             class="platform-link"
-                            title="访问平台官网"
+                            title={t('platform.visitWebsite')}
                         >
                             <svg class="b3-button__icon">
                                 <use xlink:href="#iconLink"></use>
                             </svg>
-                            <span>访问平台</span>
+                            <span>{t('platform.visitWebsiteLabel')}</span>
                         </a>
                     {/if}
                 </div>
@@ -385,7 +401,7 @@
                 <button
                     class="b3-button b3-button--text edit-name-button"
                     on:click={startEditName}
-                    title="编辑名称"
+                    title={t('platform.editName')}
                 >
                     <svg class="b3-button__icon">
                         <use xlink:href="#iconEdit"></use>
@@ -592,7 +608,7 @@
                         <button
                             class="b3-button b3-button--text b3-button--error"
                             on:click={() => removeModel(model.id)}
-                            title="删除"
+                            title={t('common.delete')}
                         >
                             <svg class="b3-button__icon">
                                 <use xlink:href="#iconTrashcan"></use>
@@ -744,7 +760,7 @@
                                         {#if model.customBody && validateJsonString(model.customBody).valid}
                                             <button
                                                 class="format-json-btn"
-                                                title="格式化 JSON"
+                                                title={t('platform.advancedConfig.formatJson')}
                                                 on:click={() =>
                                                     formatCustomBodyJson(
                                                         model.id,
@@ -768,7 +784,9 @@
                                             validateJsonString(model.customBody).valid}
                                         style="width: 100%; height: 80px; resize: vertical; font-family: monospace; font-size: 12px;"
                                         value={model.customBody || ''}
-                                        placeholder={'支持嵌套 JSON，例如：\n{\n  "key": "value",\n  "nested": { "a": 1 }\n}'}
+                                        placeholder={t(
+                                            'platform.advancedConfig.customBodyPlaceholder'
+                                        )}
                                         spellcheck={false}
                                         on:input={e =>
                                             handleCustomBodyChange(model.id, e.currentTarget.value)}

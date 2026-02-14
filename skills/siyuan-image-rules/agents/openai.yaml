@@ -1,0 +1,4 @@
+interface:
+  display_name: "SiYuan 图片规则"
+  short_description: "在思源笔记中插入/读图/写标题介绍并回读验证规则集"
+  default_prompt: "使用 $siyuan-image-rules 为这篇思源笔记的图片补齐标题/介绍，并输出回读验证结果。"

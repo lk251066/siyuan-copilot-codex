@@ -2,12 +2,16 @@
     import { onMount } from 'svelte';
     import SettingPanel from '@/libs/components/setting-panel.svelte';
     import { t } from './utils/i18n';
-    import { getDefaultSettings } from './defaultSettings';
+    import { getDefaultSettings, type CustomProviderConfig } from './defaultSettings';
     import { pushMsg, pushErrMsg, lsNotebooks } from './api';
     import { confirm } from 'siyuan';
     import ProviderConfigPanel from './components/ProviderConfigPanel.svelte';
-    import type { CustomProviderConfig } from './defaultSettings';
     import { fetchCodexModels, resolveCodexLocalConfigPaths } from './codex/codex-models';
+    import {
+        listWorkspaceSkills,
+        type WorkspaceSkillMeta,
+        type WorkspaceSkillOverride,
+    } from './codex/workspace-skills';
     export let plugin;
 
     // 使用动态默认设置
@@ -18,6 +22,14 @@
 
     let codexModelOptions: string[] = [];
     let isLoadingCodexModels = false;
+    let codexSkillOptions: WorkspaceSkillMeta[] = [];
+    let isLoadingCodexSkills = false;
+    let codexSkillsRefreshKey = '';
+    let selectedSkillKey = '';
+    let selectedSkill: WorkspaceSkillMeta | null = null;
+    let skillEditorSelectedKey = '';
+    let skillEditorName = '';
+    let skillEditorDescription = '';
     let codexLocalConfigPaths: string[] = [];
     $: codexLocalConfigPaths = resolveCodexLocalConfigPaths({
         workingDir: String(settings?.codexWorkingDir || '').trim(),
@@ -36,16 +48,142 @@
                 workingDir: String(settings?.codexWorkingDir || '').trim(),
             });
             if (showToast) {
-                pushMsg(`Codex 本地模型已更新（${codexModelOptions.length}）`);
+                pushMsg(
+                    t('aiSidebar.codex.modelsRefreshed', {
+                        count: String(codexModelOptions.length),
+                    })
+                );
             }
         } catch (error) {
             codexModelOptions = [];
             const detail = (error as Error).message || String(error);
             if (showToast) {
-                pushErrMsg(`拉取 Codex 模型失败：${detail}`);
+                pushErrMsg(
+                    t('aiSidebar.codex.refreshModelsFailed', {
+                        error: detail,
+                    })
+                );
             }
         } finally {
             isLoadingCodexModels = false;
+        }
+    }
+
+    function getCodexSkillOverrides(): Record<string, WorkspaceSkillOverride> {
+        if (settings?.codexSkillOverrides && typeof settings.codexSkillOverrides === 'object') {
+            return settings.codexSkillOverrides;
+        }
+        return {};
+    }
+
+    function getSkillOverride(skill: WorkspaceSkillMeta): WorkspaceSkillOverride {
+        return getCodexSkillOverrides()[skill.key] || {};
+    }
+
+    function formatSkillOptionLabel(skill: WorkspaceSkillMeta): string {
+        const source = skill.source === 'workspace' ? 'workspace' : 'plugin';
+        return `${skill.name} (${source})`;
+    }
+
+    function getSkillCustomName(skill: WorkspaceSkillMeta): string {
+        const value = getSkillOverride(skill).name;
+        return typeof value === 'string' ? value : '';
+    }
+
+    function getSkillCustomDescription(skill: WorkspaceSkillMeta): string {
+        const value = getSkillOverride(skill).description;
+        return typeof value === 'string' ? value : '';
+    }
+
+    function updateSkillOverride(skill: WorkspaceSkillMeta, patch: WorkspaceSkillOverride) {
+        const base = { ...getCodexSkillOverrides() };
+        const merged = { ...(base[skill.key] || {}), ...patch };
+        const clean: WorkspaceSkillOverride = {};
+
+        if (typeof merged.name === 'string' && merged.name.trim()) clean.name = merged.name.trim();
+        if (typeof merged.description === 'string' && merged.description.trim()) {
+            clean.description = merged.description.trim();
+        }
+
+        if (Object.keys(clean).length > 0) {
+            base[skill.key] = clean;
+        } else {
+            delete base[skill.key];
+        }
+        setSetting('codexSkillOverrides', base);
+    }
+
+    function resetSkillOverride(skill: WorkspaceSkillMeta) {
+        const base = { ...getCodexSkillOverrides() };
+        if (base[skill.key]) {
+            delete base[skill.key];
+            setSetting('codexSkillOverrides', base);
+        }
+    }
+
+    function syncSkillEditorFields(skill: WorkspaceSkillMeta | null) {
+        if (!skill) {
+            skillEditorSelectedKey = '';
+            skillEditorName = '';
+            skillEditorDescription = '';
+            return;
+        }
+        const customName = getSkillCustomName(skill);
+        const customDescription = getSkillCustomDescription(skill);
+        skillEditorSelectedKey = skill.key;
+        skillEditorName = customName || skill.name;
+        skillEditorDescription = customDescription || skill.description;
+    }
+
+    function saveSkillEditorFields() {
+        if (!selectedSkill) return;
+        const name = String(skillEditorName || '').trim();
+        const description = String(skillEditorDescription || '').trim();
+        updateSkillOverride(selectedSkill, {
+            name: name && name !== selectedSkill.name ? name : '',
+            description:
+                description && description !== selectedSkill.description ? description : '',
+        });
+        void refreshCodexSkills(false);
+    }
+
+    function resetSkillEditorFields() {
+        if (!selectedSkill) return;
+        resetSkillOverride(selectedSkill);
+        syncSkillEditorFields(selectedSkill);
+        void refreshCodexSkills(false);
+    }
+
+    async function refreshCodexSkills(showToast = false) {
+        if (isLoadingCodexSkills) return;
+        isLoadingCodexSkills = true;
+        try {
+            codexSkillOptions = listWorkspaceSkills(String(settings?.codexWorkingDir || '').trim(), {
+                includePlugin: true,
+                maxSkills: 100,
+            });
+            const exists = codexSkillOptions.some(skill => skill.key === selectedSkillKey);
+            if (!exists) {
+                selectedSkillKey = codexSkillOptions[0]?.key || '';
+            }
+            if (showToast) {
+                pushMsg(
+                    t('settings.codex.skills.editor.refreshed', {
+                        count: String(codexSkillOptions.length),
+                    }) || `Skills 已刷新（${codexSkillOptions.length}）`
+                );
+            }
+        } catch (error) {
+            codexSkillOptions = [];
+            if (showToast) {
+                pushErrMsg(
+                    t('settings.codex.skills.editor.refreshFailed', {
+                        error: (error as Error).message || String(error),
+                    }) || `Skills 刷新失败：${(error as Error).message || String(error)}`
+                );
+            }
+        } finally {
+            isLoadingCodexSkills = false;
         }
     }
 
@@ -70,12 +208,12 @@
                     setSetting('codexCliPath', lines[0]);
                     pushMsg(`${t('settings.codex.detectCliPath') || '自动探测'}: ${lines[0]}`);
                 } else {
-                    pushErrMsg('未找到 codex，请确认已安装并在 PATH 中可用');
+                    pushErrMsg(t('settings.codex.notFoundInPath'));
                 }
             });
         } catch (e) {
             console.error('Detect codex path failed:', e);
-            pushErrMsg('自动探测失败，请手动填写 codex 路径');
+            pushErrMsg(t('settings.codex.detectCliFailed'));
         }
     }
 
@@ -492,6 +630,7 @@
         await loadNotebooks();
 
         await refreshCodexModels(false);
+        await refreshCodexSkills(false);
 
         updateGroupItems();
         // 确保设置已保存（可能包含新的默认值）
@@ -544,6 +683,23 @@
         }));
     }
 
+    $: {
+        const refreshKey = String(settings?.codexWorkingDir || '').trim();
+        if (refreshKey !== codexSkillsRefreshKey) {
+            codexSkillsRefreshKey = refreshKey;
+            void refreshCodexSkills(false);
+        }
+    }
+
+    $: selectedSkill = codexSkillOptions.find(skill => skill.key === selectedSkillKey) || null;
+    $: {
+        if (!selectedSkill) {
+            syncSkillEditorFields(null);
+        } else if (skillEditorSelectedKey !== selectedSkill.key) {
+            syncSkillEditorFields(selectedSkill);
+        }
+    }
+
     $: currentGroup = groups.find(group => group.name === focusGroup);
 </script>
 
@@ -571,12 +727,117 @@
     </ul>
     <div class="config__tab-wrap">
         {#if focusGroup === t('settings.settingsGroup.systemPrompt')}
-            <SettingPanel
-                group={currentGroup?.name || ''}
-                settingItems={currentGroup?.items || []}
-                display={true}
-                on:changed={onChanged}
-            />
+            <div class="system-prompt-panel">
+                <SettingPanel
+                    group={currentGroup?.name || ''}
+                    settingItems={currentGroup?.items || []}
+                    display={true}
+                    on:changed={onChanged}
+                />
+
+                <div class="system-prompt-skills">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.skills.editor.title') || 'Skills 编辑'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.skills.editor.description') ||
+                                '按技能逐条编辑注入提示词中的名称与说明'}
+                        </div>
+                    </div>
+
+                    <div class="codex-settings__inline">
+                        <select class="b3-select fn__flex-1" bind:value={selectedSkillKey}>
+                            <option value="" disabled>
+                                {t('settings.codex.skills.editor.selectPlaceholder') || '请选择 Skill'}
+                            </option>
+                            {#each codexSkillOptions as skill}
+                                <option value={skill.key}>{formatSkillOptionLabel(skill)}</option>
+                            {/each}
+                        </select>
+                        <button
+                            class="b3-button b3-button--outline"
+                            type="button"
+                            on:click={() => refreshCodexSkills(true)}
+                            disabled={isLoadingCodexSkills}
+                        >
+                            {isLoadingCodexSkills
+                                ? t('settings.codex.skills.editor.refreshing') || '刷新中...'
+                                : t('settings.codex.skills.editor.refresh') || '刷新技能'}
+                        </button>
+                    </div>
+                    <div class="codex-settings__desc">
+                        {t('settings.codex.skills.editor.count', {
+                            count: String(codexSkillOptions.length),
+                        }) || `共 ${codexSkillOptions.length} 个技能`}
+                    </div>
+
+                    {#if codexSkillOptions.length === 0}
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.skills.editor.empty') ||
+                                '未读取到技能，请检查工作目录或插件目录中的 skills/'}
+                        </div>
+                    {:else if selectedSkill}
+                        <div class="codex-skill-item">
+                            <div class="codex-skill-item__header">
+                                <span>{selectedSkill.name}</span>
+                                <span class="codex-skill-item__path">{selectedSkill.relativePath}</span>
+                            </div>
+                            <div class="codex-settings__desc">
+                                {t('settings.codex.skills.editor.sourceLabel') || '来源'}:
+                                {selectedSkill.source === 'workspace' ? 'workspace' : 'plugin'}
+                            </div>
+                            <div class="codex-settings__desc">
+                                {t('settings.codex.skills.editor.defaultDescriptionLabel') ||
+                                    '默认说明'}: {selectedSkill.description}
+                            </div>
+                            <div class="codex-skill-item__controls">
+                                <div class="codex-skill-field">
+                                    <div class="codex-settings__desc">
+                                        {t('settings.codex.skills.editor.nameLabel') || '显示名称'}
+                                    </div>
+                                    <input
+                                        class="b3-text-field"
+                                        type="text"
+                                        bind:value={skillEditorName}
+                                        placeholder={t('settings.codex.skills.editor.namePlaceholder') ||
+                                            '覆盖名称（留空使用默认）'}
+                                    />
+                                </div>
+                                <div class="codex-skill-field codex-skill-field--full">
+                                    <div class="codex-settings__desc">
+                                        {t('settings.codex.skills.editor.descriptionLabel') ||
+                                            '显示说明'}
+                                    </div>
+                                    <textarea
+                                        class="b3-text-field"
+                                        rows="3"
+                                        bind:value={skillEditorDescription}
+                                        placeholder={t('settings.codex.skills.editor.descriptionPlaceholder') ||
+                                            '覆盖说明（留空使用默认）'}
+                                    ></textarea>
+                                </div>
+                                <div class="codex-skill-actions">
+                                    <button
+                                        class="b3-button b3-button--outline"
+                                        type="button"
+                                        on:click={saveSkillEditorFields}
+                                    >
+                                        {t('settings.codex.skills.editor.save') || '保存'}
+                                    </button>
+                                    <button
+                                        class="b3-button b3-button--text"
+                                        type="button"
+                                        on:click={resetSkillEditorFields}
+                                    >
+                                        {t('settings.codex.skills.editor.reset') || '恢复默认'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    {/if}
+                </div>
+            </div>
         {:else if ENABLE_PLATFORM_MANAGEMENT &&
             focusGroup === t('settings.settingsGroup.platformManagement')}
             <!-- 新的侧边栏布局：左侧为平台列表/操作，右侧为平台配置主区域 -->
@@ -645,7 +906,7 @@
                                     <button
                                         class="b3-button b3-button--text b3-button--error"
                                         on:click|stopPropagation={() => removePlatform(platform.id)}
-                                        title="删除平台"
+                                        title={t('dialogs.confirm.deletePlatform.title')}
                                     >
                                         <svg class="b3-button__icon">
                                             <use xlink:href="#iconTrashcan"></use>
@@ -654,7 +915,7 @@
                                 </div>
                             {/each}
                             {#if allProviderOptions.length === 0}
-                                <div class="empty-hint">暂无可用平台</div>
+                                <div class="empty-hint">{t('platform.noAvailable')}</div>
                             {/if}
                         </div>
                     </div>
@@ -829,14 +1090,14 @@
                 </div>
 
                 <div class="codex-settings__row">
-                    <label class="codex-settings__label">
+                    <div class="codex-settings__label">
                         <div class="codex-settings__title">
                             {t('settings.codex.enabled.title') || '启用 Codex CLI'}
                         </div>
                         <div class="codex-settings__desc">
                             {t('settings.codex.enabled.description') || ''}
                         </div>
-                    </label>
+                    </div>
                     <input
                         class="b3-switch"
                         type="checkbox"
@@ -846,14 +1107,14 @@
                 </div>
 
                 <div class="codex-settings__row">
-                    <label class="codex-settings__label">
+                    <div class="codex-settings__label">
                         <div class="codex-settings__title">
                             {t('settings.codex.cliPath.title') || 'Codex 路径'}
                         </div>
                         <div class="codex-settings__desc">
                             {t('settings.codex.cliPath.description') || ''}
                         </div>
-                    </label>
+                    </div>
                     <div class="codex-settings__inline">
                         <input
                             class="b3-text-field fn__flex-1"
@@ -873,14 +1134,14 @@
                 </div>
 
                 <div class="codex-settings__row">
-                    <label class="codex-settings__label">
+                    <div class="codex-settings__label">
                         <div class="codex-settings__title">
                             {t('settings.codex.workingDir.title') || '工作目录（--cd）'}
                         </div>
                         <div class="codex-settings__desc">
                             {t('settings.codex.workingDir.description') || ''}
                         </div>
-                    </label>
+                    </div>
                     <input
                         class="b3-text-field fn__flex-1"
                         type="text"
@@ -891,14 +1152,14 @@
                 </div>
 
                 <div class="codex-settings__row">
-                    <label class="codex-settings__label">
+                    <div class="codex-settings__label">
                         <div class="codex-settings__title">
                             {t('settings.codex.runMode.title') || '执行权限'}
                         </div>
                         <div class="codex-settings__desc">
                             {t('settings.codex.runMode.description') || ''}
                         </div>
-                    </label>
+                    </div>
                     <select
                         class="b3-select"
                         value={settings.codexRunMode || 'read_only'}
@@ -931,14 +1192,14 @@
                 </div>
 
                 <div class="codex-settings__row">
-                    <label class="codex-settings__label">
+                    <div class="codex-settings__label">
                         <div class="codex-settings__title">
                             {t('settings.codex.skipGitRepoCheck.title') || '允许非 Git 目录'}
                         </div>
                         <div class="codex-settings__desc">
                             {t('settings.codex.skipGitRepoCheck.description') || ''}
                         </div>
-                    </label>
+                    </div>
                     <input
                         class="b3-switch"
                         type="checkbox"
@@ -968,14 +1229,14 @@
                 </div>
 
                 <div class="codex-settings__row">
-                    <label class="codex-settings__label">
+                    <div class="codex-settings__label">
                         <div class="codex-settings__title">
                             {t('settings.codex.modelOverride.title') || '模型覆盖（可选）'}
                         </div>
                         <div class="codex-settings__desc">
                             {t('settings.codex.modelOverride.description') || ''}
                         </div>
-                    </label>
+                    </div>
                     <div class="codex-settings__inline">
                         <select
                             class="b3-select fn__flex-1"
@@ -1007,7 +1268,7 @@
                 </div>
 
                 <div class="codex-settings__row">
-                    <label class="codex-settings__label">
+                    <div class="codex-settings__label">
                         <div class="codex-settings__title">
                             {t('settings.codex.reasoningEffort.title') || '思考长度'}
                         </div>
@@ -1015,7 +1276,7 @@
                             {t('settings.codex.reasoningEffort.description') ||
                                 '传递给 Codex 的 reasoning effort（留空使用本地配置默认值）'}
                         </div>
-                    </label>
+                    </div>
                     <select
                         class="b3-select"
                         value={settings.codexReasoningEffort || ''}
@@ -1040,14 +1301,14 @@
                 </div>
 
                 <div class="codex-settings__row">
-                    <label class="codex-settings__label">
+                    <div class="codex-settings__label">
                         <div class="codex-settings__title">
                             {t('settings.codex.siyuanApiUrl.title') || 'SiYuan API 地址'}
                         </div>
                         <div class="codex-settings__desc">
                             {t('settings.codex.siyuanApiUrl.description') || ''}
                         </div>
-                    </label>
+                    </div>
                     <input
                         class="b3-text-field fn__flex-1"
                         type="text"
@@ -1058,14 +1319,14 @@
                 </div>
 
                 <div class="codex-settings__row">
-                    <label class="codex-settings__label">
+                    <div class="codex-settings__label">
                         <div class="codex-settings__title">
                             {t('settings.codex.siyuanApiToken.title') || 'SiYuan API Token'}
                         </div>
                         <div class="codex-settings__desc">
                             {t('settings.codex.siyuanApiToken.description') || ''}
                         </div>
-                    </label>
+                    </div>
                     <input
                         class="b3-text-field fn__flex-1"
                         type="password"
@@ -1107,6 +1368,25 @@
         padding: 2px;
         display: flex;
         flex-direction: column;
+    }
+    .system-prompt-panel {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        overflow-y: auto;
+        padding-right: 4px;
+    }
+    .system-prompt-skills {
+        margin: 0 2px 8px;
+        padding: 12px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 6px;
+        background: var(--b3-theme-surface);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
     }
 
     .codex-settings-container {
@@ -1343,6 +1623,46 @@
         gap: 8px;
         align-items: center;
         flex: 1;
+    }
+    .codex-skill-item {
+        border: 1px solid var(--b3-border-color);
+        border-radius: 6px;
+        padding: 8px;
+        background: var(--b3-theme-surface);
+    }
+    .codex-skill-item__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+        font-size: 13px;
+        color: var(--b3-theme-on-surface);
+    }
+    .codex-skill-item__path {
+        font-size: 12px;
+        color: var(--b3-theme-on-surface-light);
+        word-break: break-all;
+    }
+    .codex-skill-item__controls {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 8px;
+    }
+    .codex-skill-field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .codex-skill-field--full textarea {
+        min-height: 78px;
+        resize: vertical;
+    }
+    .codex-skill-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
     }
     .codex-settings__status {
         font-size: 12px;

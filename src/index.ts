@@ -18,7 +18,7 @@ import {
     ICardData
 } from "siyuan";
 
-import { appendBlock, deleteBlock, setBlockAttrs, getBlockAttrs, pushMsg, pushErrMsg, sql, renderSprig, getChildBlocks, insertBlock, renameDocByID, prependBlock, updateBlock, createDocWithMd, getBlockKramdown, getBlockDOM, putFile, getFileBlob, readDir } from "./api";
+import { appendBlock, deleteBlock, setBlockAttrs, getBlockAttrs, pushMsg, pushErrMsg, sql, renderSprig, getChildBlocks, insertBlock, renameDocByID, prependBlock, updateBlock, createDocWithMd, getBlockKramdown, getBlockDOM, putFile, getFileBlob, readDir, removeFile } from "./api";
 
 import SettingPanel from "./SettingsPannel.svelte";
 import { getDefaultSettings } from "./defaultSettings";
@@ -2104,6 +2104,7 @@ export default class PluginSample extends Plugin {
                 size: { width: 400, height: 0 },
                 icon: DOCK_ICON_ID,
                 title: t("aiSidebar.title") || "Codex",
+                show: true,
             },
             data: {
                 text: t("aiSidebar.title") || "Codex"
@@ -2367,6 +2368,25 @@ export default class PluginSample extends Plugin {
         console.log("Codex onunload");
     }
 
+    private async removeStoragePathRecursive(path: string): Promise<void> {
+        try {
+            const entries = await readDir(path);
+            if (Array.isArray(entries)) {
+                for (const entry of entries) {
+                    await this.removeStoragePathRecursive(`${path}/${entry.name}`);
+                }
+            }
+        } catch (_) {
+            // ignore readDir failures for non-existent paths
+        }
+
+        try {
+            await removeFile(path);
+        } catch (_) {
+            // ignore remove failures for non-existent paths
+        }
+    }
+
     async uninstall() {
         //当插件被卸载的时候，会自动调用这个函数
         console.log("Codex uninstall");
@@ -2375,6 +2395,23 @@ export default class PluginSample extends Plugin {
         await this.removeData(WEBVIEW_HISTORY_FILE);
         await this.removeData("chat-sessions.json");
         await this.removeData("prompts.json");
+        await this.removeData("agent-tools-config.json");
+
+        // 清理插件存储目录（包含历史命名目录，避免卸载残留）
+        const namespaces = Array.from(
+            new Set([
+                String(this.name || "").trim(),
+                DEFAULT_PLUGIN_NAMESPACE,
+                "siyuan-plugin-copilot",
+            ].filter(Boolean))
+        );
+
+        for (const namespace of namespaces) {
+            const baseDir = `/data/storage/petal/${namespace}`;
+            await this.removeStoragePathRecursive(`${baseDir}/sessions`);
+            await this.removeStoragePathRecursive(`${baseDir}/assets`);
+            await this.removeStoragePathRecursive(`${baseDir}/webappIcon`);
+        }
     }
 
     /**
@@ -2621,6 +2658,9 @@ export default class PluginSample extends Plugin {
             'codexProfile',
             'codexInjectSkillsOnThreadStart',
             'codexSelectedSkills',
+            'codexSkillsEnabled',
+            'codexSkillsIncludePlugin',
+            'codexSkillsMaxCount',
             'codexModelApiKey',
             'modelPresets',
             'selectedModelPresetId',

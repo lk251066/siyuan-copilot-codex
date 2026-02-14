@@ -40,6 +40,16 @@ const DEFAULT_CODEX_AGENTS_PROMPT = `# AGENTS
 5. 执行验证并记录结果。
 6. 回写笔记并沉淀可复用知识。
 
+## Local Skills（优先）
+- 优先使用当前工作目录 \`skills/\` 下的本地 skills。
+- 触发规则：
+  - 用户显式提到技能名（如 \`$siyuan-image-rules\`）时，必须使用该技能。
+  - 任务语义明显匹配某个技能时，默认启用该技能。
+- 读取顺序：先看 \`skills/INDEX.md\`，再仅读取命中的 \`SKILL.md\`，避免全量加载。
+- 多技能并发时只选最小集合，按“主技能 -> 安全校验技能”顺序执行。
+- 若技能文件缺失或不可读，必须明确说明并降级到通用流程，不得静默跳过。
+- 输出中应注明“本轮使用 skills：...”，便于追溯。
+
 ## Skills-driven Workflows
 
 ### 1) 调研流程（research + source-management）

@@ -39,6 +39,7 @@
     let isRenameDialogOpen = false; // 重命名对话框是否打开
     let renameSessionTitle = ''; // 重命名输入框的值
     let renameSession: ChatSession | null = null; // 要重命名的会话
+    let renameInputElement: HTMLInputElement;
 
     function formatDate(timestamp: number): string {
         const date = new Date(timestamp);
@@ -299,12 +300,15 @@
     }
 
     // 打开重命名对话框
-    function openRenameDialog() {
+    async function openRenameDialog() {
         if (!contextMenuSession) return;
 
         renameSession = contextMenuSession;
         renameSessionTitle = contextMenuSession.title;
         isRenameDialogOpen = true;
+        await tick();
+        renameInputElement?.focus();
+        renameInputElement?.select();
         closeContextMenu();
     }
 
@@ -538,12 +542,12 @@
                 </div>
                 <div class="session-rename-dialog__body">
                     <input
+                        bind:this={renameInputElement}
                         type="text"
                         class="b3-text-field"
                         bind:value={renameSessionTitle}
                         placeholder={t('aiSidebar.session.titlePlaceholder') || '请输入会话标题'}
                         on:keydown={e => e.key === 'Enter' && confirmRename()}
-                        autofocus
                     />
                 </div>
                 <div class="session-rename-dialog__footer">
