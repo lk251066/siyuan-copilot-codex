@@ -327,7 +327,14 @@
                 "enqueued": "Queued for sending (#{index})",
                 "readyHint": "Draft detected: click Send to queue it without interrupting the current run.",
                 "emptyHint": "Task is running: type a new draft first, then click Send to queue it; use the pause button to stop the current run.",
-                "cleared": "Cleared send queue ({count})"
+                "cleared": "Cleared send queue ({count})",
+                "removed": "Removed 1 queued draft ({count} left)",
+                "panelTitle": "Send queue ({count})",
+                "clearAll": "Clear queue",
+                "removeItem": "Remove queued draft",
+                "nonTextDraft": "Non-text draft",
+                "attachmentsMeta": "Attachments {count}",
+                "contextDocsMeta": "Context {count}"
             }
         },
         "empty": {

@@ -19,6 +19,10 @@ const checks = [
         pass: source.includes('function clearQueuedCodexSendDrafts(notify = false): number'),
     },
     {
+        name: 'queue remove helper exists',
+        pass: source.includes('function removeQueuedCodexSendDraft(draftId: string)'),
+    },
+    {
         name: 'queue drain helper exists',
         pass: source.includes('async function processQueuedCodexSends()'),
     },
@@ -53,6 +57,13 @@ const checks = [
         pass:
             source.includes('class="b3-button b3-button--text ai-sidebar__queue-stop-btn"') &&
             source.includes('on:click={abortMessage}'),
+    },
+    {
+        name: 'queue panel supports clear-all and remove-item actions',
+        pass:
+            source.includes('class="ai-sidebar__queue-panel"') &&
+            source.includes('on:click={() => clearQueuedCodexSendDrafts(true)}') &&
+            source.includes('on:click={() => removeQueuedCodexSendDraft(draft.id)}'),
     },
     {
         name: 'abort clears queued drafts',

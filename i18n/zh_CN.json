@@ -327,7 +327,14 @@
                 "enqueued": "已加入发送队列（第 {index} 条）",
                 "readyHint": "检测到新草稿：点击发送将加入队列（不会中断当前任务）",
                 "emptyHint": "当前任务运行中：先输入新内容再点发送可加入队列；若要停止请点右侧暂停按钮",
-                "cleared": "已清空发送队列（{count} 条）"
+                "cleared": "已清空发送队列（{count} 条）",
+                "removed": "已移除 1 条队列消息（剩余 {count} 条）",
+                "panelTitle": "发送队列（{count}）",
+                "clearAll": "清空队列",
+                "removeItem": "移除该条队列消息",
+                "nonTextDraft": "非文本草稿",
+                "attachmentsMeta": "附件 {count}",
+                "contextDocsMeta": "上下文 {count}"
             }
         },
         "empty": {

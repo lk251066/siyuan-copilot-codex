@@ -5604,6 +5604,48 @@
         return removedCount;
     }
 
+    function removeQueuedCodexSendDraft(draftId: string) {
+        const beforeCount = queuedCodexSendDrafts.length;
+        if (beforeCount === 0) return;
+        queuedCodexSendDrafts = queuedCodexSendDrafts.filter(draft => draft.id !== draftId);
+        if (queuedCodexSendDrafts.length === beforeCount) return;
+        pushMsg(
+            (t('aiSidebar.codex.queue.removed') || '已移除 1 条队列消息（剩余 {count} 条）').replace(
+                '{count}',
+                String(queuedCodexSendDrafts.length)
+            )
+        );
+    }
+
+    function getQueuedDraftPreview(draft: QueuedCodexSendDraft): string {
+        const normalized = draft.userContent.replace(/\s+/g, ' ').trim();
+        if (normalized.length > 0) {
+            return normalized.length > 60 ? `${normalized.slice(0, 60)}…` : normalized;
+        }
+        return t('aiSidebar.codex.queue.nonTextDraft') || '非文本草稿';
+    }
+
+    function getQueuedDraftMeta(draft: QueuedCodexSendDraft): string {
+        const parts: string[] = [];
+        if (draft.attachments.length > 0) {
+            parts.push(
+                (t('aiSidebar.codex.queue.attachmentsMeta') || '附件 {count}').replace(
+                    '{count}',
+                    String(draft.attachments.length)
+                )
+            );
+        }
+        if (draft.contextDocuments.length > 0) {
+            parts.push(
+                (t('aiSidebar.codex.queue.contextDocsMeta') || '上下文 {count}').replace(
+                    '{count}',
+                    String(draft.contextDocuments.length)
+                )
+            );
+        }
+        return parts.join(' · ');
+    }
+
     async function processQueuedCodexSends() {
         if (isLoading) return;
         if (isProcessingQueuedCodexSend) return;
@@ -15864,6 +15906,59 @@
                 </button>
             </div>
         {/if}
+        {#if queuedCodexSendDrafts.length > 0}
+            <div
+                class="ai-sidebar__queue-panel"
+                role="status"
+                aria-live="polite"
+                aria-label={(t('aiSidebar.codex.queue.panelTitle') || '发送队列（{count}）').replace(
+                    '{count}',
+                    String(queuedCodexSendDrafts.length)
+                )}
+            >
+                <div class="ai-sidebar__queue-panel-header">
+                    <span class="ai-sidebar__queue-panel-title">
+                        {(t('aiSidebar.codex.queue.panelTitle') || '发送队列（{count}）').replace(
+                            '{count}',
+                            String(queuedCodexSendDrafts.length)
+                        )}
+                    </span>
+                    <button
+                        class="b3-button b3-button--text ai-sidebar__queue-clear-btn"
+                        on:click={() => clearQueuedCodexSendDrafts(true)}
+                        title={t('aiSidebar.codex.queue.clearAll') || '清空队列'}
+                        aria-label={t('aiSidebar.codex.queue.clearAll') || '清空队列'}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconTrashcan"></use></svg>
+                        <span>{t('aiSidebar.codex.queue.clearAll') || '清空队列'}</span>
+                    </button>
+                </div>
+                <ul class="ai-sidebar__queue-list">
+                    {#each queuedCodexSendDrafts as draft, index (draft.id)}
+                        {@const queueMeta = getQueuedDraftMeta(draft)}
+                        <li class="ai-sidebar__queue-item">
+                            <div class="ai-sidebar__queue-item-main">
+                                <span class="ai-sidebar__queue-item-index">#{index + 1}</span>
+                                <span class="ai-sidebar__queue-item-preview">
+                                    {getQueuedDraftPreview(draft)}
+                                </span>
+                                {#if queueMeta}
+                                    <span class="ai-sidebar__queue-item-meta">{queueMeta}</span>
+                                {/if}
+                            </div>
+                            <button
+                                class="b3-button b3-button--text ai-sidebar__queue-remove-btn"
+                                on:click={() => removeQueuedCodexSendDraft(draft.id)}
+                                title={t('aiSidebar.codex.queue.removeItem') || '移除该条队列消息'}
+                                aria-label={t('aiSidebar.codex.queue.removeItem') || '移除该条队列消息'}
+                            >
+                                <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
+                            </button>
+                        </li>
+                    {/each}
+                </ul>
+            </div>
+        {/if}
 
         <!-- 隐藏的文件上传 input -->
         <input
@@ -18169,6 +18264,112 @@
     .ai-sidebar__queue-stop-btn .b3-button__icon {
         width: 14px;
         height: 14px;
+    }
+
+    .ai-sidebar__queue-panel {
+        margin-top: 6px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 8px;
+        background: var(--b3-theme-surface-lighter);
+        padding: 6px 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .ai-sidebar__queue-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    .ai-sidebar__queue-panel-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--b3-theme-on-surface);
+    }
+
+    .ai-sidebar__queue-clear-btn {
+        height: 22px;
+        min-height: 22px;
+        border-radius: 6px;
+        padding: 0 6px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+
+        .b3-button__icon {
+            width: 13px;
+            height: 13px;
+        }
+    }
+
+    .ai-sidebar__queue-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        max-height: 156px;
+        overflow-y: auto;
+    }
+
+    .ai-sidebar__queue-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 6px;
+        padding: 4px 6px;
+        background: var(--b3-theme-surface);
+    }
+
+    .ai-sidebar__queue-item-main {
+        min-width: 0;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--b3-theme-on-surface);
+    }
+
+    .ai-sidebar__queue-item-index {
+        color: var(--b3-theme-on-surface-light);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .ai-sidebar__queue-item-preview {
+        min-width: 0;
+        max-width: 320px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .ai-sidebar__queue-item-meta {
+        color: var(--b3-theme-on-surface-light);
+        font-size: 11px;
+    }
+
+    .ai-sidebar__queue-remove-btn {
+        flex-shrink: 0;
+        width: 22px;
+        height: 22px;
+        min-height: 22px;
+        border-radius: 6px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+
+        .b3-button__icon {
+            width: 12px;
+            height: 12px;
+        }
     }
 
     .ai-sidebar__input-wrapper {
