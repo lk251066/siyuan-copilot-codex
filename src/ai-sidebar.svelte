@@ -8985,6 +8985,31 @@
         }
     }
 
+    async function loadSessionMessagesForExport(sessionId: string): Promise<Message[]> {
+        if (sessionId === currentSessionId && messages.length > 0) {
+            return [...messages];
+        }
+
+        const sessionMetadata = sessions.find(s => s.id === sessionId);
+        if (sessionMetadata?.messages && sessionMetadata.messages.length > 0) {
+            return sessionMetadata.messages;
+        }
+
+        try {
+            const path = `/data/storage/petal/siyuan-plugin-copilot/sessions/${sessionId}.json`;
+            const blob = await getFileBlob(path);
+            if (!blob) {
+                return [];
+            }
+            const text = await blob.text();
+            const sessionData = JSON.parse(text);
+            return Array.isArray(sessionData?.messages) ? sessionData.messages : [];
+        } catch (error) {
+            console.error('Failed to load session messages for export:', error);
+            return [];
+        }
+    }
+
     async function loadSession(sessionId: string) {
         // 如果消息正在生成，先中断
         if (isLoading && abortController) {
@@ -12861,6 +12886,7 @@
                 bind:sessions
                 bind:currentSessionId
                 bind:isOpen={isSessionManagerOpen}
+                loadSessionMessages={loadSessionMessagesForExport}
                 on:refresh={loadSessions}
                 on:load={e => loadSession(e.detail.sessionId)}
                 on:delete={e => deleteSession(e.detail.sessionId)}

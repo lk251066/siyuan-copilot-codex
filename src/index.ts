@@ -89,6 +89,7 @@ export default class PluginSample extends Plugin {
     private menuEventBuses: any[] = [];
     private menuDomObserver: MutationObserver | null = null;
     private domContextMenuBound = false;
+    private linkClickListenerBound = false;
     private lastContextMenuTarget: EventTarget | null = null;
     private lastContextMenuAt = 0;
     private get pluginNamespace(): string {
@@ -2126,10 +2127,13 @@ export default class PluginSample extends Plugin {
             }
         });
         // 注册已保存的小程序图标
-        // 由于 onload() 中已经调用了 loadSettings()，
-        // 这里直接再次调用 loadSettings() 以获取合并后的设置（包含默认的内置 webApps）
+        // 优先复用 onload() 已同步到 store 的设置，避免重复 loadSettings() 的磁盘读写
         try {
-            const settings = await this.loadSettings();
+            const currentSettings = await getSettings();
+            const settings =
+                currentSettings && Object.keys(currentSettings).length > 0
+                    ? currentSettings
+                    : await this.loadSettings();
             if (settings?.webApps && Array.isArray(settings.webApps)) {
                 for (const app of settings.webApps) {
                     if (app.icon && app.icon.startsWith('data:image')) {
@@ -2182,10 +2186,8 @@ export default class PluginSample extends Plugin {
                 }
             }
 
-            // 监听链接点击事件（仅在启用时）
-            if (settings?.openLinksInWebView) {
-                this.setupLinkClickListener();
-            }
+            // 监听链接点击事件（始终只注册一次；是否拦截由当前设置决定）
+            this.setupLinkClickListener();
         } catch (e) {
             console.error('Failed to register webapp icons:', e);
         }
@@ -2196,83 +2198,95 @@ export default class PluginSample extends Plugin {
      * 根据设置决定是否在 webview 中打开外部链接
      * 直接监听 div.protyle-wysiwyg 下的 span[data-type="a"] 链接点击
      */
-    private setupLinkClickListener() {
-        // 使用事件委托，监听所有 protyle 编辑器容器
-        document.addEventListener('click', async (e: MouseEvent) => {
-            const target = e.target as HTMLElement;
+    private readonly onProtyleLinkClick = async (e: MouseEvent) => {
+        const eventTarget = e.target;
+        if (!(eventTarget instanceof HTMLElement)) return;
 
-            // 检查点击的是否为思源链接: span[data-type="a"]
-            if (target.tagName === 'SPAN' && target.getAttribute('data-type') === 'a') {
-                const href = target.getAttribute('data-href');
+        const linkElement = eventTarget.closest('span[data-type="a"]') as HTMLElement | null;
+        if (!linkElement) return;
 
-                // 只处理 https 开头的链接
-                if (href && href.startsWith('https://')) {
-                    // 检查是否在 protyle-wysiwyg 容器内
-                    if (target.closest('.protyle-wysiwyg')) {
-                        // 立即阻止默认行为（必须在异步操作之前）
-                        e.preventDefault();
-                        e.stopPropagation();
-                        e.stopImmediatePropagation();
+        const href = linkElement.getAttribute('data-href');
+        if (!href || !href.startsWith('https://')) return;
 
-                        const settings = await this.loadSettings();
+        if (!linkElement.closest('.protyle-wysiwyg')) return;
 
-                        // 如果未启用 webview 打开链接功能，在外部浏览器打开
-                        if (!settings.openLinksInWebView) {
-                            window.open(href, '_blank', 'noopener,noreferrer');
-                            return false;
-                        }
+        let settings: any = null;
+        try {
+            settings = await getSettings();
+        } catch (err) {
+            console.warn('[Link Click] 读取 settings store 失败，回退 loadSettings:', err);
+            settings = await this.loadSettings();
+        }
 
-                        console.log('[Link Click] 在 webview 中打开:', href);
+        if (!settings?.openLinksInWebView) {
+            return;
+        }
 
-                        // 提取链接标题
-                        const linkTitle = target.textContent?.trim() || href;
+        // 仅在确认需要 webview 接管时阻止默认行为
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
 
-                        // 在新的 webview 标签页中打开
-                        const appData = {
-                            id: `link-${Date.now()}`,
-                            name: linkTitle.length > 50 ? linkTitle.substring(0, 50) + '...' : linkTitle,
-                            url: href,
-                            createdAt: Date.now(),
-                            updatedAt: Date.now()
-                        };
+        console.log('[Link Click] 在 webview 中打开:', href);
 
-                        // 存储到待打开列表
-                        this.webApps.set(appData.id, appData);
+        // 提取链接标题
+        const linkTitle = linkElement.textContent?.trim() || href;
 
-                        // 立即打开标签页，避免等待网络请求。后台异步检查本地缓存并更新图标（如果存在）
-                        const tabPromise = openTab({
-                            app: this.app,
-                            custom: {
-                                icon: ICON_WEBAPP_ID,
-                                title: appData.name,
-                                data: {
-                                    app: appData
-                                },
-                                id: this.name + WEBAPP_TAB_TYPE
-                            }
-                        });
+        // 在新的 webview 标签页中打开
+        const appData = {
+            id: `link-${Date.now()}`,
+            name: linkTitle.length > 50 ? linkTitle.substring(0, 50) + '...' : linkTitle,
+            url: href,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        };
 
-                        // 后台检查本地 favicon 缓存（不触发网络请求）；若存在则注册并更新标签图标
-                        (async () => {
-                            try {
-                                const domain = this.getDomainFromUrl(href);
-                                if (!domain) return;
+        // 存储到待打开列表
+        this.webApps.set(appData.id, appData);
 
-                                if (this.domainIconMap.has(domain)) {
-                                    try {
-                                        tabPromise.then((tp: any) => { try { tp.icon = this.getWebAppIconId(domain); } catch (e) { } });
-                                    } catch (e) { }
-                                }
-                            } catch (e) {
-                                // 忽略错误，不影响打开体验
-                            }
-                        })();
-
-                        return false;
-                    }
-                }
+        // 立即打开标签页，避免等待网络请求。后台异步检查本地缓存并更新图标（如果存在）
+        const tabPromise = openTab({
+            app: this.app,
+            custom: {
+                icon: ICON_WEBAPP_ID,
+                title: appData.name,
+                data: {
+                    app: appData
+                },
+                id: this.name + WEBAPP_TAB_TYPE
             }
-        }, true); // 使用捕获阶段，确保能先于其他处理器执行
+        });
+
+        // 后台检查本地 favicon 缓存（不触发网络请求）；若存在则注册并更新标签图标
+        (async () => {
+            try {
+                const domain = this.getDomainFromUrl(href);
+                if (!domain) return;
+
+                if (this.domainIconMap.has(domain)) {
+                    try {
+                        tabPromise.then((tp: any) => { try { tp.icon = this.getWebAppIconId(domain); } catch (e) { } });
+                    } catch (e) { }
+                }
+            } catch (e) {
+                // 忽略错误，不影响打开体验
+            }
+        })();
+
+        return false;
+    };
+
+    private setupLinkClickListener() {
+        if (this.linkClickListenerBound) return;
+        // 使用事件委托，监听所有 protyle 编辑器容器
+        document.addEventListener('click', this.onProtyleLinkClick, true);
+        this.linkClickListenerBound = true;
+    }
+
+    private teardownLinkClickListener() {
+        if (!this.linkClickListenerBound) return;
+        document.removeEventListener('click', this.onProtyleLinkClick, true);
+        this.linkClickListenerBound = false;
     }
 
     /**
@@ -2365,6 +2379,7 @@ export default class PluginSample extends Plugin {
         //当插件被禁用的时候，会自动调用这个函数
         this.unregisterAddChatContextMenuHandlers();
         this.teardownDomMenuFallback();
+        this.teardownLinkClickListener();
         console.log("Codex onunload");
     }
 

@@ -6,6 +6,7 @@
     export let sessions: ChatSession[] = [];
     export let currentSessionId: string = '';
     export let isOpen = false;
+    export let loadSessionMessages: ((sessionId: string) => Promise<any[]>) | undefined;
 
     const dispatch = createEventDispatcher();
 
@@ -241,11 +242,32 @@
     }
 
     // 导出会话到文件
-    function exportSessionToFile() {
+    async function exportSessionToFile() {
         if (!contextMenuSession) return;
 
         const session = contextMenuSession;
-        const markdown = generateSessionMarkdown(session);
+        let exportMessages = Array.isArray(session.messages) ? session.messages : [];
+
+        if (exportMessages.length === 0 && loadSessionMessages) {
+            try {
+                const loadedMessages = await loadSessionMessages(session.id);
+                if (Array.isArray(loadedMessages)) {
+                    exportMessages = loadedMessages;
+                }
+            } catch (error) {
+                console.error('Failed to load session messages for export:', error);
+            }
+        }
+
+        if (session.messageCount && session.messageCount > 0 && exportMessages.length === 0) {
+            pushMsg('会话导出失败：未能读取完整消息');
+            return;
+        }
+
+        const markdown = generateSessionMarkdown({
+            ...session,
+            messages: exportMessages,
+        });
 
         // 创建下载链接
         const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });

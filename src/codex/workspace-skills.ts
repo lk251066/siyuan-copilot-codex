@@ -16,6 +16,7 @@ export interface WorkspaceSkillsOptions {
     includePlugin?: boolean;
     maxSkills?: number;
     skillOverrides?: Record<string, WorkspaceSkillOverride>;
+    cacheTtlMs?: number;
 }
 
 function nodeRequire<T = any>(id: string): T {
@@ -187,10 +188,107 @@ function normalizeMaxSkills(value: number | undefined): number {
     return normalized;
 }
 
+const DEFAULT_SKILLS_CACHE_TTL_MS = 30_000;
+const MAX_CACHE_SIZE = 64;
+
+type CacheEntry<T> = {
+    expiresAt: number;
+    value: T;
+    updatedAt: number;
+};
+
+const workspaceSkillsListCache = new Map<string, CacheEntry<WorkspaceSkillMeta[]>>();
+const workspaceSkillsPromptCache = new Map<string, CacheEntry<string>>();
+
+function normalizeCacheTtlMs(value: number | undefined): number {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return DEFAULT_SKILLS_CACHE_TTL_MS;
+    const normalized = Math.floor(parsed);
+    if (normalized <= 0) return 0;
+    return Math.min(normalized, 10 * 60 * 1000);
+}
+
+function hashText(input: string): string {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < input.length; i += 1) {
+        hash ^= input.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, '0');
+}
+
+function serializeSkillOverrides(overrides: Record<string, WorkspaceSkillOverride> | undefined): string {
+    if (!overrides || typeof overrides !== 'object') return '';
+    const entries = Object.entries(overrides).sort(([a], [b]) => a.localeCompare(b, 'en'));
+    if (!entries.length) return '';
+    return entries
+        .map(([key, value]) => {
+            const name = normalizeInlineText(String(value?.name || ''));
+            const description = normalizeInlineText(String(value?.description || ''));
+            return `${key}::${name}::${description}`;
+        })
+        .join('\n');
+}
+
+function buildSkillsCacheKey(
+    kind: 'list' | 'prompt',
+    workingDir: string,
+    options: WorkspaceSkillsOptions
+): string {
+    const path = nodeRequire<typeof import('path')>('path');
+    const normalizedWorkingDir = String(workingDir || '').trim()
+        ? path.resolve(String(workingDir || '').trim())
+        : '';
+    const includePlugin = options.includePlugin !== false ? '1' : '0';
+    const maxSkills = normalizeMaxSkills(options.maxSkills);
+    const overridesHash = hashText(serializeSkillOverrides(options.skillOverrides));
+    return `${kind}|${normalizedWorkingDir}|${includePlugin}|${maxSkills}|${overridesHash}`;
+}
+
+function getValidCacheEntry<T>(cache: Map<string, CacheEntry<T>>, key: string): CacheEntry<T> | null {
+    const entry = cache.get(key);
+    if (!entry) return null;
+    if (entry.expiresAt <= Date.now()) {
+        cache.delete(key);
+        return null;
+    }
+    return entry;
+}
+
+function setCacheEntry<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T, ttlMs: number): void {
+    if (ttlMs <= 0) return;
+    const now = Date.now();
+    cache.set(key, {
+        value,
+        updatedAt: now,
+        expiresAt: now + ttlMs,
+    });
+
+    if (cache.size <= MAX_CACHE_SIZE) return;
+    let oldestKey = '';
+    let oldestAt = Number.POSITIVE_INFINITY;
+    for (const [cacheKey, entry] of cache.entries()) {
+        if (entry.updatedAt < oldestAt) {
+            oldestAt = entry.updatedAt;
+            oldestKey = cacheKey;
+        }
+    }
+    if (oldestKey) cache.delete(oldestKey);
+}
+
+function cloneSkills(skills: WorkspaceSkillMeta[]): WorkspaceSkillMeta[] {
+    return skills.map(skill => ({ ...skill }));
+}
+
 export function listWorkspaceSkills(
     workingDir: string,
     options: WorkspaceSkillsOptions = {}
 ): WorkspaceSkillMeta[] {
+    const cacheTtlMs = normalizeCacheTtlMs(options.cacheTtlMs);
+    const listCacheKey = buildSkillsCacheKey('list', workingDir, options);
+    const cached = getValidCacheEntry(workspaceSkillsListCache, listCacheKey);
+    if (cached) return cloneSkills(cached.value);
+
     const fs = nodeRequire<typeof import('fs')>('fs');
     const path = nodeRequire<typeof import('path')>('path');
     const maxSkills = normalizeMaxSkills(options.maxSkills);
@@ -265,6 +363,7 @@ export function listWorkspaceSkills(
         }
     }
 
+    setCacheEntry(workspaceSkillsListCache, listCacheKey, cloneSkills(result), cacheTtlMs);
     return result;
 }
 
@@ -272,6 +371,11 @@ export function buildWorkspaceSkillsPrompt(
     workingDir: string,
     options: WorkspaceSkillsOptions = {}
 ): string {
+    const cacheTtlMs = normalizeCacheTtlMs(options.cacheTtlMs);
+    const promptCacheKey = buildSkillsCacheKey('prompt', workingDir, options);
+    const cachedPrompt = getValidCacheEntry(workspaceSkillsPromptCache, promptCacheKey);
+    if (cachedPrompt) return cachedPrompt.value;
+
     const skills = listWorkspaceSkills(workingDir, options);
     if (!skills.length) return '';
 
@@ -293,5 +397,7 @@ export function buildWorkspaceSkillsPrompt(
         lines.push(`${idx + 1}. ${name} — ${description} [${sourceLabel}] (${skill.relativePath})`);
     });
 
-    return lines.join('\n');
+    const prompt = lines.join('\n');
+    setCacheEntry(workspaceSkillsPromptCache, promptCacheKey, prompt, cacheTtlMs);
+    return prompt;
 }
