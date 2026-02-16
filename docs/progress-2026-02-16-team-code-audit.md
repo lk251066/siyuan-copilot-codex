@@ -58,12 +58,14 @@
 
 ### B. 可新增功能
 1. **会话导出前自动读取完整消息（高收益/低复杂）**
+   - 状态：✅ 已完成（`a1053b7`）
    - 证据：
      - `src/components/SessionManager.svelte:266-272` 直接从 `session.messages` 导出。
      - `src/ai-sidebar.svelte:8833-8844` 保存会话列表时会去掉 `messages`，仅留 metadata。
    - 最小验证：导出“未预先加载”的历史会话，导出文件应包含完整消息。
 
 2. **图片相关 MCP 工具增加 `dryRun` 与定位插入（高收益/中复杂）**
+   - 状态：✅ 已完成（2026-02-16）
    - 证据：
      - `mcp/siyuan-mcp/index.cjs:847-867` 仅 `append/prepend` 且写入 doc 根。
      - `mcp/siyuan-mcp/index.cjs:1711/1729/1748/1780` schema 只支持 `append|prepend`。
@@ -74,10 +76,12 @@
    - 最小验证：禁用外网截图源时，仍可通过本地方案生成截图资源并插入笔记。
 
 4. **Git Auto Sync 增加 dry-run（中收益/中复杂）**
+   - 状态：✅ 已完成（2026-02-16）
    - 证据：`src/ai-sidebar.svelte:11189-11437` 直接执行 pull/add/commit/push。
    - 最小验证：dry-run 仅输出计划命令与文件清单，不产生写操作。
 
 5. **工具自检从“列清单”升级为“可执行自检”（中收益/中复杂）**
+   - 状态：✅ 已完成（2026-02-16）
    - 证据：`src/ai-sidebar.svelte:683-700` 当前仅 `tools/list` 并展示名字数量。
    - 最小验证：增加只读样例调用，输出每项耗时与成功率。
 
@@ -85,17 +89,23 @@
 1. 构建验证
    - 命令：`npm run build`
    - 结果：通过（exit code 0）
-   - 关键输出：`dist/index.js 635.54 kB`，未再出现 Sass legacy / named+default 导出告警。
+   - 关键输出：`dist/index.js 641.89 kB`，构建通过。
 
-2. Team 生命周期验证
+2. MCP 图片工具 schema 验证
+   - 命令：`node mcp/siyuan-mcp/index.cjs` + `tools/list`（JSON-RPC）
+   - 结果：通过
+   - 关键输出：4 个图片工具均包含：
+     - `mode=["append","prepend","after","before"]`
+     - `anchorBlockId=true`
+     - `dryRun=true`
+
+3. Team 生命周期验证
    - 启动：`Team started: 1-2-3`
    - 完成：`pending=0 in_progress=0 completed=3 failed=0`
    - 关闭：`Team shutdown complete: 1-2-3` + `No team state found`
 
 ## 后续行动项
-- [ ] 功能候选：MCP 图片工具 `dryRun` + `anchorBlockId` 定位插入
-- [ ] 功能候选：Git Auto Sync `dry-run`（仅预览命令/文件，不落盘）
-- [ ] 功能候选：工具自检升级为“可执行自检（含耗时/成功率）”
+- [ ] 功能候选：网页截图增加本地 fallback（外网截图源不可用时自动退回本地截图）
 
 ## 状态更新（2026-02-16，worker-3，C 项）
 ### 本轮完成项

@@ -256,6 +256,7 @@
     let gitRemoteUrl = '';
     let gitBranch = '';
     let gitSyncScope: 'notes' | 'repo' = 'notes';
+    let gitAutoSyncDryRun = false;
     let gitCommitMessage = '';
     let gitLog = '';
     let gitIsRunning = false;
@@ -680,6 +681,202 @@
         });
     }
 
+    function parseSiyuanMcpToolCallPayload(result: any): any {
+        const content = Array.isArray(result?.content) ? result.content : [];
+        const textPart = content.find(
+            (item: any) => item && item.type === 'text' && typeof item.text === 'string'
+        );
+        const rawText = String(textPart?.text || '').trim();
+        if (!rawText) return null;
+        try {
+            return JSON.parse(rawText);
+        } catch {
+            return rawText;
+        }
+    }
+
+    function extractNotebookIdFromPayload(payload: any): string {
+        const candidates: any[] = [];
+        if (Array.isArray(payload)) {
+            candidates.push(...payload);
+        } else if (payload && typeof payload === 'object') {
+            if (Array.isArray(payload.notebooks)) {
+                candidates.push(...payload.notebooks);
+            }
+            if (Array.isArray(payload.data?.notebooks)) {
+                candidates.push(...payload.data.notebooks);
+            }
+            if (Array.isArray(payload.data)) {
+                candidates.push(...payload.data);
+            }
+        }
+        for (const item of candidates) {
+            const id =
+                String(item?.id || item?.notebook || item?.box || item?.notebookID || '').trim();
+            if (id) return id;
+        }
+        return '';
+    }
+
+    function summarizeSiyuanMcpPayload(payload: any): string {
+        if (payload === null || payload === undefined) return 'ok';
+        if (typeof payload === 'string') {
+            return payload.length > 80 ? `${payload.slice(0, 80)}...` : payload;
+        }
+        if (Array.isArray(payload)) {
+            return `array(${payload.length})`;
+        }
+        if (typeof payload === 'object') {
+            const keys = Object.keys(payload);
+            if (Array.isArray((payload as any).notebooks)) {
+                return `notebooks=${(payload as any).notebooks.length}`;
+            }
+            if (Array.isArray((payload as any).data?.notebooks)) {
+                return `notebooks=${(payload as any).data.notebooks.length}`;
+            }
+            if (Array.isArray((payload as any).data)) {
+                return `data=${(payload as any).data.length}`;
+            }
+            return keys.length ? `keys:${keys.slice(0, 4).join(',')}` : 'object';
+        }
+        return String(payload);
+    }
+
+    async function callSiyuanMcpToolFromPlugin(
+        name: string,
+        args: Record<string, any>,
+        timeoutMs = 8000
+    ): Promise<{ ok: boolean; durationMs: number; payload?: any; error?: string }> {
+        const begin = Date.now();
+        const childProcess = nodeRequireForSidebar<any>('child_process');
+        const fs = nodeRequireForSidebar<any>('fs');
+        const { scriptPath, candidates } = resolveSiyuanMcpScriptPath();
+        if (!fs.existsSync(scriptPath)) {
+            const details = candidates.slice(0, 5).join(' | ');
+            throw new Error(`未找到 MCP 脚本：${scriptPath}${details ? `（尝试路径：${details}）` : ''}`);
+        }
+
+        const env: Record<string, string> = { ...(globalThis as any)?.process?.env };
+        if (settings?.siyuanApiUrl) {
+            env.SIYUAN_API_URL = String(settings.siyuanApiUrl).trim();
+        }
+        if (settings?.siyuanApiToken) {
+            env.SIYUAN_API_TOKEN = String(settings.siyuanApiToken).trim();
+        }
+        env.SIYUAN_MCP_READ_ONLY = '1';
+
+        try {
+            const payload = await new Promise<any>((resolve, reject) => {
+                const child = childProcess.spawn('node', [scriptPath], {
+                    env,
+                    shell: isWindowsPlatform(),
+                    windowsHide: true,
+                });
+
+                const stderrLines: string[] = [];
+                let stdoutBuf = '';
+                let settled = false;
+                let timeout: any = null;
+
+                const finish = (error?: Error, value?: any) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeout);
+                    try {
+                        child.kill();
+                    } catch {
+                        // ignore
+                    }
+                    if (error) reject(error);
+                    else resolve(value);
+                };
+
+                const onJsonLine = (line: string) => {
+                    if (!line.trim()) return;
+                    let msg: any = null;
+                    try {
+                        msg = JSON.parse(line);
+                    } catch {
+                        return;
+                    }
+                    if (msg?.id !== 2) return;
+                    if (msg.error) {
+                        finish(
+                            new Error(
+                                msg.error?.message ||
+                                    `${name} 执行失败${stderrLines.length ? `: ${stderrLines.join(' | ')}` : ''}`
+                            )
+                        );
+                        return;
+                    }
+                    finish(undefined, parseSiyuanMcpToolCallPayload(msg.result));
+                };
+
+                child.on('error', (err: Error) =>
+                    finish(new Error(`启动 MCP 进程失败：${err.message}`))
+                );
+
+                child.stdout?.on('data', (chunk: any) => {
+                    stdoutBuf += String(chunk);
+                    while (true) {
+                        const idx = stdoutBuf.indexOf('\n');
+                        if (idx < 0) break;
+                        const line = stdoutBuf.slice(0, idx).replace(/\r$/, '');
+                        stdoutBuf = stdoutBuf.slice(idx + 1);
+                        onJsonLine(line);
+                    }
+                });
+
+                child.stderr?.on('data', (chunk: any) => {
+                    const lines = String(chunk)
+                        .split(/\r?\n/)
+                        .map(s => s.trim())
+                        .filter(Boolean);
+                    stderrLines.push(...lines);
+                });
+
+                timeout = setTimeout(() => {
+                    finish(
+                        new Error(
+                            `${name} 调用超时${
+                                stderrLines.length > 0 ? `: ${stderrLines.slice(-3).join(' | ')}` : ''
+                            }`
+                        )
+                    );
+                }, timeoutMs);
+
+                try {
+                    child.stdin?.write(
+                        `${JSON.stringify({
+                            jsonrpc: '2.0',
+                            id: 1,
+                            method: 'initialize',
+                            params: { protocolVersion: '2024-11-05' },
+                        })}\n`
+                    );
+                    child.stdin?.write(
+                        `${JSON.stringify({
+                            jsonrpc: '2.0',
+                            id: 2,
+                            method: 'tools/call',
+                            params: { name, arguments: args || {} },
+                        })}\n`
+                    );
+                    child.stdin?.end();
+                } catch (e) {
+                    finish(new Error(`向 MCP 进程发送请求失败：${(e as Error).message}`));
+                }
+            });
+            return { ok: true, durationMs: Date.now() - begin, payload };
+        } catch (error) {
+            return {
+                ok: false,
+                durationMs: Date.now() - begin,
+                error: (error as Error)?.message || String(error),
+            };
+        }
+    }
+
     async function runCodexToolSelfCheck() {
         if (isCheckingCodexTools) return;
         isCheckingCodexTools = true;
@@ -690,24 +887,107 @@
                 .map(tool => String(tool.name || '').trim())
                 .filter(Boolean)
                 .sort((a, b) => a.localeCompare(b));
+            const nameSet = new Set(names);
+
+            type ExecutableCheckItem = {
+                name: string;
+                ok: boolean;
+                durationMs: number;
+                summary: string;
+            };
+            const executableChecks: ExecutableCheckItem[] = [];
+            let notebookId = '';
+
+            if (nameSet.has('siyuan_list_notebooks')) {
+                const check = await callSiyuanMcpToolFromPlugin('siyuan_list_notebooks', {});
+                if (check.ok) {
+                    notebookId = extractNotebookIdFromPayload(check.payload);
+                }
+                executableChecks.push({
+                    name: 'siyuan_list_notebooks',
+                    ok: check.ok,
+                    durationMs: check.durationMs,
+                    summary: check.ok
+                        ? summarizeSiyuanMcpPayload(check.payload)
+                        : String(check.error || 'unknown error'),
+                });
+            }
+
+            if (nameSet.has('siyuan_sql_query')) {
+                const check = await callSiyuanMcpToolFromPlugin('siyuan_sql_query', {
+                    sql: 'select id from blocks limit 1',
+                });
+                executableChecks.push({
+                    name: 'siyuan_sql_query',
+                    ok: check.ok,
+                    durationMs: check.durationMs,
+                    summary: check.ok
+                        ? summarizeSiyuanMcpPayload(check.payload)
+                        : String(check.error || 'unknown error'),
+                });
+            }
+
+            if (notebookId && nameSet.has('siyuan_get_doc_tree')) {
+                const check = await callSiyuanMcpToolFromPlugin('siyuan_get_doc_tree', {
+                    notebook: notebookId,
+                });
+                executableChecks.push({
+                    name: 'siyuan_get_doc_tree',
+                    ok: check.ok,
+                    durationMs: check.durationMs,
+                    summary: check.ok
+                        ? summarizeSiyuanMcpPayload(check.payload)
+                        : String(check.error || 'unknown error'),
+                });
+            }
+
+            const checksPassed = executableChecks.filter(item => item.ok).length;
+            const checksTotal = executableChecks.length;
+            const totalCheckCostMs = executableChecks.reduce(
+                (sum, item) => sum + Number(item.durationMs || 0),
+                0
+            );
+            const statusText =
+                checksTotal === 0
+                    ? t('aiSidebar.codex.toolCheckPassed') || '通过'
+                    : checksPassed === checksTotal
+                    ? t('aiSidebar.codex.toolCheckPassed') || '通过'
+                    : checksPassed > 0
+                    ? t('aiSidebar.codex.toolCheckPartial') || '部分通过'
+                    : t('aiSidebar.codex.toolCheckFailedShort') || '失败';
 
             const reportLines = [
                 `### ${t('aiSidebar.codex.toolCheckReportTitle') || 'Codex 工具自检'}`,
-                `- 状态：${t('aiSidebar.codex.toolCheckPassed') || '通过'}`,
+                `- 状态：${statusText}`,
                 `- ${t('aiSidebar.codex.toolCount') || '工具数量'}：${names.length}`,
+                `- 可执行检查：${checksPassed}/${checksTotal}`,
+                checksTotal > 0 ? `- 可执行检查总耗时：${totalCheckCostMs} ms` : '',
                 '',
+                ...(checksTotal > 0
+                    ? [
+                          '#### 可执行检查明细',
+                          ...executableChecks.map(item => {
+                              const flag = item.ok ? '✅' : '❌';
+                              return `- ${flag} \`${item.name}\` · ${item.durationMs} ms · ${item.summary}`;
+                          }),
+                          '',
+                      ]
+                    : []),
+                '#### tools/list 清单',
                 ...names.map(name => `- \`${name}\``),
-            ];
+            ].filter(Boolean);
 
             messages = [...messages, { role: 'assistant', content: reportLines.join('\n') }];
             hasUnsavedChanges = true;
             await saveCurrentSession(true);
 
             pushMsg(
-                (t('aiSidebar.codex.toolCheckSuccess') || 'Codex 工具自检完成，共 {count} 个工具').replace(
-                    '{count}',
-                    String(names.length)
-                )
+                checksTotal > 0
+                    ? `Codex 工具自检完成：可执行检查 ${checksPassed}/${checksTotal}，工具数 ${names.length}`
+                    : (t('aiSidebar.codex.toolCheckSuccess') || 'Codex 工具自检完成，共 {count} 个工具').replace(
+                          '{count}',
+                          String(names.length)
+                      )
             );
         } catch (error) {
             const detail = (error as Error)?.message || String(error);
@@ -10642,6 +10922,7 @@
             '- SIYUAN_CODEX_GIT_PULL_AUTOSTASH=1：rebase pull 自动暂存本地改动（默认开启）',
             '- SIYUAN_CODEX_GIT_SYNC_SCOPE=notes|repo：同步范围（notes=仅笔记）',
             '- SIYUAN_CODEX_GIT_NOTES_ONLY=1：只同步笔记（等价于 SYNC_SCOPE=notes）',
+            '- SIYUAN_CODEX_GIT_DRY_RUN=1：自动同步以 dry-run 预览模式运行（不写操作）',
             '- SIYUAN_CODEX_GIT_AUTO_SYNC=1：打开对话框自动同步',
             '- SIYUAN_CODEX_GIT_COMMIT_MESSAGE：自动提交信息',
         ];
@@ -10843,6 +11124,12 @@
             patch.codexGitAutoSyncEnabled = parsedAutoSync;
         }
 
+        const envDryRun = getEnvFirst(['SIYUAN_CODEX_GIT_DRY_RUN']);
+        const parsedDryRun = parseEnvBool(envDryRun);
+        if (parsedDryRun !== null) {
+            patch.codexGitAutoSyncDryRun = parsedDryRun;
+        }
+
         const envCommitMessage = getEnvFirst(['SIYUAN_CODEX_GIT_COMMIT_MESSAGE']);
         if (!String((settings as any)?.codexGitAutoCommitMessage || '').trim() && envCommitMessage) {
             patch.codexGitAutoCommitMessage = envCommitMessage;
@@ -10888,6 +11175,7 @@
         gitBranch = String((settings as any)?.codexGitBranch || '').trim();
         gitSyncScope =
             normalizeGitSyncScope(String((settings as any)?.codexGitSyncScope || '')) || 'notes';
+        gitAutoSyncDryRun = (settings as any)?.codexGitAutoSyncDryRun === true;
         gitCommitMessage = '';
         gitLog = '';
         gitLastExitCode = null;
@@ -11211,7 +11499,16 @@
         return tpl.replace('{ts}', ts).replace('{time}', ts);
     }
 
-    async function runGitAutoSync() {
+    function formatGitCommandArgsForLog(args: string[]): string {
+        return (Array.isArray(args) ? args : [])
+            .map(arg => {
+                const value = String(arg ?? '');
+                return /[\s"']/g.test(value) ? JSON.stringify(value) : value;
+            })
+            .join(' ');
+    }
+
+    async function runGitAutoSync(options?: { dryRun?: boolean }) {
         if (gitIsRunning) {
             pushErrMsg('Git 正在运行中，请稍后再试');
             return;
@@ -11228,17 +11525,19 @@
 
         gitIsRunning = true;
         gitLastExitCode = null;
-        appendGitLogLine('== Auto Sync ==');
-        appendGitLogLine(`(scope: ${resolveGitSyncScope()})`);
+        const dryRun = options?.dryRun ?? gitAutoSyncDryRun === true;
+        appendGitLogLine(dryRun ? '== Auto Sync (Dry Run) ==' : '== Auto Sync ==');
+        appendGitLogLine(`(scope: ${resolveGitSyncScope()}${dryRun ? ', dry-run' : ''})`);
 
         const cliPath = resolveGitCliPath();
+        const cliLabel = cliPath || 'git';
         const accept0 = [0];
 
         const runStep = async (
             args: string[],
             options?: { timeoutMs?: number; acceptExitCodes?: number[] }
         ) => {
-            appendGitLogLine(`$ ${(cliPath || 'git')} ${args.join(' ')}`);
+            appendGitLogLine(`$ ${cliLabel} ${args.join(' ')}`);
             const handle = runGitCommand({
                 cliPath,
                 cwd,
@@ -11261,6 +11560,10 @@
                 appendGitHintsIfNeeded(res.stderr || res.stdout || '');
             }
             return { ok, aborted: false, res };
+        };
+        const previewWriteStep = (args: string[], note?: string) => {
+            appendGitLogLine(`[dry-run] $ ${cliLabel} ${formatGitCommandArgsForLog(args)}`);
+            if (note) appendGitLogLine(`[dry-run] ${note}`);
         };
 
         try {
@@ -11312,13 +11615,20 @@
             } else {
                 const url = String(gitRemoteUrl || '').trim();
                 if (url) {
-                    const addRemote = await runStep(['remote', 'add', preferredRemote, url], {
-                        timeoutMs: 15000,
-                        acceptExitCodes: [0],
-                    });
-                    if (!addRemote.ok) {
-                        pushErrMsg('remote 配置失败');
-                        return;
+                    if (dryRun) {
+                        previewWriteStep(
+                            ['remote', 'add', preferredRemote, url],
+                            'skip write: add remote'
+                        );
+                    } else {
+                        const addRemote = await runStep(['remote', 'add', preferredRemote, url], {
+                            timeoutMs: 15000,
+                            acceptExitCodes: [0],
+                        });
+                        if (!addRemote.ok) {
+                            pushErrMsg('remote 配置失败');
+                            return;
+                        }
                     }
                     gitRemoteName = preferredRemote;
                     hasRemote = true;
@@ -11362,10 +11672,14 @@
             if (hasUpstream) {
                 const pullArgs = ['pull'];
                 appendGitPullArgs(pullArgs);
-                const pull = await runStep(pullArgs, { timeoutMs: 120000, acceptExitCodes: [0] });
-                if (!pull.ok) {
-                    pushErrMsg('git pull 失败');
-                    return;
+                if (dryRun) {
+                    previewWriteStep(pullArgs, 'skip write: pull');
+                } else {
+                    const pull = await runStep(pullArgs, { timeoutMs: 120000, acceptExitCodes: [0] });
+                    if (!pull.ok) {
+                        pushErrMsg('git pull 失败');
+                        return;
+                    }
                 }
             } else if (hasRemote && String(gitBranch || '').trim()) {
                 const remote = String(gitRemoteName || 'origin').trim() || 'origin';
@@ -11373,10 +11687,14 @@
                 const pullArgs = ['pull'];
                 appendGitPullArgs(pullArgs);
                 pullArgs.push(remote, branch);
-                const pull = await runStep(pullArgs, { timeoutMs: 120000, acceptExitCodes: [0] });
-                if (!pull.ok) {
-                    pushErrMsg('git pull 失败');
-                    return;
+                if (dryRun) {
+                    previewWriteStep(pullArgs, 'skip write: pull');
+                } else {
+                    const pull = await runStep(pullArgs, { timeoutMs: 120000, acceptExitCodes: [0] });
+                    if (!pull.ok) {
+                        pushErrMsg('git pull 失败');
+                        return;
+                    }
                 }
             } else {
                 appendGitLogLine('(skip pull: no upstream)');
@@ -11403,14 +11721,41 @@
                     appendGitLogLine('(skip commit: no note changes)');
                 } else {
                     appendGitLogLine(`(notes-only: ${notePaths.length} paths)`);
-                    const add = await runStep(['add', '-A', '--', ...specs], {
-                        timeoutMs: 60000,
-                        acceptExitCodes: [0],
-                    });
+                    const msg = buildAutoCommitMessage();
+                    if (dryRun) {
+                        previewWriteStep(['add', '-A', '--', ...specs], 'skip write: add');
+                        previewWriteStep(
+                            ['commit', '-m', msg, '--', ...specs],
+                            'skip write: commit'
+                        );
+                    } else {
+                        const add = await runStep(['add', '-A', '--', ...specs], {
+                            timeoutMs: 60000,
+                            acceptExitCodes: [0],
+                        });
+                        if (!add.ok) return;
+
+                        const commit = await runStep(['commit', '-m', msg, '--', ...specs], {
+                            timeoutMs: 60000,
+                            // 1: nothing to commit
+                            acceptExitCodes: [0, 1],
+                        });
+                        if (!commit.ok && commit.res.exitCode !== 1) {
+                            pushErrMsg('git commit 失败');
+                            return;
+                        }
+                    }
+                }
+            } else {
+                const msg = buildAutoCommitMessage();
+                if (dryRun) {
+                    previewWriteStep(['add', '-A'], 'skip write: add');
+                    previewWriteStep(['commit', '-m', msg], 'skip write: commit');
+                } else {
+                    const add = await runStep(['add', '-A'], { timeoutMs: 30000, acceptExitCodes: [0] });
                     if (!add.ok) return;
 
-                    const msg = buildAutoCommitMessage();
-                    const commit = await runStep(['commit', '-m', msg, '--', ...specs], {
+                    const commit = await runStep(['commit', '-m', msg], {
                         timeoutMs: 60000,
                         // 1: nothing to commit
                         acceptExitCodes: [0, 1],
@@ -11420,50 +11765,52 @@
                         return;
                     }
                 }
-            } else {
-                const add = await runStep(['add', '-A'], { timeoutMs: 30000, acceptExitCodes: [0] });
-                if (!add.ok) return;
-
-                const msg = buildAutoCommitMessage();
-                const commit = await runStep(['commit', '-m', msg], {
-                    timeoutMs: 60000,
-                    // 1: nothing to commit
-                    acceptExitCodes: [0, 1],
-                });
-                if (!commit.ok && commit.res.exitCode !== 1) {
-                    pushErrMsg('git commit 失败');
-                    return;
-                }
             }
 
             // push（优先 upstream；否则 remote+branch；否则跳过）
             if (hasUpstream) {
-                const push = await runStep(['push'], { timeoutMs: 120000, acceptExitCodes: [0] });
-                if (!push.ok) {
-                    pushErrMsg('git push 失败');
-                    return;
+                if (dryRun) {
+                    previewWriteStep(['push'], 'skip write: push');
+                } else {
+                    const push = await runStep(['push'], { timeoutMs: 120000, acceptExitCodes: [0] });
+                    if (!push.ok) {
+                        pushErrMsg('git push 失败');
+                        return;
+                    }
                 }
             } else if (hasRemote && String(gitBranch || '').trim()) {
                 const remote = String(gitRemoteName || 'origin').trim() || 'origin';
                 const branch = String(gitBranch || '').trim();
-                const push = await runStep(['push', '-u', remote, branch], {
-                    timeoutMs: 120000,
-                    acceptExitCodes: [0],
-                });
-                if (!push.ok) {
-                    pushErrMsg('git push 失败');
-                    return;
+                if (dryRun) {
+                    previewWriteStep(['push', '-u', remote, branch], 'skip write: push');
+                } else {
+                    const push = await runStep(['push', '-u', remote, branch], {
+                        timeoutMs: 120000,
+                        acceptExitCodes: [0],
+                    });
+                    if (!push.ok) {
+                        pushErrMsg('git push 失败');
+                        return;
+                    }
                 }
             } else {
                 appendGitLogLine('(skip push: no upstream/remote/branch)');
             }
 
-            appendGitLogLine('== Auto Sync Done ==');
-            pushMsg(t('aiSidebar.git.autoSyncDone') || '同步完成');
+            appendGitLogLine(dryRun ? '== Auto Sync Dry-run Done ==' : '== Auto Sync Done ==');
+            if (dryRun) {
+                pushMsg('Dry-run 预览完成，未执行写操作');
+            } else {
+                pushMsg(t('aiSidebar.git.autoSyncDone') || '同步完成');
+            }
         } catch (error) {
             appendGitLogLine((error as Error).message || String(error));
             appendGitHintsIfNeeded((error as Error).message || String(error));
-            pushErrMsg(t('aiSidebar.git.autoSyncFailed') || '同步失败');
+            pushErrMsg(
+                dryRun
+                    ? 'Dry-run 预览失败'
+                    : t('aiSidebar.git.autoSyncFailed') || '同步失败'
+            );
         } finally {
             if (token === gitAutoSyncToken) {
                 gitIsRunning = false;
@@ -16018,6 +16365,26 @@
                         </div>
 
                         <div class="ai-sidebar__git-row">
+                            <div class="ai-sidebar__git-label">Dry-run</div>
+                            <label class="fn__flex-1" style="display:flex;align-items:center;gap:8px;">
+                                <input
+                                    type="checkbox"
+                                    checked={gitAutoSyncDryRun}
+                                    on:change={async e => {
+                                        gitAutoSyncDryRun = !!e.target.checked;
+                                        await updateGitSettingsPatch({
+                                            codexGitAutoSyncDryRun: gitAutoSyncDryRun,
+                                        });
+                                    }}
+                                />
+                                <span style="font-size:12px;opacity:.8;">
+                                    {t('aiSidebar.git.dryRunHint') ||
+                                        '仅预览命令，不执行 pull/add/commit/push 等写操作'}
+                                </span>
+                            </label>
+                        </div>
+
+                        <div class="ai-sidebar__git-row">
                             <div class="ai-sidebar__git-label">
                                 {t('aiSidebar.git.commitMessage') || 'Commit'}
                             </div>
@@ -16041,6 +16408,8 @@
                         >
                             {gitIsRunning
                                 ? t('aiSidebar.git.autoSyncRunning') || '同步中...'
+                                : gitAutoSyncDryRun
+                                ? t('aiSidebar.git.autoSyncDryRun') || '一键预演'
                                 : t('aiSidebar.git.autoSync') || '一键同步'}
                         </button>
                         <button

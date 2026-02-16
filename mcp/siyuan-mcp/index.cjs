@@ -839,45 +839,117 @@ async function resolveDocInfoByBlockId(blockId) {
     };
 }
 
+function normalizeNoteImageInsertMode(rawMode, anchorBlockId) {
+    const modeRaw = String(rawMode || '')
+        .trim()
+        .toLowerCase();
+    if (!modeRaw) {
+        return String(anchorBlockId || '').trim() ? 'after' : 'append';
+    }
+    if (modeRaw === 'append' || modeRaw === 'prepend' || modeRaw === 'after' || modeRaw === 'before') {
+        return modeRaw;
+    }
+    throw new Error(`无效 mode：${rawMode}（仅支持 append/prepend/after/before）`);
+}
+
 async function insertAssetsToNote(params) {
     const noteBlockId = String(params?.noteBlockId || '').trim();
     if (!noteBlockId) throw new Error('缺少参数 noteBlockId');
     const assets = Array.isArray(params?.assets) ? params.assets : [];
     if (!assets.length) throw new Error('缺少参数 assets');
-    const mode = String(params?.mode || 'append').toLowerCase() === 'prepend' ? 'prepend' : 'append';
+    const anchorBlockId = String(params?.anchorBlockId || '').trim();
+    const mode = normalizeNoteImageInsertMode(params?.mode, anchorBlockId);
+    const dryRun = params?.dryRun === true;
     const altPrefix = String(params?.altPrefix || 'image').trim() || 'image';
 
     const docInfo = await resolveDocInfoByBlockId(noteBlockId);
+    if (mode === 'after' || mode === 'before') {
+        if (!anchorBlockId) {
+            throw new Error('mode 为 after/before 时必须提供 anchorBlockId');
+        }
+        const anchorDocInfo = await resolveDocInfoByBlockId(anchorBlockId);
+        if (String(anchorDocInfo.docId || '') !== String(docInfo.docId || '')) {
+            throw new Error(`anchorBlockId 不在同一文档中: ${anchorBlockId}`);
+        }
+    }
+
     const oldContent = await getBlockKramdownById(docInfo.docId);
     const oldContentForDisplay = await getBlockMarkdownById(docInfo.docId);
     const imageMarkdown = buildImageMarkdown(assets, altPrefix);
     if (!imageMarkdown.trim()) throw new Error('无可写入的图片资源');
 
-    const result =
-        mode === 'prepend'
-            ? await siyuanFetch('/api/block/prependBlock', {
-                  dataType: 'markdown',
-                  data: imageMarkdown,
-                  parentID: docInfo.docId,
-              })
-            : await siyuanFetch('/api/block/appendBlock', {
-                  dataType: 'markdown',
-                  data: imageMarkdown,
-                  parentID: docInfo.docId,
-              });
-
-    const newContent = await getBlockKramdownById(docInfo.docId);
-    const newContentForDisplay = await getBlockMarkdownById(docInfo.docId);
     const filePath =
         normalizeDocDisplayPath(docInfo.box, docInfo.hpath) ||
         normalizeDocFilePath(docInfo.box, docInfo.path) ||
         docInfo.docId;
 
+    const referenceBlockId = (mode === 'after' || mode === 'before') ? anchorBlockId : docInfo.docId;
+    const position = mode === 'prepend' ? 'before' : mode === 'append' ? 'after' : mode;
+    if (dryRun) {
+        const operation = {
+            kind: 'note_image_insert',
+            operationType: 'insert',
+            blockId: referenceBlockId,
+            filePath,
+            position,
+            oldContent: '',
+            oldContentForDisplay: '',
+            newContent: imageMarkdown,
+            newContentForDisplay: stripKramdownIdMarkers(imageMarkdown),
+            status: 'pending',
+        };
+        return {
+            note: {
+                docId: docInfo.docId,
+                title: docInfo.title || path.basename(filePath || docInfo.docId),
+                filePath,
+            },
+            mode,
+            anchorBlockId: anchorBlockId || undefined,
+            dryRun: true,
+            imageMarkdown,
+            result: {
+                ok: true,
+                dryRun: true,
+                skippedWrite: true,
+                message: 'dryRun enabled: no write operation executed',
+            },
+            operation,
+        };
+    }
+
+    let result;
+    if (mode === 'prepend') {
+        result = await siyuanFetch('/api/block/prependBlock', {
+            dataType: 'markdown',
+            data: imageMarkdown,
+            parentID: docInfo.docId,
+        });
+    } else if (mode === 'append') {
+        result = await siyuanFetch('/api/block/appendBlock', {
+            dataType: 'markdown',
+            data: imageMarkdown,
+            parentID: docInfo.docId,
+        });
+    } else {
+        result = await siyuanFetch('/api/block/insertBlock', {
+            dataType: 'markdown',
+            data: imageMarkdown,
+            parentID: docInfo.docId,
+            previousID: mode === 'after' ? anchorBlockId : undefined,
+            nextID: mode === 'before' ? anchorBlockId : undefined,
+        });
+    }
+
+    const newContent = await getBlockKramdownById(docInfo.docId);
+    const newContentForDisplay = await getBlockMarkdownById(docInfo.docId);
+
     const operation = {
         kind: 'note_image_insert',
         operationType: 'update',
-        blockId: docInfo.docId,
+        blockId: referenceBlockId,
         filePath,
+        position,
         oldContent,
         oldContentForDisplay,
         newContent,
@@ -891,6 +963,9 @@ async function insertAssetsToNote(params) {
             title: docInfo.title || path.basename(filePath || docInfo.docId),
             filePath,
         },
+        mode,
+        anchorBlockId: anchorBlockId || undefined,
+        dryRun: false,
         imageMarkdown,
         result,
         operation,
@@ -1209,6 +1284,8 @@ async function tool_siyuan_import_image_urls(args) {
         noteBlockId,
         assets: imported,
         mode: args?.mode,
+        anchorBlockId: args?.anchorBlockId,
+        dryRun: args?.dryRun === true,
         altPrefix: args?.altPrefix,
     });
     return {
@@ -1291,6 +1368,8 @@ async function tool_siyuan_extract_page_images(args) {
         noteBlockId,
         assets: successAssets,
         mode: args?.mode,
+        anchorBlockId: args?.anchorBlockId,
+        dryRun: args?.dryRun === true,
         altPrefix: args?.altPrefix,
     });
     return {
@@ -1364,6 +1443,8 @@ async function tool_siyuan_capture_webpage_screenshot(args) {
         noteBlockId,
         assets: [imported],
         mode: args?.mode,
+        anchorBlockId: args?.anchorBlockId,
+        dryRun: args?.dryRun === true,
         altPrefix: args?.altPrefix || 'screenshot',
     });
     return {
@@ -1379,7 +1460,9 @@ async function tool_siyuan_capture_webpage_screenshot(args) {
 }
 
 async function tool_siyuan_insert_images_to_note(args) {
-    assertWriteAllowed('siyuan_insert_images_to_note');
+    if (args?.dryRun !== true) {
+        assertWriteAllowed('siyuan_insert_images_to_note');
+    }
     const noteBlockId = String(args?.noteBlockId || '').trim();
     if (!noteBlockId) throw new Error('缺少参数 noteBlockId');
     const sourceAssets = Array.isArray(args?.assets) ? args.assets : [];
@@ -1408,6 +1491,8 @@ async function tool_siyuan_insert_images_to_note(args) {
         noteBlockId,
         assets: normalizedAssets,
         mode: args?.mode,
+        anchorBlockId: args?.anchorBlockId,
+        dryRun: args?.dryRun === true,
         altPrefix: args?.altPrefix,
     });
     return {
@@ -1700,7 +1785,7 @@ const TOOLS = [
     {
         name: 'siyuan_import_image_urls',
         description:
-            '下载图片 URL 并导入思源资源，可选直接写入笔记。参数：{ urls|string, limit?, noteBlockId?, mode?, altPrefix?, assetsDirPath? }',
+            '下载图片 URL 并导入思源资源，可选写入笔记。参数：{ urls|string, limit?, noteBlockId?, mode?, anchorBlockId?, dryRun?, altPrefix?, assetsDirPath? }；mode 支持 append/prepend/after/before',
         inputSchema: {
             type: 'object',
             properties: {
@@ -1708,7 +1793,9 @@ const TOOLS = [
                 url: { type: 'string' },
                 limit: { type: 'number' },
                 noteBlockId: { type: 'string' },
-                mode: { type: 'string', enum: ['append', 'prepend'] },
+                mode: { type: 'string', enum: ['append', 'prepend', 'after', 'before'] },
+                anchorBlockId: { type: 'string' },
+                dryRun: { type: 'boolean' },
                 altPrefix: { type: 'string' },
                 assetsDirPath: { type: 'string' },
             },
@@ -1718,7 +1805,7 @@ const TOOLS = [
     {
         name: 'siyuan_extract_page_images',
         description:
-            '抓取网页图片（og:image/img/srcset），可只返回URL或直接下载并写入笔记。参数：{ url, download?, limit?, noteBlockId?, mode?, altPrefix?, assetsDirPath? }',
+            '抓取网页图片（og:image/img/srcset），可只返回URL或直接下载并写入笔记。参数：{ url, download?, limit?, noteBlockId?, mode?, anchorBlockId?, dryRun?, altPrefix?, assetsDirPath? }；mode 支持 append/prepend/after/before',
         inputSchema: {
             type: 'object',
             properties: {
@@ -1726,7 +1813,9 @@ const TOOLS = [
                 download: { type: 'boolean' },
                 limit: { type: 'number' },
                 noteBlockId: { type: 'string' },
-                mode: { type: 'string', enum: ['append', 'prepend'] },
+                mode: { type: 'string', enum: ['append', 'prepend', 'after', 'before'] },
+                anchorBlockId: { type: 'string' },
+                dryRun: { type: 'boolean' },
                 altPrefix: { type: 'string' },
                 assetsDirPath: { type: 'string' },
             },
@@ -1737,7 +1826,7 @@ const TOOLS = [
     {
         name: 'siyuan_capture_webpage_screenshot',
         description:
-            '对网页做远程截图并导入思源资源，可选直接写入笔记。参数：{ url, width?, fullPage?, noteBlockId?, mode?, altPrefix?, assetsDirPath? }',
+            '对网页做远程截图并导入思源资源，可选写入笔记。参数：{ url, width?, fullPage?, noteBlockId?, mode?, anchorBlockId?, dryRun?, altPrefix?, assetsDirPath? }；mode 支持 append/prepend/after/before',
         inputSchema: {
             type: 'object',
             properties: {
@@ -1745,7 +1834,9 @@ const TOOLS = [
                 width: { type: 'number' },
                 fullPage: { type: 'boolean' },
                 noteBlockId: { type: 'string' },
-                mode: { type: 'string', enum: ['append', 'prepend'] },
+                mode: { type: 'string', enum: ['append', 'prepend', 'after', 'before'] },
+                anchorBlockId: { type: 'string' },
+                dryRun: { type: 'boolean' },
                 altPrefix: { type: 'string' },
                 assetsDirPath: { type: 'string' },
             },
@@ -1756,7 +1847,7 @@ const TOOLS = [
     {
         name: 'siyuan_insert_images_to_note',
         description:
-            '将已有图片资源路径写入笔记。参数：{ noteBlockId, assets, mode?, altPrefix? }，assets 支持 string[] 或 {assetPath|path, alt}[]',
+            '将已有图片资源路径写入笔记。参数：{ noteBlockId, assets, mode?, anchorBlockId?, dryRun?, altPrefix? }，assets 支持 string[] 或 {assetPath|path, alt}[]；mode 支持 append/prepend/after/before',
         inputSchema: {
             type: 'object',
             properties: {
@@ -1777,7 +1868,9 @@ const TOOLS = [
                         ],
                     },
                 },
-                mode: { type: 'string', enum: ['append', 'prepend'] },
+                mode: { type: 'string', enum: ['append', 'prepend', 'after', 'before'] },
+                anchorBlockId: { type: 'string' },
+                dryRun: { type: 'boolean' },
                 altPrefix: { type: 'string' },
             },
             required: ['noteBlockId', 'assets'],
