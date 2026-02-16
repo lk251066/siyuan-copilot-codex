@@ -75,6 +75,6 @@ node mcp/siyuan-mcp/index.cjs
 2. 可执行自检采用只读样例调用，属于健康检查，不覆盖所有工具分支。
 
 ## 后续行动项
-- [ ] 网页截图本地 fallback（外网截图服务不可用时自动降级）
+- [x] 网页截图本地 fallback（外网截图服务不可用时自动降级，见 `0177b24` 与 `progress-2026-02-16-screenshot-local-fallback.md`）
 - [ ] 针对 Git dry-run 补一条 UI 交互回归脚本（开关持久化 + 日志断言）
-- [ ] 针对 MCP `after/before` 增加端到端回归样例
+- [x] 针对 MCP `after/before` + fallback 增加自动化回归样例（`npm run test:mcp-fallback`）

@@ -106,7 +106,7 @@
    - 关闭：`Team shutdown complete: 1-2-3` + `No team state found`
 
 ## 后续行动项
-- [ ] 补回归：MCP `after/before` + `dryRun` 增加端到端样例
+- [x] 补回归：MCP `after/before` + `dryRun` 增加端到端样例（`npm run test:mcp-fallback`）
 - [ ] 补回归：Git Auto Sync dry-run UI 行为（开关持久化 + 日志断言）
 
 ## 状态更新（2026-02-16，worker-3，C 项）

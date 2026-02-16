@@ -54,9 +54,19 @@ node mcp/siyuan-mcp/index.cjs
   - `anchorBlockId=true`
   - `dryRun=true`
 
+### 验证 4：自动化回归脚本（远程失败 -> 本地 fallback）
+```bash
+npm run test:mcp-fallback
+```
+- 结果：通过（exit code 0）
+- 关键输出：
+  - `MCP fallback regression: PASS`
+  - `uploadCount=1`
+  - `captureProvider=local:.../fake-chrome.js`
+
 ## 风险与边界
 - 本地 fallback 依赖系统可用命令（浏览器/wkhtmltoimage/playwright），若都不可用会汇总失败原因并返回错误。
 - 在受限环境中（无 GUI/无可执行浏览器）可能依然失败，但失败信息会比之前更明确。
 
 ## 后续行动项
-- [ ] 增加一条可自动化的 E2E：模拟远程截图失败并断言本地 fallback 分支被触发。
+- [ ] 在 CI 环境补一条“有真实浏览器时”的截图 fallback 回归，替换当前 fake chrome 脚本场景。
