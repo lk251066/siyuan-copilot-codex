@@ -107,7 +107,8 @@
 
 ## 后续行动项
 - [x] 补回归：MCP `after/before` + `dryRun` 增加端到端样例（`npm run test:mcp-fallback`）
-- [ ] 补回归：Git Auto Sync dry-run UI 行为（开关持久化 + 日志断言）
+- [x] 补回归：Git Auto Sync dry-run 行为（开关持久化 + 日志断言，`npm run test:git-dryrun`）
+- [ ] 可选增强：补 Playwright 真 UI 交互回归（点击开关 + 执行按钮 + 检查日志）
 
 ## 状态更新（2026-02-16，worker-3，C 项）
 ### 本轮完成项

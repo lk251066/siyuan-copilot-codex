@@ -76,5 +76,5 @@ node mcp/siyuan-mcp/index.cjs
 
 ## 后续行动项
 - [x] 网页截图本地 fallback（外网截图服务不可用时自动降级，见 `0177b24` 与 `progress-2026-02-16-screenshot-local-fallback.md`）
-- [ ] 针对 Git dry-run 补一条 UI 交互回归脚本（开关持久化 + 日志断言）
+- [x] 针对 Git dry-run 补回归脚本（开关持久化 + 日志断言，见 `progress-2026-02-16-git-dryrun-regression.md`）
 - [x] 针对 MCP `after/before` + fallback 增加自动化回归样例（`npm run test:mcp-fallback`）
