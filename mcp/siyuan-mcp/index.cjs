@@ -23,10 +23,13 @@
 const readline = require('node:readline');
 const http = require('node:http');
 const https = require('node:https');
+const fs = require('node:fs');
+const os = require('node:os');
 const { URL } = require('node:url');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
+const { spawnSync } = require('node:child_process');
 
 const SIYUAN_API_URL = (process.env.SIYUAN_API_URL || 'http://127.0.0.1:6806').replace(/\/+$/, '');
 const SIYUAN_API_TOKEN = process.env.SIYUAN_API_TOKEN || '';
@@ -44,6 +47,16 @@ const REMOTE_USER_AGENT =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const REMOTE_PAGE_MIRROR_PREFIX =
     process.env.SIYUAN_MCP_PAGE_MIRROR_PREFIX || 'https://r.jina.ai/http://';
+const SIYUAN_MCP_LOCAL_SCREENSHOT_FALLBACK = (() => {
+    const raw = String(process.env.SIYUAN_MCP_LOCAL_SCREENSHOT_FALLBACK || '1')
+        .trim()
+        .toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+})();
+const LOCAL_SCREENSHOT_TIMEOUT_MS =
+    Number.parseInt(process.env.SIYUAN_MCP_LOCAL_SCREENSHOT_TIMEOUT_MS || '', 10) || 45000;
+const LOCAL_SCREENSHOT_HEIGHT =
+    Number.parseInt(process.env.SIYUAN_MCP_LOCAL_SCREENSHOT_HEIGHT || '', 10) || 3200;
 const RETRYABLE_ERROR_CODES = new Set([
     'ECONNRESET',
     'ETIMEDOUT',
@@ -1024,6 +1037,166 @@ async function importImageFromUrl(params) {
     };
 }
 
+function cleanupTempDirSafe(tempDir) {
+    try {
+        if (tempDir && fs.existsSync(tempDir)) {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    } catch {
+        // ignore cleanup errors
+    }
+}
+
+function getLocalScreenshotCommandCandidates({ pageUrl, outputPath, width, fullPage }) {
+    const candidates = [];
+    const height = fullPage ? Math.max(1200, LOCAL_SCREENSHOT_HEIGHT) : 1200;
+    const chromeBin = String(process.env.SIYUAN_MCP_CHROME_BIN || '').trim();
+    const chromeBins = Array.from(
+        new Set(
+            [
+                chromeBin,
+                'chromium',
+                'chromium-browser',
+                'google-chrome',
+                'google-chrome-stable',
+                'microsoft-edge',
+                'msedge',
+            ]
+                .map((v) => String(v || '').trim())
+                .filter(Boolean)
+        )
+    );
+    for (const bin of chromeBins) {
+        candidates.push({
+            provider: `local:${bin}`,
+            cmd: bin,
+            args: [
+                '--headless',
+                '--disable-gpu',
+                '--hide-scrollbars',
+                `--window-size=${width},${height}`,
+                `--screenshot=${outputPath}`,
+                pageUrl,
+            ],
+        });
+    }
+
+    candidates.push({
+        provider: 'local:wkhtmltoimage',
+        cmd: 'wkhtmltoimage',
+        args: [
+            '--quiet',
+            '--width',
+            String(width),
+            ...(fullPage ? ['--height', String(height)] : []),
+            pageUrl,
+            outputPath,
+        ],
+    });
+
+    const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    candidates.push({
+        provider: 'local:playwright-cli',
+        cmd: npxCmd,
+        args: [
+            '--yes',
+            'playwright',
+            'screenshot',
+            ...(fullPage ? ['--full-page'] : []),
+            pageUrl,
+            outputPath,
+        ],
+    });
+
+    return candidates;
+}
+
+function runLocalScreenshotCommand(candidate, outputPath) {
+    const timeoutMs = Math.max(5000, Math.min(LOCAL_SCREENSHOT_TIMEOUT_MS, 20000));
+    const res = spawnSync(candidate.cmd, candidate.args, {
+        encoding: 'utf8',
+        timeout: timeoutMs,
+        windowsHide: true,
+    });
+    if (res.error) {
+        const code = String(res.error.code || res.error.message || 'unknown');
+        return { ok: false, reason: `${candidate.provider} spawn failed: ${code}` };
+    }
+    if (res.status !== 0) {
+        const stderr = String(res.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-2).join(' | ');
+        const stdout = String(res.stdout || '').trim().split(/\r?\n/).filter(Boolean).slice(-1).join(' | ');
+        const reason = stderr || stdout || `exit ${res.status}`;
+        return { ok: false, reason: `${candidate.provider} failed: ${reason}` };
+    }
+    if (!fs.existsSync(outputPath)) {
+        return { ok: false, reason: `${candidate.provider} finished but screenshot file missing` };
+    }
+    const stat = fs.statSync(outputPath);
+    if (!stat.isFile() || stat.size <= 0) {
+        return { ok: false, reason: `${candidate.provider} screenshot file is empty` };
+    }
+    return { ok: true, provider: candidate.provider, size: stat.size };
+}
+
+async function captureWebpageScreenshotLocally(params) {
+    const pageUrl = String(params?.url || '').trim();
+    if (!pageUrl) throw new Error('缺少参数 url');
+    const width = Number.isFinite(Number(params?.width))
+        ? Math.max(320, Math.min(Number(params.width), 2560))
+        : 1440;
+    const fullPage = params?.fullPage !== false;
+    const captureName = String(params?.fileName || `screenshot-${Date.now()}`).trim() || `screenshot-${Date.now()}`;
+    const finalName = ensureFileExt(captureName, 'image/png', { forceByMime: true });
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siyuan-mcp-shot-'));
+    const outputPath = path.join(tempDir, finalName);
+    const failures = [];
+
+    try {
+        const candidates = getLocalScreenshotCommandCandidates({
+            pageUrl,
+            outputPath,
+            width,
+            fullPage,
+        });
+        let captureMeta = null;
+        for (const candidate of candidates) {
+            const result = runLocalScreenshotCommand(candidate, outputPath);
+            if (result.ok) {
+                captureMeta = result;
+                break;
+            }
+            failures.push(result.reason);
+        }
+        if (!captureMeta) {
+            throw new Error(`本地截图失败: ${failures.slice(-4).join(' | ') || 'no available local command'}`);
+        }
+
+        const fileBuffer = fs.readFileSync(outputPath);
+        const uploaded = await uploadImageBufferToSiyuan({
+            fileName: finalName,
+            mimeType: 'image/png',
+            fileBuffer,
+            assetsDirPath: resolveAssetsDirPath(params?.assetsDirPath),
+        });
+        return {
+            sourceUrl: pageUrl,
+            sourcePage: pageUrl,
+            fileName: finalName,
+            mimeType: 'image/png',
+            size: fileBuffer.length,
+            sha256: crypto.createHash('sha256').update(fileBuffer).digest('hex'),
+            assetPath: uploaded.assetPath,
+            uploadedRaw: uploaded.rawData,
+            captureProvider: captureMeta.provider,
+            localFallbackUsed: true,
+            localFallbackFailures: failures,
+        };
+    } finally {
+        cleanupTempDirSafe(tempDir);
+    }
+}
+
 function normalizeUrlsInput(args) {
     if (Array.isArray(args?.urls)) {
         return args.urls.map((u) => String(u || '').trim()).filter(Boolean);
@@ -1409,6 +1582,9 @@ async function tool_siyuan_capture_webpage_screenshot(args) {
 
     let imported = null;
     let lastErr = null;
+    const remoteErrors = [];
+    let localFallbackUsed = false;
+    const localFallbackFailures = [];
     for (const candidate of candidates) {
         try {
             imported = await importImageFromUrl({
@@ -1421,12 +1597,53 @@ async function tool_siyuan_capture_webpage_screenshot(args) {
             break;
         } catch (err) {
             lastErr = err;
+            remoteErrors.push(
+                `${candidate}: ${err && err.message ? err.message : String(err)}`
+            );
         }
     }
+
+    if (!imported && SIYUAN_MCP_LOCAL_SCREENSHOT_FALLBACK) {
+        try {
+            imported = await captureWebpageScreenshotLocally({
+                url: page.href,
+                width,
+                fullPage,
+                fileName: `screenshot-${Date.now()}`,
+                assetsDirPath: args?.assetsDirPath,
+            });
+            imported.captureProviderUrl = imported.captureProvider || 'local';
+            localFallbackUsed = true;
+            if (Array.isArray(imported.localFallbackFailures)) {
+                localFallbackFailures.push(...imported.localFallbackFailures);
+            }
+        } catch (err) {
+            lastErr = err;
+            localFallbackFailures.push(
+                err && err.message ? err.message : String(err)
+            );
+        }
+    }
+
     if (!imported) {
+        const allErrors = [
+            ...remoteErrors,
+            ...localFallbackFailures.map((line) => `local: ${line}`),
+        ]
+            .filter(Boolean)
+            .slice(-6)
+            .join(' | ');
         throw new Error(
-            `页面截图失败: ${lastErr && lastErr.message ? lastErr.message : String(lastErr)}`
+            `页面截图失败: ${allErrors || (lastErr && lastErr.message ? lastErr.message : String(lastErr))}`
         );
+    }
+
+    const warnings = [];
+    if (remoteErrors.length > 0) {
+        warnings.push(...remoteErrors);
+    }
+    if (localFallbackFailures.length > 0) {
+        warnings.push(...localFallbackFailures);
     }
 
     const noteBlockId = String(args?.noteBlockId || '').trim();
@@ -1436,6 +1653,8 @@ async function tool_siyuan_capture_webpage_screenshot(args) {
             tool: 'siyuan_capture_webpage_screenshot',
             url: page.href,
             asset: imported,
+            localFallbackUsed,
+            warnings,
         };
     }
 
@@ -1456,6 +1675,8 @@ async function tool_siyuan_capture_webpage_screenshot(args) {
         operation: inserted.operation,
         result: inserted.result,
         imageMarkdown: inserted.imageMarkdown,
+        localFallbackUsed,
+        warnings,
     };
 }
 
@@ -1826,7 +2047,7 @@ const TOOLS = [
     {
         name: 'siyuan_capture_webpage_screenshot',
         description:
-            '对网页做远程截图并导入思源资源，可选写入笔记。参数：{ url, width?, fullPage?, noteBlockId?, mode?, anchorBlockId?, dryRun?, altPrefix?, assetsDirPath? }；mode 支持 append/prepend/after/before',
+            '对网页截图并导入思源资源（远程失败时自动尝试本地截图 fallback），可选写入笔记。参数：{ url, width?, fullPage?, noteBlockId?, mode?, anchorBlockId?, dryRun?, altPrefix?, assetsDirPath? }；mode 支持 append/prepend/after/before',
         inputSchema: {
             type: 'object',
             properties: {

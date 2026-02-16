@@ -72,6 +72,7 @@
    - 最小验证：`dryRun=true` 时只返回预览不写入；`after+anchorBlockId` 可写到指定块后。
 
 3. **网页截图增加本地 fallback（中收益/中复杂）**
+   - 状态：✅ 已完成（2026-02-16）
    - 证据：`mcp/siyuan-mcp/index.cjs:1324-1329` 仅依赖远程截图服务。
    - 最小验证：禁用外网截图源时，仍可通过本地方案生成截图资源并插入笔记。
 
@@ -105,7 +106,8 @@
    - 关闭：`Team shutdown complete: 1-2-3` + `No team state found`
 
 ## 后续行动项
-- [ ] 功能候选：网页截图增加本地 fallback（外网截图源不可用时自动退回本地截图）
+- [ ] 补回归：MCP `after/before` + `dryRun` 增加端到端样例
+- [ ] 补回归：Git Auto Sync dry-run UI 行为（开关持久化 + 日志断言）
 
 ## 状态更新（2026-02-16，worker-3，C 项）
 ### 本轮完成项
