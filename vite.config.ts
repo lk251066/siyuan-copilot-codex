@@ -1,5 +1,5 @@
 import { resolve } from "path"
-import { defineConfig, loadEnv } from "vite"
+import { defineConfig } from "vite"
 import { viteStaticCopy } from "vite-plugin-static-copy"
 import livereload from "rollup-plugin-livereload"
 import { svelte } from "@sveltejs/vite-plugin-svelte"
@@ -24,6 +24,15 @@ export default defineConfig({
         alias: {
             "@": resolve(__dirname, "src"),
         }
+    },
+    css: {
+        preprocessorOptions: {
+            scss: {
+                // Vite 5 still calls Sass legacy JS API internally in this stack.
+                // Keep build logs clean until toolchain is upgraded.
+                silenceDeprecations: ["legacy-js-api"],
+            },
+        },
     },
 
     plugins: [
@@ -115,6 +124,7 @@ export default defineConfig({
             external: ["siyuan", "process"],
 
             output: {
+                exports: "named",
                 entryFileNames: "[name].js",
                 assetFileNames: (assetInfo) => {
                     if (assetInfo.name === "style.css") {

@@ -12193,6 +12193,9 @@
         startIndex: number; // 原始消息数组中的起始索引
     }
 
+    let messageGroups: MessageGroup[] = [];
+    let groupedMessagesSnapshot: Message[] = [];
+
     function groupMessages(messages: Message[]): MessageGroup[] {
         const groups: MessageGroup[] = [];
         let currentGroup: MessageGroup | null = null;
@@ -12238,6 +12241,77 @@
         }
 
         return groups;
+    }
+
+    function getMessageGroupType(message: Message): MessageGroup['type'] | null {
+        if (message.role === 'system') return null;
+        if (message.role === 'user') return 'user';
+        if (message.role === 'assistant' || message.role === 'tool') return 'assistant';
+        return null;
+    }
+
+    function appendGroupedMessage(
+        groups: MessageGroup[],
+        message: Message,
+        index: number
+    ): MessageGroup[] {
+        const type = getMessageGroupType(message);
+        if (!type) return groups;
+
+        if (!groups.length) {
+            return [{ type, messages: [message], startIndex: index }];
+        }
+
+        const lastGroup = groups[groups.length - 1];
+        // 与原有 groupMessages 行为保持一致：user 永远单独成组；assistant/tool 连续合并
+        if (type === 'assistant' && lastGroup.type === 'assistant') {
+            return [
+                ...groups.slice(0, -1),
+                {
+                    ...lastGroup,
+                    messages: [...lastGroup.messages, message],
+                },
+            ];
+        }
+
+        return [...groups, { type, messages: [message], startIndex: index }];
+    }
+
+    function computeMessageGroups(nextMessages: Message[]): MessageGroup[] {
+        const previousMessages = groupedMessagesSnapshot;
+        const previousGroups = messageGroups;
+        const prevLen = previousMessages.length;
+        const nextLen = nextMessages.length;
+        const commonLen = Math.min(prevLen, nextLen);
+
+        let divergedAt = commonLen;
+        for (let i = 0; i < commonLen; i++) {
+            if (previousMessages[i] !== nextMessages[i]) {
+                divergedAt = i;
+                break;
+            }
+        }
+
+        // 仅触发了 messages = [...messages] 这类浅拷贝时，直接复用已有分组，避免全量重算
+        if (divergedAt === commonLen && prevLen === nextLen) {
+            groupedMessagesSnapshot = nextMessages;
+            return previousGroups;
+        }
+
+        // append-only 场景增量补分组，避免每次新增消息都全量 groupMessages
+        if (divergedAt === prevLen && nextLen > prevLen) {
+            let nextGroups = previousGroups;
+            for (let i = prevLen; i < nextLen; i++) {
+                nextGroups = appendGroupedMessage(nextGroups, nextMessages[i], i);
+            }
+            groupedMessagesSnapshot = nextMessages;
+            return nextGroups;
+        }
+
+        // 其余场景（中间编辑/删除/重排）回退全量分组，保证行为正确
+        const regrouped = groupMessages(nextMessages);
+        groupedMessagesSnapshot = nextMessages;
+        return regrouped;
     }
 
     function getCodexTraceText(
@@ -12861,8 +12935,8 @@
         };
     }
 
-    // 响应式计算消息组
-    $: messageGroups = groupMessages(messages);
+    // 响应式计算消息组（append-only 和浅拷贝场景走增量/复用）
+    $: messageGroups = computeMessageGroups(messages);
 </script>
 
 <div class="ai-sidebar" class:ai-sidebar--fullscreen={isFullscreen} bind:this={sidebarContainer}>
@@ -12970,7 +13044,7 @@
         on:scroll={handleScroll}
         use:autoScrollOnMediaLoad
     >
-        {#each messageGroups as group, groupIndex (groupIndex)}
+        {#each messageGroups as group (group.startIndex)}
             {@const firstMessage = group.messages[0]}
             {@const messageIndex = group.startIndex}
             <div

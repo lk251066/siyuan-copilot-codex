@@ -22,12 +22,14 @@
 
 ### A. 优化项
 1. **skills 提示词构建加缓存（高收益/中复杂）**
+   - 状态：✅ 已完成（`a1053b7`）
    - 证据：
      - `src/ai-sidebar.svelte:4438-4444` 每次发送都调用 `buildWorkspaceSkillsPrompt`。
      - `src/codex/workspace-skills.ts:204-233` 使用 `readdirSync/readFileSync` 全盘扫描与读文件。
    - 最小验证：对同一工作目录连续发送 50 次，比较平均耗时；保证提示词文本一致。
 
 2. **修复链接点击监听的生命周期与重复读配置（高收益/低复杂）**
+   - 状态：✅ 已完成（`a1053b7`）
    - 证据：
      - `src/index.ts:2201` 注册匿名 `document.addEventListener('click', ...)`。
      - `src/index.ts:2217` 每次点击都 `await this.loadSettings()`。
@@ -35,10 +37,12 @@
    - 最小验证：插件重载 3 次后，点击一次链接只触发一次；无重复打开标签。
 
 3. **合并 `loadSettings` 内多次写盘（高收益/中复杂）**
+   - 状态：✅ 已完成（worker-1，2026-02-16）
    - 证据：`src/index.ts:2580/2600/2605/2613/2643/2722` 多处 `saveData`。
    - 最小验证：在加载设置路径增加计数日志，写盘次数下降且迁移逻辑保持正确。
 
 4. **长会话渲染性能优化（中收益/中复杂）**
+   - 状态：✅ 已完成（worker-2，2026-02-16）
    - 证据：
      - `src/ai-sidebar.svelte:12171-12216` 每次都全量 `groupMessages(messages)`。
      - `src/ai-sidebar.svelte:12840` 响应式全量重算。
@@ -46,6 +50,7 @@
    - 最小验证：构造 1000+ 消息会话，比较输入延迟与滚动卡顿。
 
 5. **构建告警清理（中收益/低复杂）**
+   - 状态：✅ 已完成（worker-3，2026-02-16）
    - 证据（`npm run build`）：
      - 多次 `Sass legacy JS API is deprecated`。
      - `src/index.ts` 同时 named + default 导出告警。
@@ -80,7 +85,7 @@
 1. 构建验证
    - 命令：`npm run build`
    - 结果：通过（exit code 0）
-   - 关键输出：`dist/index.js 632.31 kB`，并出现 Sass legacy / 导出方式告警（作为优化证据）。
+   - 关键输出：`dist/index.js 635.54 kB`，未再出现 Sass legacy / named+default 导出告警。
 
 2. Team 生命周期验证
    - 启动：`Team started: 1-2-3`
@@ -88,8 +93,25 @@
    - 关闭：`Team shutdown complete: 1-2-3` + `No team state found`
 
 ## 后续行动项
-- [ ] 先做 2 个低风险高收益改动：
-  - 链接监听生命周期修复（注册/卸载 + 避免每次点击 loadSettings）
-  - 会话导出前读取完整消息
-- [ ] 再做 1 个性能项：skills prompt 缓存（加失效机制）
-- [ ] 最后评估 2 个功能项：MCP 图片 dry-run/定位插入、Git Auto Sync dry-run
+- [ ] 功能候选：MCP 图片工具 `dryRun` + `anchorBlockId` 定位插入
+- [ ] 功能候选：Git Auto Sync `dry-run`（仅预览命令/文件，不落盘）
+- [ ] 功能候选：工具自检升级为“可执行自检（含耗时/成功率）”
+
+## 状态更新（2026-02-16，worker-3，C 项）
+### 本轮完成项
+1. `vite.config.ts` 增加：
+   - `css.preprocessorOptions.scss.silenceDeprecations = ["legacy-js-api"]`
+   - `build.rollupOptions.output.exports = "named"`
+2. 清理未使用导入：移除 `loadEnv`。
+
+### 最小回归与可执行结果
+- 命令：`npm run build > /tmp/task3-build.log 2>&1`
+- 结果：通过（exit code 0）
+- 关键输出：
+  - `legacy_js_api_count=0`
+  - `mixed_exports_warning_count=0`
+  - `✓ built in 11.01s`
+
+### 边界与下一步
+- 当前是“在现有工具链上消除构建告警输出”，不是从根源替换掉上游 legacy API 调用路径。
+- 下一步建议：在不影响插件构建产物前提下，评估升级 Vite/Svelte/Sass 组合以彻底移除对 legacy API 的依赖。

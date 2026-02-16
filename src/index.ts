@@ -33,7 +33,7 @@ import {
     pullPromptFromWorkingDirAgentsFile,
 } from "./codex/agents-sync";
 
-export const SETTINGS_FILE = "settings.json";
+const SETTINGS_FILE = "settings.json";
 const WEBVIEW_HISTORY_FILE = "webview-history.json";
 const WEBAPP_ICON_DIR = "/data/storage/petal/siyuan-plugin-copilot/webappIcon";
 const MAX_HISTORY_COUNT = 200;
@@ -46,8 +46,8 @@ const ICON_TRANSLATE_ID = "iconTranslateCodex";
 const ICON_WEBAPP_ID = "iconCopilotWebAppCodex";
 
 const AI_SIDEBAR_TYPE = "codex-ai-chat-sidebar";
-export const AI_TAB_TYPE = "codex-ai-chat-tab";
-export const WEBAPP_TAB_TYPE = "codex-webapp-tab";
+const AI_TAB_TYPE = "codex-ai-chat-tab";
+const WEBAPP_TAB_TYPE = "codex-webapp-tab";
 
 type AddChatContextEventDetail =
     | {
@@ -2557,6 +2557,7 @@ export default class PluginSample extends Plugin {
      */
     async loadSettings() {
         const settings = (await this.loadData(SETTINGS_FILE)) || {};
+        let migratedSettingsChanged = false;
 
         // 迁移：如果存在旧的 aiProviders.v3 配置，迁移为自定义平台（customProviders）
         try {
@@ -2591,8 +2592,7 @@ export default class PluginSample extends Plugin {
                 // 如果存在老的单个平台字段，也一并清理（兼容旧版本）
                 if (settings.aiProvider === 'v3') delete settings.aiProvider;
 
-                // 持久化迁移结果
-                await this.saveData(SETTINGS_FILE, settings);
+                migratedSettingsChanged = true;
                 pushMsg(
                     t("migration.v3Migrated") ||
                     "Legacy V3 configuration detected and migrated to a custom provider"
@@ -2607,17 +2607,18 @@ export default class PluginSample extends Plugin {
             // 检查是否已经执行过迁移
             if (!settings.dataTransfer) {
                 settings.dataTransfer = {};
+                migratedSettingsChanged = true;
             }
 
             // 迁移：移除 Achuan 内置平台后，旧配置回落到 OpenAI
             if (settings.aiProviders && Object.prototype.hasOwnProperty.call(settings.aiProviders, 'Achuan')) {
                 delete settings.aiProviders.Achuan;
-                await this.saveData(SETTINGS_FILE, settings);
+                migratedSettingsChanged = true;
             }
             if (settings.currentProvider === 'Achuan') {
                 settings.currentProvider = 'openai';
                 settings.currentModelId = '';
-                await this.saveData(SETTINGS_FILE, settings);
+                migratedSettingsChanged = true;
                 pushMsg(
                     t("migration.achuanFallback") ||
                     "Legacy Achuan provider detected; switched to OpenAI automatically"
@@ -2625,7 +2626,7 @@ export default class PluginSample extends Plugin {
             }
             if (settings.selectedProviderId === 'Achuan') {
                 settings.selectedProviderId = 'openai';
-                await this.saveData(SETTINGS_FILE, settings);
+                migratedSettingsChanged = true;
             }
 
             if (settings.dataTransfer.autoSetModelCapabilities) {
@@ -2655,7 +2656,7 @@ export default class PluginSample extends Plugin {
                 }
 
                 settings.dataTransfer.autoSetModelCapabilities = true;
-                await this.saveData(SETTINGS_FILE, settings);
+                migratedSettingsChanged = true;
                 pushMsg(
                     t("migration.autoSetModelCapabilities") ||
                     "Model capabilities were auto-initialized for existing models"
@@ -2719,6 +2720,9 @@ export default class PluginSample extends Plugin {
             needsSave = true;
         }
         if (promptPullSyncResult.changed) {
+            needsSave = true;
+        }
+        if (migratedSettingsChanged) {
             needsSave = true;
         }
 
