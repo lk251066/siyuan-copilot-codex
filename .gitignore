@@ -1,6 +1,7 @@
 .idea
 .vscode
 .DS_Store
+.omx
 pnpm-lock.yaml
 package-lock.json
 package.zip

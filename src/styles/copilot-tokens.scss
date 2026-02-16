@@ -1,0 +1,29 @@
+:global(:root) {
+    --copilot-surface-1: var(--b3-theme-background);
+    --copilot-surface-2: var(--b3-theme-surface);
+    --copilot-surface-3: var(--b3-theme-surface-light);
+
+    --copilot-border: var(--b3-border-color);
+    --copilot-border-strong: var(--b3-theme-primary-light);
+
+    --copilot-text-primary: var(--b3-theme-on-surface);
+    --copilot-text-secondary: var(--b3-theme-on-surface-light);
+    --copilot-text-on-bg: var(--b3-theme-on-background);
+
+    --copilot-accent: var(--b3-theme-primary);
+
+    --copilot-radius-sm: 6px;
+    --copilot-radius-md: 8px;
+
+    --copilot-space-2: 8px;
+    --copilot-space-3: 12px;
+    --copilot-space-4: 16px;
+
+    --copilot-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.15);
+
+    --copilot-user-message-bg: var(--b3-theme-primary-lightest);
+    --copilot-assistant-message-bg: var(--b3-theme-background);
+
+    --copilot-diff-added-bg: rgba(0, 255, 0, 0.1);
+    --copilot-diff-removed-bg: rgba(255, 0, 0, 0.1);
+}

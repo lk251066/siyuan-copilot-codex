@@ -134,6 +134,18 @@ export const getDefaultSettings = () => ({
     codexPromptLastSyncedHash: '' as string,
     codexPromptLastSyncedAt: '' as string,
     codexSkipGitRepoCheck: true as boolean,
+    // Diff / Git
+    codexDiffPreferGit: true as boolean, // 优先使用 git diff（可回退到内置 diff）
+    codexGitCliPath: '' as string, // git 可执行路径（可选）
+    codexGitRepoDir: '' as string, // Git 仓库目录（可选，默认使用 codexWorkingDir）
+    codexGitRemoteName: 'origin' as string,
+    codexGitRemoteUrl: '' as string,
+    codexGitBranch: '' as string,
+    codexGitPullRebase: true as boolean,
+    codexGitPullAutostash: true as boolean,
+    codexGitSyncScope: 'notes' as 'notes' | 'repo', // 同步范围：notes=仅笔记内容（.sy/assets），repo=整个仓库
+    codexGitAutoSyncEnabled: false as boolean,
+    codexGitAutoCommitMessage: '' as string, // 自动同步时的 commit message（可选，留空自动生成）
     codexChatMode: 'ask' as 'ask' | 'agent',
     codexModelOverride: '' as string,
     codexReasoningEffort: '' as '' | 'low' | 'medium' | 'high' | 'xhigh',

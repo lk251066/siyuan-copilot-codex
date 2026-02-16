@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount, tick, onDestroy } from 'svelte';
+    import { afterUpdate, onDestroy, onMount, tick } from 'svelte';
     import {
         chat,
         type Message,
@@ -37,6 +37,12 @@
     import ToolSelector, { type ToolConfig } from './components/ToolSelector.svelte';
     import type { ProviderConfig } from './defaultSettings';
     import { settingsStore } from './stores/settings';
+    import {
+        parseUnifiedDiffToLines,
+        runGitCommand,
+        runGitDiffNoIndex,
+        type GitDiffLine,
+    } from './codex/git-runner';
     import { confirm, Constants } from 'siyuan';
     import { t } from './utils/i18n';
     import { AVAILABLE_TOOLS, executeToolCall } from './tools';
@@ -113,6 +119,7 @@
     let contextMenuX = 0;
     let contextMenuY = 0;
     let contextMenuMessageIndex: number | null = null;
+    let contextMenuMessageCount = 1;
     let contextMenuMessageType: 'user' | 'assistant' | null = null;
     let contextMenuIsMultiModel = false;
     // 选区相关（用于右键时判断是否对选中的文本进行复制）
@@ -126,6 +133,8 @@
 
     // 网页链接功能
     let isWebLinkDialogOpen = false;
+    let webLinkDialogCloseButton: HTMLButtonElement;
+    let webLinkDialogTextareaElement: HTMLTextAreaElement;
     let webLinkInput = '';
     let isFetchingWebContent = false;
 
@@ -135,10 +144,16 @@
 
     // 自动滚动控制
     let autoScroll = true;
+    let lastScrollTop = 0;
+    // autoScroll 被用户打断（或选区保护拦截）后，标记“底部有新内容”，用于显示“回到底部/新消息”按钮
+    let hasUnreadMessagesBelow = false;
+    // 选区保护：messagesContainer 内存在选区时，不自动滚动，避免滚动抢占导致选区丢失
+    let selectionActiveInMessagesContainer = false;
 
     // 上下文文档
     let contextDocuments: ContextDocument[] = [];
     let isSearchDialogOpen = false;
+    let searchDialogInputElement: HTMLInputElement;
     let searchKeyword = '';
     let searchResults: any[] = [];
     let isSearching = false;
@@ -219,6 +234,33 @@
     let autoApproveEdit = false; // 自动批准编辑操作
     let isDiffDialogOpen = false;
     let currentDiffOperation: EditOperation | null = null;
+    let diffDialogLines: GitDiffLine[] = [];
+    let diffDialogEngine: 'git' | 'lcs' = 'lcs';
+    let isDiffDialogLinesLoading = false;
+    let diffDialogGitError = '';
+    let diffDialogUnifiedPatch = '';
+    let diffDialogLoadToken = 0;
+    let diffDialogStats = { added: 0, removed: 0 };
+    let diffDialogViewMode: 'split' | 'unified' = 'split';
+    let diffDialogWrapEnabled = false;
+    let diffDialogRenderLimit = 800;
+    let diffDialogExpandedFoldIds = new Set<string>();
+    let diffDialogCloseButton: HTMLButtonElement;
+
+    // Git 同步对话框
+    let isGitSyncDialogOpen = false;
+    let gitSyncDialogCloseButton: HTMLButtonElement;
+    let gitSyncRepoInputElement: HTMLInputElement;
+    let gitRepoDir = '';
+    let gitRemoteName = 'origin';
+    let gitRemoteUrl = '';
+    let gitBranch = '';
+    let gitSyncScope: 'notes' | 'repo' = 'notes';
+    let gitCommitMessage = '';
+    let gitLog = '';
+    let gitIsRunning = false;
+    let gitLastExitCode: number | null = null;
+    let gitAbortCurrent: null | (() => void) = null;
     $: if (isCodexMode && chatMode === 'edit') {
         chatMode = 'agent';
     }
@@ -230,6 +272,8 @@
     let isImageViewerOpen = false;
     let currentImageSrc = '';
     let currentImageName = '';
+
+    $: diffDialogStats = getDiffLineStatsFromLines(diffDialogLines);
 
     // 消息内容显示缓存（存储每个消息的显示内容，键为content的哈希）
     const messageDisplayCache = new Map<string, { loading: boolean; content: string }>();
@@ -1408,10 +1452,14 @@
 
         // 添加全局点击事件监听器
         document.addEventListener('click', handleClickOutside);
+        // 弹层键盘支持：Esc 关闭弹层并恢复焦点，Tab 可聚焦可见元素（由浏览器原生处理）
+        document.addEventListener('keydown', handleGlobalKeydownForDialogs, true);
         // 添加全局滚动事件监听器以关闭右键菜单
         document.addEventListener('scroll', closeContextMenu, true);
         // 添加全局复制事件监听器
         document.addEventListener('copy', handleCopyEvent);
+        // 选区保护：有选区时不自动滚动
+        document.addEventListener('selectionchange', handleSelectionChangeForAutoScroll);
         window.addEventListener(addChatContextEvent, onAddChatContextEvent);
     });
 
@@ -1423,10 +1471,12 @@
 
         // 移除全局点击事件监听器
         document.removeEventListener('click', handleClickOutside);
+        document.removeEventListener('keydown', handleGlobalKeydownForDialogs, true);
         // 移除全局滚动事件监听器
         document.removeEventListener('scroll', closeContextMenu, true);
         // 移除全局复制事件监听器
         document.removeEventListener('copy', handleCopyEvent);
+        document.removeEventListener('selectionchange', handleSelectionChangeForAutoScroll);
         window.removeEventListener(addChatContextEvent, onAddChatContextEvent);
 
         // 保存工具配置
@@ -1499,7 +1549,50 @@
         tick().then(autoResizeTextarea);
     }
 
-    // 当消息、多模型响应或选择页签/答案变化时，高亮代码块
+    // DOM 后处理（代码高亮 / 公式渲染 / 引用链接 / 图片点击等）
+    // 注意：流式阶段会高频更新，必须避免每 chunk 扫描 messagesContainer
+    let messagesContainerPostProcessScheduled = false;
+    let messagesContainerPostProcessPending = false;
+    let messagesContainerPostProcessDeferredWhileLoading = false;
+
+    function scheduleMessagesContainerPostProcess() {
+        if (isLoading) {
+            messagesContainerPostProcessDeferredWhileLoading = true;
+            return;
+        }
+
+        // 若之前因为流式被延后，这里确保只补一次
+        messagesContainerPostProcessDeferredWhileLoading = false;
+
+        if (messagesContainerPostProcessScheduled) {
+            messagesContainerPostProcessPending = true;
+            return;
+        }
+
+        messagesContainerPostProcessScheduled = true;
+        window.setTimeout(async () => {
+            try {
+                // 等待 DOM 完全更新后再处理
+                await tick();
+                await tick();
+                const container = messagesContainer;
+                if (!container) return;
+                highlightCodeBlocks(container);
+                cleanupCodeBlocks(container);
+                renderMathFormulas(container);
+                setupBlockRefLinks(container);
+                setupImageClickHandlers(container);
+            } finally {
+                messagesContainerPostProcessScheduled = false;
+                if (messagesContainerPostProcessPending) {
+                    messagesContainerPostProcessPending = false;
+                    scheduleMessagesContainerPostProcess();
+                }
+            }
+        }, 0);
+    }
+
+    // 当消息、多模型响应或选择页签/答案变化时，触发 DOM 后处理（流式阶段仅标记 deferred）
     $: {
         // 保持对变量的引用以便 Svelte 触发依赖
         messages;
@@ -1507,25 +1600,9 @@
         selectedTabIndex;
         selectedAnswerIndex;
         thinkingCollapsed;
-        streamingMessage;
-        streamingThinking;
-        streamingCodexTimeline;
-        streamingToolCalls;
-        streamingSearchCalls;
+        isLoading;
 
-        tick().then(async () => {
-            if (messagesContainer) {
-                // 等待DOM完全更新后再处理代码块
-                await tick();
-                await tick();
-                highlightCodeBlocks(messagesContainer);
-                await tick();
-                cleanupCodeBlocks(messagesContainer);
-                renderMathFormulas(messagesContainer);
-                setupBlockRefLinks(messagesContainer);
-                setupImageClickHandlers(messagesContainer);
-            }
-        });
+        scheduleMessagesContainerPostProcess();
     }
 
     $: if (!streamingThinking) {
@@ -1704,12 +1781,32 @@
     function openWebLinkDialog() {
         isWebLinkDialogOpen = true;
         webLinkInput = '';
+        tick().then(() => webLinkDialogTextareaElement?.focus());
     }
 
     // 关闭网页链接对话框
     function closeWebLinkDialog() {
         isWebLinkDialogOpen = false;
         webLinkInput = '';
+        // 恢复焦点到输入框
+        tick().then(() => textareaElement?.focus());
+    }
+
+    function closeSearchDialog() {
+        isSearchDialogOpen = false;
+        tick().then(() => textareaElement?.focus());
+    }
+
+    function toggleSearchDialog() {
+        if (isSearchDialogOpen) {
+            closeSearchDialog();
+            return;
+        }
+        isSearchDialogOpen = true;
+        if (!searchKeyword.trim()) {
+            searchDocuments();
+        }
+        tick().then(() => searchDialogInputElement?.focus());
     }
 
     // 爬取网页内容并转换为Markdown
@@ -1795,10 +1892,44 @@
         }
     }
 
+    function updateSelectionActiveInMessagesContainer() {
+        const container = messagesContainer;
+        if (!container) {
+            selectionActiveInMessagesContainer = false;
+            return;
+        }
+
+        const selection = window.getSelection?.();
+        if (!selection || selection.isCollapsed) {
+            selectionActiveInMessagesContainer = false;
+            return;
+        }
+
+        const anchorNode = selection.anchorNode;
+        const focusNode = selection.focusNode;
+        if (!anchorNode || !focusNode) {
+            selectionActiveInMessagesContainer = false;
+            return;
+        }
+
+        selectionActiveInMessagesContainer =
+            container.contains(anchorNode) && container.contains(focusNode);
+    }
+
+    function handleSelectionChangeForAutoScroll() {
+        const wasActive = selectionActiveInMessagesContainer;
+        updateSelectionActiveInMessagesContainer();
+
+        // 若选区刚结束且仍处于 autoScroll=true，则“追一下”底部内容（避免选区保护期间错过的消息）
+        if (wasActive && !selectionActiveInMessagesContainer && autoScroll && hasUnreadMessagesBelow) {
+            scheduleScrollToBottom();
+        }
+    }
+
     // 检查是否在底部
     function isAtBottom() {
         if (!messagesContainer) return true;
-        const threshold = 100; // 100px的阈值
+        const threshold = 24; // 24px 的阈值，避免轻微上滑仍被视作“在底部”
         const scrollBottom =
             messagesContainer.scrollHeight -
             messagesContainer.scrollTop -
@@ -1810,11 +1941,23 @@
     function handleScroll() {
         if (!messagesContainer) return;
 
+        const currentScrollTop = messagesContainer.scrollTop;
+        const scrolledUp = currentScrollTop < lastScrollTop - 2;
+        const scrolledDown = currentScrollTop > lastScrollTop + 2;
+        lastScrollTop = currentScrollTop;
+
         const atBottom = isAtBottom();
+
+        // 用户手动滚动（向上，或向下但尚未到底）优先视为“我要暂停自动滚动”
+        if (scrolledUp || (scrolledDown && !atBottom)) {
+            autoScroll = false;
+            return;
+        }
 
         // 如果用户滚动到底部附近，恢复自动滚动
         if (atBottom) {
             autoScroll = true;
+            hasUnreadMessagesBelow = false;
         } else if (isLoading) {
             // 如果正在加载且用户滚动离开底部，停止自动滚动
             autoScroll = false;
@@ -1830,10 +1973,87 @@
     // 滚动到底部
     async function scrollToBottom(force = false) {
         await tick();
-        if (messagesContainer && (force || autoScroll)) {
+        if (!messagesContainer) return;
+
+        // 选区保护：自动滚动时不抢占用户选区
+        if (!force && selectionActiveInMessagesContainer) {
+            hasUnreadMessagesBelow = true;
+            return;
+        }
+
+        if (force || autoScroll) {
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            lastScrollTop = messagesContainer.scrollTop;
+            hasUnreadMessagesBelow = false;
         }
     }
+
+    // 高频流式输出时，合并滚动请求以减少抖动
+    let scrollToBottomScheduled = false;
+    let scrollToBottomPending = false;
+
+    function scheduleScrollToBottom() {
+        if (!messagesContainer) return;
+
+        // 用户滚动打断 / 选区保护：不抢占滚动；改为提示“底部有新内容”
+        if (!autoScroll || selectionActiveInMessagesContainer) {
+            hasUnreadMessagesBelow = true;
+            return;
+        }
+
+        if (scrollToBottomScheduled) {
+            scrollToBottomPending = true;
+            return;
+        }
+        scrollToBottomScheduled = true;
+        window.setTimeout(async () => {
+            try {
+                await scrollToBottom();
+            } finally {
+                scrollToBottomScheduled = false;
+                if (scrollToBottomPending) {
+                    scrollToBottomPending = false;
+                    scheduleScrollToBottom();
+                }
+            }
+        }, 0);
+    }
+
+    async function jumpToBottom() {
+        autoScroll = true;
+        hasUnreadMessagesBelow = false;
+        await scrollToBottom(true);
+    }
+
+    // 图片/视频加载后内容高度变化：自动跟随到底部（仅当 autoScroll=true）
+    function autoScrollOnMediaLoad(node: HTMLElement) {
+        const handler = (event: Event) => {
+            if (!autoScroll) return;
+            const target = event.target as HTMLElement | null;
+            const tag = target?.tagName ? target.tagName.toUpperCase() : '';
+            if (tag !== 'IMG' && tag !== 'VIDEO') return;
+            scheduleScrollToBottom();
+        };
+
+        node.addEventListener('load', handler, true);
+        node.addEventListener('error', handler, true);
+
+        return {
+            destroy() {
+                node.removeEventListener('load', handler, true);
+                node.removeEventListener('error', handler, true);
+            },
+        };
+    }
+
+    let wasLoadingForScroll = false;
+
+    afterUpdate(() => {
+        if (wasLoadingForScroll && !isLoading) {
+            void scrollToBottom();
+        }
+        wasLoadingForScroll = isLoading;
+    });
 
     // 滚动到顶部
     async function scrollToTop() {
@@ -2707,6 +2927,7 @@
                                 multiModelResponses[index].thinking = thinking;
                                 multiModelResponses = [...multiModelResponses];
                             }
+                            scheduleScrollToBottom();
                         },
                         onThinkingComplete: () => {
                             if (multiModelResponses[index] && multiModelResponses[index].thinking) {
@@ -2720,6 +2941,7 @@
                                 multiModelResponses[index].content = fullText;
                                 multiModelResponses = [...multiModelResponses];
                             }
+                            scheduleScrollToBottom();
                         },
                         onComplete: async (text: string) => {
                             // 如果已经中断，不再处理完成回调
@@ -3853,14 +4075,14 @@
         return firstNonEmptyString(
             value.call_id,
             value.callId,
-            value.id,
             value.tool_call_id,
             value.toolCallId,
+            value.id,
             value.item?.call_id,
             value.item?.callId,
-            value.item?.id,
             value.item?.tool_call_id,
-            value.item?.toolCallId
+            value.item?.toolCallId,
+            value.item?.id
         );
     }
 
@@ -4240,13 +4462,38 @@
         let activeThinkingTraceId = '';
         const codexTraceKeyByCallId = new Map<string, string>();
         let scrollScheduled = false;
+        let scrollPending = false;
         const scheduleScroll = () => {
-            if (scrollScheduled) return;
+            if (scrollScheduled) {
+                scrollPending = true;
+                return;
+            }
             scrollScheduled = true;
-            window.setTimeout(() => {
-                scrollScheduled = false;
-                if (autoScroll) void scrollToBottom();
+            window.setTimeout(async () => {
+                try {
+                    if (autoScroll) {
+                        await scrollToBottom();
+                    }
+                } finally {
+                    scrollScheduled = false;
+                    if (scrollPending) {
+                        scrollPending = false;
+                        scheduleScroll();
+                    }
+                }
             }, 0);
+        };
+
+        const mergeTraceStatus = (
+            prev: CodexTraceCall['status'],
+            next: CodexTraceCall['status']
+        ): CodexTraceCall['status'] => {
+            const rank: Record<CodexTraceCall['status'], number> = {
+                running: 1,
+                completed: 2,
+                error: 3,
+            };
+            return rank[next] >= rank[prev] ? next : prev;
         };
 
         const upsertStreamingTrace = (
@@ -4279,6 +4526,7 @@
             const merged: CodexTraceCall = {
                 ...list[index],
                 ...nextEntry,
+                status: mergeTraceStatus(list[index].status, nextEntry.status),
                 // 避免 started 阶段把已有 output 覆盖为空字符串
                 output: nextEntry.output || list[index].output || '',
                 input: nextEntry.input || list[index].input || '',
@@ -4323,7 +4571,7 @@
                 ...prev,
                 ...nextEntry,
                 name: nextEntry.name || prev.name || '',
-                status: nextEntry.status || prev.status,
+                status: mergeTraceStatus(prev.status, nextEntry.status),
                 input: nextEntry.input || prev.input || '',
                 output: nextEntry.output || prev.output || '',
                 query: nextEntry.query || prev.query || '',
@@ -5883,10 +6131,10 @@
                             tools: toolsForAgent,
                             customBody, // 传递自定义参数
                             onThinkingChunk: enableThinking
-                                ? async (chunk: string) => {
+                                ? (chunk: string) => {
                                       isThinkingPhase = true;
                                       streamingThinking += chunk;
-                                      await scrollToBottom();
+                                      scheduleScrollToBottom();
                                   }
                                 : undefined,
                             onThinkingComplete: enableThinking
@@ -6039,9 +6287,9 @@
                                 // 通知工具执行完成
                                 toolExecutionComplete?.();
                             },
-                            onChunk: async (chunk: string) => {
+                            onChunk: (chunk: string) => {
                                 streamingMessage += chunk;
-                                await scrollToBottom();
+                                scheduleScrollToBottom();
                             },
                             onComplete: async (fullText: string) => {
                                 // 如果已经中断，不再添加消息（避免重复）
@@ -6194,10 +6442,10 @@
                             );
                         },
                         onThinkingChunk: enableThinking
-                            ? async (chunk: string) => {
+                            ? (chunk: string) => {
                                   isThinkingPhase = true;
                                   streamingThinking += chunk;
-                                  await scrollToBottom();
+                                  scheduleScrollToBottom();
                               }
                             : undefined,
                         onThinkingComplete: enableThinking
@@ -6209,9 +6457,9 @@
                                   };
                               }
                             : undefined,
-                        onChunk: async (chunk: string) => {
+                        onChunk: (chunk: string) => {
                             streamingMessage += chunk;
-                            await scrollToBottom();
+                            scheduleScrollToBottom();
                         },
                         onComplete: async (fullText: string) => {
                             // 如果已经中断，不再添加消息（避免重复）
@@ -6611,6 +6859,31 @@
         }
     }
 
+    function handleGlobalKeydownForDialogs(e: KeyboardEvent) {
+        if (e.key !== 'Escape') return;
+        if (e.defaultPrevented) return;
+
+        if (isDiffDialogOpen) {
+            e.preventDefault();
+            closeDiffDialog();
+            return;
+        }
+        if (isGitSyncDialogOpen) {
+            e.preventDefault();
+            closeGitSyncDialog();
+            return;
+        }
+        if (isWebLinkDialogOpen) {
+            e.preventDefault();
+            closeWebLinkDialog();
+            return;
+        }
+        if (isSearchDialogOpen) {
+            e.preventDefault();
+            closeSearchDialog();
+        }
+    }
+
     // 使用思源内置的Lute渲染markdown为HTML
     // 将消息内容转换为字符串
     function getMessageText(content: string | MessageContent[]): string {
@@ -6779,83 +7052,49 @@
 
                 const hljs = (window as any).hljs;
 
-                // 处理思源的代码块结构: div.hljs > div[contenteditable]
-                const siyuanCodeBlocks = element.querySelectorAll(
-                    'pre > code:not([data-highlighted])'
-                );
-                siyuanCodeBlocks.forEach((block: HTMLElement) => {
-                    // 检查是否已经高亮过（通过检查是否有 hljs 的高亮 class）
-                    if (block.querySelector('.hljs-keyword, .hljs-string, .hljs-comment')) {
-                        return;
-                    }
-
+                const codeBlocks = element.querySelectorAll('pre > code:not([data-highlighted])');
+                codeBlocks.forEach((block: HTMLElement) => {
                     try {
                         const code = block.textContent || '';
-                        const parent = block.parentElement as HTMLElement;
 
-                        // 尝试从父元素获取语言信息
-                        let language = '';
-                        const langAttr =
-                            parent.getAttribute('data-node-id') ||
-                            parent.getAttribute('data-subtype');
+                        // 尝试提取语言：data-language -> class(language-xxx) -> pre(data-language/data-subtype)
+                        let language = (block.getAttribute('data-language') || '').trim();
+                        if (!language) {
+                            const match = (block.className || '').match(
+                                /(?:^|\s)language-([a-zA-Z0-9_-]+)/
+                            );
+                            if (match && match[1]) language = match[1];
+                        }
+                        if (!language) {
+                            const pre = block.parentElement as HTMLElement | null;
+                            language = (
+                                pre?.getAttribute('data-language') ||
+                                pre?.getAttribute('data-subtype') ||
+                                ''
+                            ).trim();
+                        }
 
-                        // 自动检测语言并高亮
-                        let highlighted;
-                        if (language) {
+                        let highlighted: any;
+                        if (language && hljs.getLanguage?.(language)) {
                             highlighted = hljs.highlight(code, { language, ignoreIllegals: true });
-                            block.classList.add('hljs');
+                            block.setAttribute('data-language', language);
                         } else {
                             highlighted = hljs.highlightAuto(code);
-                            block.classList.add('hljs');
+                            if (highlighted?.language) {
+                                block.setAttribute('data-language', highlighted.language);
+                            }
+                        }
+
+                        if (highlighted && typeof highlighted.value === 'string') {
+                            block.innerHTML = highlighted.value;
+                        } else {
+                            // 回退到纯文本，避免 innerHTML 注入风险
+                            block.textContent = code;
                         }
                         block.classList.add('hljs');
-                        // 将高亮后的 HTML 设置到 contenteditable 元素中
-                        block.innerHTML = highlighted.value;
-
-                        // 标记已处理，添加一个自定义属性
                         block.setAttribute('data-highlighted', 'true');
                     } catch (error) {
-                        console.error('Highlight siyuan code block error:', error);
-                    }
-                });
-
-                // 处理标准的 pre > code 结构（作为后备）
-                const standardCodeBlocks = element.querySelectorAll(
-                    'pre > code:not([data-highlighted])'
-                );
-                standardCodeBlocks.forEach((block: HTMLElement) => {
-                    if (block.querySelector('.hljs-keyword, .hljs-string, .hljs-comment')) {
-                        return;
-                    }
-                    try {
-                        // 尝试从 class 中获取 language
-                        let language = '';
-                        const codeClass = block.className || '';
-                        const match = codeClass.match(/(?:^|\s)language-([a-zA-Z0-9_-]+)/);
-                        if (match && match[1]) {
-                            language = match[1];
-                        }
-                        let highlighted;
-                        // 如果指定了语言且可识别，使用 hljs.highlight
-                        console.log(language);
-                        if (language) {
-                            const code = block.textContent || '';
-                            hljs.highlight(code, {
-                                language,
-                                ignoreIllegals: true,
-                            });
-                            block.innerHTML = highlighted.value;
-                            block.classList.add('hljs');
-                        } else {
-                            // 否则使用 highlightElement（自动检测）
-                            highlighted = hljs.highlightAuto(block);
-                            block.innerHTML = highlighted.value;
-                            block.classList.add('hljs');
-                        }
-                        block.setAttribute('data-highlighted', 'true');
-                        if (language) block.setAttribute('data-language', language);
-                    } catch (error) {
-                        console.error('Highlight standard code block error:', error);
+                        console.error('Highlight code block error:', error);
                     }
                 });
             } catch (error) {
@@ -7158,7 +7397,15 @@
                 const codeBlocks = element.querySelectorAll('pre > code');
                 codeBlocks.forEach((codeElement: HTMLElement) => {
                     const pre = codeElement.parentElement;
-                    if (!pre || pre.hasAttribute('data-lang-added')) return;
+                    if (!pre) return;
+                    // 避免重复插入工具条（属性 + DOM 双重判定）
+                    if (
+                        pre.hasAttribute('data-code-toolbar-added') ||
+                        pre.querySelector(':scope > .code-block-toolbar')
+                    ) {
+                        pre.setAttribute('data-code-toolbar-added', 'true');
+                        return;
+                    }
 
                     // 尝试从 data-language 或 class 中提取语言名称
                     let language = (codeElement.getAttribute('data-language') as string) || '';
@@ -7173,24 +7420,30 @@
                     }
 
                     // 标记已处理
-                    pre.setAttribute('data-lang-added', 'true');
+                    pre.setAttribute('data-code-toolbar-added', 'true');
 
                     // 创建工具栏容器
                     const toolbar = document.createElement('div');
                     toolbar.className = 'code-block-toolbar';
 
-                    // 只有当有语言时才创建语言标签
-                    // 创建语言标签
-                    const langLabel = document.createElement('div');
-                    langLabel.className = 'code-block-lang-label';
-                    langLabel.textContent = language;
-                    toolbar.appendChild(langLabel);
+                    const left = document.createElement('div');
+                    left.className = 'code-block-toolbar__left';
+                    const right = document.createElement('div');
+                    right.className = 'code-block-toolbar__right';
+
+                    // 语言标签（非空才显示）
+                    if (language && language.trim()) {
+                        const langLabel = document.createElement('div');
+                        langLabel.className = 'code-block-lang-label';
+                        langLabel.textContent = language.trim();
+                        left.appendChild(langLabel);
+                    }
 
                     // 创建复制按钮
                     const copyButton = document.createElement('button');
-                    copyButton.className = 'code-block-copy-btn';
+                    copyButton.className = 'code-block-toolbar-btn code-block-copy-btn';
                     copyButton.innerHTML = '<svg><use xlink:href="#iconCopy"></use></svg>';
-                    copyButton.title = '复制代码';
+                    copyButton.title = t('aiSidebar.codeBlock.copyCode') || '复制代码';
 
                     // 添加复制功能
                     copyButton.addEventListener('click', () => {
@@ -7199,7 +7452,7 @@
                             .writeText(code)
                             .then(() => {
                                 // 显示复制成功提示
-                                pushMsg('已复制');
+                                pushMsg(t('aiSidebar.success.copySuccess') || '已复制');
                                 // 更新按钮图标
                                 copyButton.innerHTML =
                                     '<svg><use xlink:href="#iconCheck"></use></svg>';
@@ -7212,12 +7465,56 @@
                             })
                             .catch(err => {
                                 console.error('Copy failed:', err);
-                                pushErrMsg('复制失败');
+                                pushErrMsg(t('aiSidebar.errors.copyFailed') || '复制失败');
                             });
                     });
 
-                    // 组装工具栏
-                    toolbar.appendChild(copyButton);
+                    // 换行切换（wrap）
+                    const wrapButton = document.createElement('button');
+                    wrapButton.className = 'code-block-toolbar-btn code-block-wrap-btn';
+                    wrapButton.title = t('aiSidebar.codeBlock.wrapOn') || '开启换行';
+                    wrapButton.textContent = '↵';
+                    wrapButton.addEventListener('click', () => {
+                        const wrapped = pre.classList.toggle('code-block--wrap');
+                        wrapButton.classList.toggle('active', wrapped);
+                        wrapButton.title = wrapped
+                            ? t('aiSidebar.codeBlock.wrapOff') || '关闭换行'
+                            : t('aiSidebar.codeBlock.wrapOn') || '开启换行';
+                    });
+
+                    // 长代码折叠/展开（仅长代码显示）
+                    const codeText = codeElement.textContent || '';
+                    const lineCount = codeText.split('\n').length;
+                    const isLongCode = lineCount >= 80 || codeText.length >= 4000;
+                    let foldButton: HTMLButtonElement | null = null;
+                    if (isLongCode) {
+                        pre.classList.add('code-block--foldable', 'code-block--collapsed');
+                        foldButton = document.createElement('button');
+                        foldButton.className = 'code-block-toolbar-btn code-block-fold-btn';
+                        foldButton.innerHTML = '<svg><use xlink:href="#iconDown"></use></svg>';
+                        foldButton.title = t('aiSidebar.codeBlock.expand') || '展开';
+                        foldButton.addEventListener('click', () => {
+                            const isCollapsed = pre.classList.contains('code-block--collapsed');
+                            pre.classList.toggle('code-block--collapsed', !isCollapsed);
+                            pre.classList.toggle('code-block--expanded', isCollapsed);
+                            if (foldButton) {
+                                foldButton.classList.toggle('active', isCollapsed);
+                                foldButton.innerHTML = isCollapsed
+                                    ? '<svg><use xlink:href="#iconUp"></use></svg>'
+                                    : '<svg><use xlink:href="#iconDown"></use></svg>';
+                                foldButton.title = isCollapsed
+                                    ? t('aiSidebar.codeBlock.collapse') || '收起'
+                                    : t('aiSidebar.codeBlock.expand') || '展开';
+                            }
+                        });
+                    }
+
+                    // 组装工具栏：左(语言) + 右(按钮组)
+                    right.appendChild(wrapButton);
+                    if (foldButton) right.appendChild(foldButton);
+                    right.appendChild(copyButton);
+                    toolbar.appendChild(left);
+                    toolbar.appendChild(right);
 
                     // 设置 pre 为相对定位
                     pre.style.position = 'relative';
@@ -7737,7 +8034,8 @@
         event: MouseEvent,
         messageIndex: number,
         messageType: 'user' | 'assistant',
-        isMultiModel = false
+        isMultiModel = false,
+        messageCount = 1
     ) {
         event.preventDefault();
         event.stopPropagation();
@@ -7746,6 +8044,7 @@
         contextMenuX = event.clientX;
         contextMenuY = event.clientY;
         contextMenuMessageIndex = messageIndex;
+        contextMenuMessageCount = Math.max(1, Number(messageCount || 1));
         contextMenuMessageType = messageType;
         contextMenuIsMultiModel = !!isMultiModel;
         // 判断当前是否有选区，且选区位于当前消息元素内
@@ -7794,6 +8093,7 @@
     function closeContextMenu() {
         contextMenuVisible = false;
         contextMenuMessageIndex = null;
+        contextMenuMessageCount = 1;
         contextMenuMessageType = null;
     }
 
@@ -7949,7 +8249,7 @@
                 break;
             }
             case 'delete':
-                deleteMessage(messageIndex);
+                deleteMessage(messageIndex, contextMenuMessageCount);
                 break;
             case 'regenerate':
                 regenerateMessage(messageIndex);
@@ -8064,7 +8364,7 @@
                         type: 'doc',
                     },
                 ];
-                isSearchDialogOpen = false;
+                closeSearchDialog();
                 searchKeyword = '';
                 searchResults = [];
                 return;
@@ -8082,7 +8382,7 @@
                         type: 'doc',
                     },
                 ];
-                isSearchDialogOpen = false;
+                closeSearchDialog();
                 searchKeyword = '';
                 searchResults = [];
             }
@@ -9539,13 +9839,449 @@
             };
         }
 
+        resetDiffDialogViewState();
         isDiffDialogOpen = true;
+        await tick();
+        diffDialogCloseButton?.focus();
+        if (currentDiffOperation) {
+            void loadDiffDialogPreferredLines(currentDiffOperation);
+        }
     }
 
     // 关闭差异对话框
     function closeDiffDialog() {
         isDiffDialogOpen = false;
         currentDiffOperation = null;
+        diffDialogLoadToken += 1;
+        diffDialogLines = [];
+        diffDialogEngine = 'lcs';
+        isDiffDialogLinesLoading = false;
+        diffDialogGitError = '';
+        diffDialogUnifiedPatch = '';
+        resetDiffDialogViewState();
+        tick().then(() => textareaElement?.focus());
+    }
+
+    const DIFF_DIALOG_RENDER_LIMIT_INITIAL = 800;
+    const DIFF_DIALOG_RENDER_LIMIT_STEP = 600;
+    const DIFF_DIALOG_FOLD_CONTEXT_LINES = 3;
+    const DIFF_DIALOG_FOLD_THRESHOLD = 12;
+
+    type DiffDialogNumberedLine = GitDiffLine & {
+        oldNo: number | null;
+        newNo: number | null;
+    };
+
+    type DiffDialogLineToken = {
+        kind: 'line';
+        type: GitDiffLine['type'];
+        line: string;
+        oldNo: number | null;
+        newNo: number | null;
+    };
+
+    type DiffDialogFoldToken = {
+        kind: 'fold';
+        id: string;
+        startIndex: number;
+        endIndex: number;
+        hiddenCount: number;
+        oldStartNo: number | null;
+        newStartNo: number | null;
+        oldEndNo: number | null;
+        newEndNo: number | null;
+    };
+
+    type DiffDialogToken = DiffDialogLineToken | DiffDialogFoldToken;
+
+    type DiffDialogSplitRow =
+        | {
+              kind: 'fold';
+              id: string;
+              hiddenCount: number;
+              oldStartNo: number | null;
+              newStartNo: number | null;
+              oldEndNo: number | null;
+              newEndNo: number | null;
+          }
+        | {
+              kind: 'line';
+              leftLine: string;
+              rightLine: string;
+              leftType: 'removed' | 'unchanged' | 'empty';
+              rightType: 'added' | 'unchanged' | 'empty';
+              leftNo: number | null;
+              rightNo: number | null;
+          };
+
+    let diffDialogNumberedLines: DiffDialogNumberedLine[] = [];
+    let diffDialogTokens: DiffDialogToken[] = [];
+    let diffDialogVisibleTokens: DiffDialogToken[] = [];
+    let diffDialogHasMoreTokens = false;
+    let diffDialogSplitRows: DiffDialogSplitRow[] = [];
+    let diffDialogVisibleSplitRows: DiffDialogSplitRow[] = [];
+    let diffDialogHasMoreSplitRows = false;
+
+    function resetDiffDialogViewState() {
+        diffDialogViewMode = 'split';
+        diffDialogWrapEnabled = false;
+        diffDialogRenderLimit = DIFF_DIALOG_RENDER_LIMIT_INITIAL;
+        diffDialogExpandedFoldIds = new Set<string>();
+    }
+
+    function loadMoreDiffDialogLines() {
+        diffDialogRenderLimit += DIFF_DIALOG_RENDER_LIMIT_STEP;
+    }
+
+    function expandDiffDialogFold(id: string) {
+        const next = new Set(diffDialogExpandedFoldIds);
+        next.add(id);
+        diffDialogExpandedFoldIds = next;
+    }
+
+    function formatDiffDialogCollapsedLines(hiddenCount: number): string {
+        const template = t('aiSidebar.diff.collapsedLines') || '… {count} lines collapsed';
+        return String(template).replace(/\{count\}|\$\{count\}/g, String(hiddenCount));
+    }
+
+    function buildSequentialNumberedDiffLines(
+        lines: GitDiffLine[] | null | undefined,
+        isInsertOperation: boolean
+    ): DiffDialogNumberedLine[] {
+        const source = Array.isArray(lines) ? lines : [];
+        const out: DiffDialogNumberedLine[] = [];
+        let oldNo = 1;
+        let newNo = 1;
+
+        for (const item of source) {
+            if (item.type === 'removed') {
+                out.push({
+                    type: 'removed',
+                    line: item.line,
+                    oldNo: isInsertOperation ? null : oldNo,
+                    newNo: null,
+                });
+                if (!isInsertOperation) oldNo += 1;
+                continue;
+            }
+
+            if (item.type === 'added') {
+                out.push({ type: 'added', line: item.line, oldNo: null, newNo });
+                newNo += 1;
+                continue;
+            }
+
+            out.push({
+                type: 'unchanged',
+                line: item.line,
+                oldNo: isInsertOperation ? null : oldNo,
+                newNo,
+            });
+            if (!isInsertOperation) oldNo += 1;
+            newNo += 1;
+        }
+
+        return out;
+    }
+
+    function parseGitUnifiedDiffToNumberedLines(unifiedDiff: string): DiffDialogNumberedLine[] {
+        const out: DiffDialogNumberedLine[] = [];
+        const lines = String(unifiedDiff || '').split(/\r?\n/);
+
+        let oldNo = 0;
+        let newNo = 0;
+        let inHunk = false;
+
+        for (const rawLine of lines) {
+            if (!rawLine) continue;
+
+            if (rawLine.startsWith('@@')) {
+                const match = rawLine.match(
+                    /^@@\s+\-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/
+                );
+                if (match) {
+                    oldNo = Number(match[1]);
+                    newNo = Number(match[2]);
+                    inHunk = true;
+                }
+                continue;
+            }
+
+            if (!inHunk) continue;
+
+            const marker = rawLine[0];
+            if (marker === ' ') {
+                out.push({ type: 'unchanged', line: rawLine.slice(1), oldNo, newNo });
+                oldNo += 1;
+                newNo += 1;
+                continue;
+            }
+            if (marker === '-') {
+                out.push({ type: 'removed', line: rawLine.slice(1), oldNo, newNo: null });
+                oldNo += 1;
+                continue;
+            }
+            if (marker === '+') {
+                out.push({ type: 'added', line: rawLine.slice(1), oldNo: null, newNo });
+                newNo += 1;
+            }
+        }
+
+        return out;
+    }
+
+    function buildDiffDialogTokens(
+        numberedLines: DiffDialogNumberedLine[],
+        expandedFoldIds: Set<string>
+    ): DiffDialogToken[] {
+        const out: DiffDialogToken[] = [];
+        if (!Array.isArray(numberedLines) || numberedLines.length === 0) return out;
+        if (expandedFoldIds.has('__all__')) {
+            for (const item of numberedLines) {
+                out.push({
+                    kind: 'line',
+                    type: item.type,
+                    line: item.line,
+                    oldNo: item.oldNo,
+                    newNo: item.newNo,
+                });
+            }
+            return out;
+        }
+
+        const context = DIFF_DIALOG_FOLD_CONTEXT_LINES;
+        const threshold = DIFF_DIALOG_FOLD_THRESHOLD;
+        const expandAll = expandedFoldIds.has('__all__');
+
+        let i = 0;
+        while (i < numberedLines.length) {
+            const line = numberedLines[i];
+            if (line.type !== 'unchanged') {
+                out.push({
+                    kind: 'line',
+                    type: line.type,
+                    line: line.line,
+                    oldNo: line.oldNo,
+                    newNo: line.newNo,
+                });
+                i += 1;
+                continue;
+            }
+
+            let j = i;
+            while (j < numberedLines.length && numberedLines[j].type === 'unchanged') {
+                j += 1;
+            }
+            const runStart = i;
+            const runEnd = j - 1;
+            const runLen = j - i;
+
+            if (runLen <= threshold) {
+                for (let k = runStart; k <= runEnd; k += 1) {
+                    const item = numberedLines[k];
+                    out.push({
+                        kind: 'line',
+                        type: item.type,
+                        line: item.line,
+                        oldNo: item.oldNo,
+                        newNo: item.newNo,
+                    });
+                }
+                i = j;
+                continue;
+            }
+
+            const prefixCount = Math.min(context, runLen);
+            const suffixCount = Math.min(context, Math.max(0, runLen - prefixCount));
+            const hiddenStart = runStart + prefixCount;
+            const hiddenEnd = runEnd - suffixCount;
+
+            if (hiddenStart > hiddenEnd) {
+                for (let k = runStart; k <= runEnd; k += 1) {
+                    const item = numberedLines[k];
+                    out.push({
+                        kind: 'line',
+                        type: item.type,
+                        line: item.line,
+                        oldNo: item.oldNo,
+                        newNo: item.newNo,
+                    });
+                }
+                i = j;
+                continue;
+            }
+
+            const foldId = `fold-${hiddenStart}-${hiddenEnd}`;
+            if (expandAll || expandedFoldIds.has(foldId)) {
+                for (let k = runStart; k <= runEnd; k += 1) {
+                    const item = numberedLines[k];
+                    out.push({
+                        kind: 'line',
+                        type: item.type,
+                        line: item.line,
+                        oldNo: item.oldNo,
+                        newNo: item.newNo,
+                    });
+                }
+                i = j;
+                continue;
+            }
+
+            for (let k = runStart; k < hiddenStart; k += 1) {
+                const item = numberedLines[k];
+                out.push({
+                    kind: 'line',
+                    type: item.type,
+                    line: item.line,
+                    oldNo: item.oldNo,
+                    newNo: item.newNo,
+                });
+            }
+
+            const firstHidden = numberedLines[hiddenStart];
+            const lastHidden = numberedLines[hiddenEnd];
+            out.push({
+                kind: 'fold',
+                id: foldId,
+                startIndex: hiddenStart,
+                endIndex: hiddenEnd,
+                hiddenCount: hiddenEnd - hiddenStart + 1,
+                oldStartNo: firstHidden?.oldNo ?? null,
+                newStartNo: firstHidden?.newNo ?? null,
+                oldEndNo: lastHidden?.oldNo ?? null,
+                newEndNo: lastHidden?.newNo ?? null,
+            });
+
+            for (let k = hiddenEnd + 1; k <= runEnd; k += 1) {
+                const item = numberedLines[k];
+                out.push({
+                    kind: 'line',
+                    type: item.type,
+                    line: item.line,
+                    oldNo: item.oldNo,
+                    newNo: item.newNo,
+                });
+            }
+
+            i = j;
+        }
+
+        return out;
+    }
+
+    function buildSplitRowsFromDiffDialogTokens(tokens: DiffDialogToken[]): DiffDialogSplitRow[] {
+        const rows: DiffDialogSplitRow[] = [];
+        const source = Array.isArray(tokens) ? tokens : [];
+        for (let i = 0; i < source.length; i += 1) {
+            const token = source[i];
+            if (!token) continue;
+
+            if (token.kind === 'fold') {
+                rows.push({
+                    kind: 'fold',
+                    id: token.id,
+                    hiddenCount: token.hiddenCount,
+                    oldStartNo: token.oldStartNo,
+                    newStartNo: token.newStartNo,
+                    oldEndNo: token.oldEndNo,
+                    newEndNo: token.newEndNo,
+                });
+                continue;
+            }
+
+            if (token.type === 'unchanged') {
+                rows.push({
+                    kind: 'line',
+                    leftLine: token.line,
+                    rightLine: token.line,
+                    leftType: 'unchanged',
+                    rightType: 'unchanged',
+                    leftNo: token.oldNo,
+                    rightNo: token.newNo,
+                });
+                continue;
+            }
+
+            if (token.type === 'removed') {
+                const next = source[i + 1];
+                if (next && next.kind === 'line' && next.type === 'added') {
+                    rows.push({
+                        kind: 'line',
+                        leftLine: token.line,
+                        rightLine: next.line,
+                        leftType: 'removed',
+                        rightType: 'added',
+                        leftNo: token.oldNo,
+                        rightNo: next.newNo,
+                    });
+                    i += 1;
+                    continue;
+                }
+
+                rows.push({
+                    kind: 'line',
+                    leftLine: token.line,
+                    rightLine: '',
+                    leftType: 'removed',
+                    rightType: 'empty',
+                    leftNo: token.oldNo,
+                    rightNo: null,
+                });
+                continue;
+            }
+
+            rows.push({
+                kind: 'line',
+                leftLine: '',
+                rightLine: token.line,
+                leftType: 'empty',
+                rightType: 'added',
+                leftNo: null,
+                rightNo: token.newNo,
+            });
+        }
+
+        return rows;
+    }
+
+    $: {
+        const isInsertOperation = currentDiffOperation?.operationType === 'insert';
+        if (diffDialogEngine === 'git' && diffDialogUnifiedPatch) {
+            diffDialogNumberedLines = parseGitUnifiedDiffToNumberedLines(diffDialogUnifiedPatch);
+        } else {
+            diffDialogNumberedLines = buildSequentialNumberedDiffLines(
+                diffDialogLines,
+                Boolean(isInsertOperation)
+            );
+        }
+    }
+
+    $: diffDialogTokens = buildDiffDialogTokens(diffDialogNumberedLines, diffDialogExpandedFoldIds);
+
+    $: {
+        diffDialogVisibleTokens = diffDialogTokens.slice(0, diffDialogRenderLimit);
+        diffDialogHasMoreTokens = diffDialogTokens.length > diffDialogRenderLimit;
+    }
+
+    $: diffDialogSplitRows = buildSplitRowsFromDiffDialogTokens(diffDialogTokens);
+
+    $: {
+        diffDialogVisibleSplitRows = diffDialogSplitRows.slice(0, diffDialogRenderLimit);
+        diffDialogHasMoreSplitRows = diffDialogSplitRows.length > diffDialogRenderLimit;
+    }
+
+    function getDiffLineStatsFromLines(lines: GitDiffLine[] | null | undefined): {
+        added: number;
+        removed: number;
+    } {
+        const source = Array.isArray(lines) ? lines : [];
+        let added = 0;
+        let removed = 0;
+        for (const line of source) {
+            if (line.type === 'added') added += 1;
+            if (line.type === 'removed') removed += 1;
+        }
+        return { added, removed };
     }
 
     // 简单的差异高亮（按行对比）
@@ -9560,6 +10296,23 @@
         // LCS 行级对比，效果更接近 git diff
         const oldLen = oldLines.length;
         const newLen = newLines.length;
+        const maxLcsCells = 2_000_000;
+        if (oldLen * newLen > maxLcsCells) {
+            if (String(oldText || '') === String(newText || '')) {
+                for (const line of oldLines) {
+                    result.push({ type: 'unchanged', line });
+                }
+                return result;
+            }
+            for (const line of oldLines) {
+                result.push({ type: 'removed', line });
+            }
+            result.push({ type: 'unchanged', line: '...' });
+            for (const line of newLines) {
+                result.push({ type: 'added', line });
+            }
+            return result;
+        }
         const lcs: number[][] = Array.from({ length: oldLen + 1 }, () =>
             new Array<number>(newLen + 1).fill(0)
         );
@@ -9604,22 +10357,74 @@
         return result;
     }
 
-    function getDiffLineStats(operation: EditOperation | null | undefined): {
-        added: number;
-        removed: number;
-    } {
-        if (!operation) return { added: 0, removed: 0 };
+    async function loadDiffDialogPreferredLines(operation: EditOperation) {
+        const token = (diffDialogLoadToken += 1);
         const oldText =
             operation.operationType === 'insert' ? '' : String(operation.oldContent || '');
         const newText = String(operation.newContent || '');
-        const lines = generateSimpleDiff(oldText, newText);
-        let added = 0;
-        let removed = 0;
-        for (const line of lines) {
-            if (line.type === 'added') added += 1;
-            if (line.type === 'removed') removed += 1;
+        diffDialogGitError = '';
+        diffDialogUnifiedPatch = '';
+
+        const preferGit = settings?.codexDiffPreferGit !== false;
+        if (operation.operationType === 'insert') {
+            diffDialogLines = String(newText || '')
+                .split('\n')
+                .map(line => ({ type: 'added', line }));
+            diffDialogEngine = 'lcs';
+            return;
         }
-        return { added, removed };
+        if (!preferGit || typeof (globalThis as any)?.require !== 'function') {
+            diffDialogLines = generateSimpleDiff(oldText, newText);
+            diffDialogEngine = 'lcs';
+            return;
+        }
+
+        isDiffDialogLinesLoading = true;
+        diffDialogEngine = 'git';
+        diffDialogLines = [];
+        const gitCliPath = resolveGitCliPath();
+        const label = String(operation.filePath || operation.blockId || '').trim();
+
+        try {
+            const res = await runGitDiffNoIndex({
+                cliPath: gitCliPath,
+                oldText,
+                newText,
+                label,
+                timeoutMs: 4000,
+            });
+
+            if (res.timedOut) {
+                diffDialogGitError = 'git diff timeout';
+                return;
+            }
+
+            if (res.exitCode !== null && res.exitCode > 1) {
+                diffDialogGitError = (res.stderr || '').trim() || `git diff exit ${res.exitCode}`;
+                diffDialogLines = generateSimpleDiff(oldText, newText);
+                diffDialogEngine = 'lcs';
+                return;
+            }
+
+            const gitLines = parseUnifiedDiffToLines(res.stdout || '');
+            if (token !== diffDialogLoadToken) return;
+            if (gitLines.length > 0) {
+                diffDialogLines = gitLines;
+            } else {
+                diffDialogLines = String(oldText || '')
+                    .split('\n')
+                    .map(line => ({ type: 'unchanged', line }));
+            }
+            diffDialogUnifiedPatch = String(res.stdout || '').trimEnd();
+        } catch (error) {
+            if (token !== diffDialogLoadToken) return;
+            diffDialogGitError = (error as Error).message || String(error);
+            diffDialogLines = generateSimpleDiff(oldText, newText);
+            diffDialogEngine = 'lcs';
+        } finally {
+            if (token !== diffDialogLoadToken) return;
+            isDiffDialogLinesLoading = false;
+        }
     }
 
     type SplitDiffRow = {
@@ -9629,8 +10434,10 @@
         rightType: 'added' | 'unchanged' | 'empty';
     };
 
-    function generateSplitDiffRows(oldText: string, newText: string, maxLines = 120): SplitDiffRow[] {
-        const fullLines = generateSimpleDiff(oldText, newText);
+    function generateSplitDiffRowsFromLines(
+        fullLines: { type: 'removed' | 'added' | 'unchanged'; line: string }[],
+        maxLines = 120
+    ): SplitDiffRow[] {
         const lines = compactTraceDiffLines(fullLines, maxLines);
         const rows: SplitDiffRow[] = [];
         for (let i = 0; i < lines.length; i += 1) {
@@ -9675,6 +10482,971 @@
         return rows;
     }
 
+    function appendGitLogLine(line: string) {
+        const next = (gitLog ? gitLog + '\n' : '') + String(line || '');
+        const maxLen = 24000;
+        gitLog = next.length > maxLen ? next.slice(next.length - maxLen) : next;
+    }
+
+    function resolveGitRepoDir(): string {
+        const fromDialog = String(gitRepoDir || '').trim();
+        const explicit = String((settings as any)?.codexGitRepoDir || '').trim();
+        const envRepo = getEnvFirst([
+            'SIYUAN_CODEX_GIT_REPO_DIR',
+            'SIYUAN_CODEX_GIT_REPO',
+            'SIYUAN_GIT_REPO_DIR',
+        ]);
+        const working = String(settings?.codexWorkingDir || '').trim();
+        return fromDialog || explicit || envRepo || working;
+    }
+
+    async function updateGitSettingsPatch(patch: Record<string, any>) {
+        settings = { ...settings, ...patch };
+        await plugin.saveSettings(settings);
+    }
+
+    function getEnvFirst(keys: string[]): string {
+        const env = (globalThis as any)?.process?.env || {};
+        for (const key of keys) {
+            const v = String(env?.[key] || '').trim();
+            if (v) return v;
+        }
+        return '';
+    }
+
+    function parseEnvBool(value: string): boolean | null {
+        const v = String(value || '').trim().toLowerCase();
+        if (!v) return null;
+        if (v === '1' || v === 'true' || v === 'yes' || v === 'y' || v === 'on') return true;
+        if (v === '0' || v === 'false' || v === 'no' || v === 'n' || v === 'off') return false;
+        return null;
+    }
+
+    type GitSyncScope = 'notes' | 'repo';
+
+    function normalizeGitSyncScope(value: string): GitSyncScope | '' {
+        const v = String(value || '').trim().toLowerCase();
+        if (!v) return '';
+        if (v === 'notes' || v === 'note' || v === 'notes_only' || v === 'notes-only') return 'notes';
+        if (v === 'repo' || v === 'all' || v === 'full') return 'repo';
+        return '';
+    }
+
+    function resolveGitSyncScope(): GitSyncScope {
+        const fromDialog = normalizeGitSyncScope(String(gitSyncScope || ''));
+        if (fromDialog) return fromDialog;
+        const fromSettings = normalizeGitSyncScope(String((settings as any)?.codexGitSyncScope || ''));
+        return fromSettings || 'notes';
+    }
+
+    function isNotesOnlyGitSync(): boolean {
+        return resolveGitSyncScope() === 'notes';
+    }
+
+    function normalizeGitPath(path: string): string {
+        return String(path || '')
+            .trim()
+            .replace(/\\/g, '/')
+            .replace(/^\.\/+/, '');
+    }
+
+    function extractGitPorcelainPaths(porcelain: string): string[] {
+        const paths: string[] = [];
+        const lines = String(porcelain || '').split(/\r?\n/);
+        for (const line of lines) {
+            if (!line) continue;
+            if (line.length < 4) continue;
+            const raw = line.slice(3).trim();
+            if (!raw) continue;
+            if (raw.includes(' -> ')) {
+                const parts = raw.split(' -> ').map(s => s.trim()).filter(Boolean);
+                if (parts[0]) paths.push(parts[0]);
+                if (parts.length > 1) paths.push(parts[parts.length - 1]);
+                continue;
+            }
+            paths.push(raw);
+        }
+        return paths;
+    }
+
+    function isNoteContentGitPath(path: string): boolean {
+        const p = normalizeGitPath(path).toLowerCase();
+        if (!p) return false;
+        if (p.endsWith('.sy')) return true;
+        if (p.startsWith('assets/')) return true;
+        if (p.startsWith('data/assets/')) return true;
+        return false;
+    }
+
+    function filterNoteContentGitPaths(paths: string[]): string[] {
+        return (Array.isArray(paths) ? paths : []).filter(p => isNoteContentGitPath(p));
+    }
+
+    function buildNoteScopePathspecs(notePaths: string[]): string[] {
+        const specs: string[] = [];
+        const normalized = (Array.isArray(notePaths) ? notePaths : []).map(normalizeGitPath);
+        const hasSy = normalized.some(p => p.toLowerCase().endsWith('.sy'));
+        const hasAssets = normalized.some(p => p.startsWith('assets/'));
+        const hasDataAssets = normalized.some(p => p.startsWith('data/assets/'));
+        if (hasSy) specs.push('**/*.sy');
+        if (hasAssets) specs.push('assets');
+        if (hasDataAssets) specs.push('data/assets');
+        return Array.from(new Set(specs));
+    }
+
+    function resolveGitCliPath(): string {
+        const fromSettings = String((settings as any)?.codexGitCliPath || '').trim();
+        if (fromSettings) return fromSettings;
+        const fromEnv = getEnvFirst([
+            'SIYUAN_CODEX_GIT_CLI_PATH',
+            'SIYUAN_CODEX_GIT_CLI',
+            'SIYUAN_GIT_CLI_PATH',
+        ]);
+        return fromEnv;
+    }
+
+    function buildGitEnvHints(): string[] {
+        return [
+            '可用环境变量：',
+            '- SIYUAN_CODEX_GIT_CLI_PATH：Git 可执行路径（可选）',
+            '- SIYUAN_CODEX_GIT_REPO_DIR：Git 仓库目录',
+            '- SIYUAN_CODEX_GIT_REMOTE_NAME：remote 名称（默认 origin）',
+            '- SIYUAN_CODEX_GIT_REMOTE_URL：remote URL（GitHub/Gitee）',
+            '- SIYUAN_CODEX_GIT_BRANCH：分支名（可选）',
+            '- SIYUAN_CODEX_GIT_PULL_REBASE=1：pull 使用 rebase（可选）',
+            '- SIYUAN_CODEX_GIT_PULL_AUTOSTASH=1：rebase pull 自动暂存本地改动（默认开启）',
+            '- SIYUAN_CODEX_GIT_SYNC_SCOPE=notes|repo：同步范围（notes=仅笔记）',
+            '- SIYUAN_CODEX_GIT_NOTES_ONLY=1：只同步笔记（等价于 SYNC_SCOPE=notes）',
+            '- SIYUAN_CODEX_GIT_AUTO_SYNC=1：打开对话框自动同步',
+            '- SIYUAN_CODEX_GIT_COMMIT_MESSAGE：自动提交信息',
+        ];
+    }
+
+    function buildGitTroubleshootHints(output: string): string[] {
+        const text = String(output || '');
+        const lower = text.toLowerCase();
+
+        if (
+            lower.includes('enoent') ||
+            lower.includes('command not found') ||
+            lower.includes('is not recognized') ||
+            lower.includes('spawn git')
+        ) {
+            return [
+                '未找到 Git：',
+                '1) 安装 Git，并确保命令行可执行 git',
+                '2) 或在设置里填写“Git 路径”（也可用环境变量 SIYUAN_CODEX_GIT_CLI_PATH）',
+            ];
+        }
+        if (lower.includes('not a git repository') || lower.includes('inside-work-tree')) {
+            return [
+                '未检测到 Git 仓库：',
+                '1) 在设置里填写“Git 仓库目录”，或设置环境变量 SIYUAN_CODEX_GIT_REPO_DIR',
+                '2) 确认该目录存在 .git；否则在该目录执行 git init',
+            ];
+        }
+        if (lower.includes('no such remote') || (lower.includes('remote') && lower.includes('does not exist'))) {
+            return [
+                'remote 未配置或名称不对：',
+                '1) 执行 git remote -v 查看现有 remote',
+                '2) 在对话框填写 Remote/Remote URL，或执行 git remote add origin <url>',
+            ];
+        }
+        if (lower.includes('author identity unknown') || lower.includes('please tell me who you are')) {
+            return [
+                '缺少 Git 身份信息（user.name/user.email）：',
+                '执行：git config --global user.name \"Your Name\"',
+                '执行：git config --global user.email \"you@example.com\"',
+            ];
+        }
+        if (lower.includes('index.lock') || lower.includes('another git process seems to be running')) {
+            return [
+                'Git 仓库被锁（index.lock）：',
+                '1) 确认没有其他 git 进程在运行',
+                '2) 删除锁文件：rm -f .git/index.lock',
+            ];
+        }
+        if (lower.includes('your local changes would be overwritten')) {
+            return [
+                'pull 会覆盖本地修改：',
+                '1) 先提交：git add -A && git commit -m \"wip\"',
+                '2) 或暂存：git stash -u，然后再 pull',
+            ];
+        }
+        if (lower.includes('cannot pull with rebase') && lower.includes('unstaged changes')) {
+            return [
+                'rebase pull 被未暂存改动阻止：',
+                '1) 推荐开启“Pull 自动暂存本地改动”（或设置 SIYUAN_CODEX_GIT_PULL_AUTOSTASH=1）',
+                '2) 或手动执行：git pull --rebase --autostash',
+                '3) 若不想自动暂存，可先 commit/stash 再 pull',
+            ];
+        }
+        if (lower.includes('permission denied (publickey)') || lower.includes('publickey')) {
+            return [
+                'SSH 鉴权失败：',
+                '1) 建议改用 SSH remote（git@...）',
+                '2) 确认 ssh-agent 可用并已加载私钥',
+                '3) 在 GitHub/Gitee 添加公钥后重试 push',
+            ];
+        }
+        if (
+            lower.includes('authentication failed') ||
+            lower.includes('could not read username') ||
+            lower.includes('fatal: authentication') ||
+            lower.includes('password authentication is no longer supported')
+        ) {
+            return [
+                '鉴权失败：',
+                '1) 推荐使用 SSH remote（git@...）或系统凭据管理器（credential helper）',
+                '2) HTTPS remote 可能需要 Token（PAT），不要把 Token 写进日志/URL',
+            ];
+        }
+        if (
+            lower.includes('failed to push some refs') ||
+            lower.includes('non-fast-forward') ||
+            lower.includes('fetch first') ||
+            lower.includes('remote contains work')
+        ) {
+            return [
+                'push 被拒绝（远端有新提交）：',
+                '1) 先拉取：git pull --rebase',
+                '2) 再推送：git push',
+            ];
+        }
+        if (lower.includes('has no upstream branch') || lower.includes('set upstream')) {
+            return [
+                '当前分支未设置上游：',
+                '执行：git push -u origin <branch>',
+                '或在对话框里填写 Branch，再点 Push',
+            ];
+        }
+        if (lower.includes('conflict') || lower.includes('merge conflict')) {
+            return [
+                '存在冲突：',
+                '1) 先在本地解决冲突并提交',
+                '2) 再重新执行 push',
+            ];
+        }
+        if (
+            lower.includes('repository not found') ||
+            lower.includes('fatal: repository') ||
+            lower.includes('http 404')
+        ) {
+            return [
+                '远端仓库不存在或无权限：',
+                '1) 检查 remote URL 是否正确',
+                '2) 确认当前账号对仓库有权限',
+            ];
+        }
+        if (
+            lower.includes('could not resolve host') ||
+            lower.includes('network is unreachable') ||
+            lower.includes('connection timed out') ||
+            lower.includes('operation timed out')
+        ) {
+            return [
+                '网络连接失败：',
+                '1) 检查网络/代理/防火墙',
+                '2) 确认 remote URL 可访问后再重试',
+            ];
+        }
+        return [...buildGitEnvHints()];
+    }
+
+    function appendGitHintsIfNeeded(output: string) {
+        const hints = buildGitTroubleshootHints(output);
+        if (!hints.length) return;
+        appendGitLogLine('---');
+        for (const line of hints) appendGitLogLine(line);
+    }
+
+    async function hydrateGitSettingsFromEnv() {
+        const patch: Record<string, any> = {};
+
+        const envGitCli = getEnvFirst(['SIYUAN_CODEX_GIT_CLI_PATH', 'SIYUAN_CODEX_GIT_CLI']);
+        if (!String((settings as any)?.codexGitCliPath || '').trim() && envGitCli) {
+            patch.codexGitCliPath = envGitCli;
+        }
+
+        const envRepo = getEnvFirst(['SIYUAN_CODEX_GIT_REPO_DIR', 'SIYUAN_CODEX_GIT_REPO']);
+        if (!String((settings as any)?.codexGitRepoDir || '').trim() && envRepo) {
+            patch.codexGitRepoDir = envRepo;
+        }
+
+        const envRemoteName = getEnvFirst(['SIYUAN_CODEX_GIT_REMOTE_NAME']);
+        if (!String((settings as any)?.codexGitRemoteName || '').trim() && envRemoteName) {
+            patch.codexGitRemoteName = envRemoteName;
+        }
+
+        const envRemoteUrl = getEnvFirst(['SIYUAN_CODEX_GIT_REMOTE_URL']);
+        if (!String((settings as any)?.codexGitRemoteUrl || '').trim() && envRemoteUrl) {
+            patch.codexGitRemoteUrl = envRemoteUrl;
+        }
+
+        const envBranch = getEnvFirst(['SIYUAN_CODEX_GIT_BRANCH']);
+        if (!String((settings as any)?.codexGitBranch || '').trim() && envBranch) {
+            patch.codexGitBranch = envBranch;
+        }
+
+        const envScope = getEnvFirst(['SIYUAN_CODEX_GIT_SYNC_SCOPE']);
+        const normalizedScope = normalizeGitSyncScope(envScope);
+        if (normalizedScope) {
+            patch.codexGitSyncScope = normalizedScope;
+        }
+
+        const envNotesOnly = getEnvFirst(['SIYUAN_CODEX_GIT_NOTES_ONLY']);
+        const parsedNotesOnly = parseEnvBool(envNotesOnly);
+        if (parsedNotesOnly !== null) {
+            patch.codexGitSyncScope = parsedNotesOnly ? 'notes' : 'repo';
+        }
+
+        const envRebase = getEnvFirst(['SIYUAN_CODEX_GIT_PULL_REBASE']);
+        const parsedRebase = parseEnvBool(envRebase);
+        if (parsedRebase !== null) {
+            patch.codexGitPullRebase = parsedRebase;
+        }
+
+        const envPullAutostash = getEnvFirst(['SIYUAN_CODEX_GIT_PULL_AUTOSTASH']);
+        const parsedPullAutostash = parseEnvBool(envPullAutostash);
+        if (parsedPullAutostash !== null) {
+            patch.codexGitPullAutostash = parsedPullAutostash;
+        }
+
+        const envAutoSync = getEnvFirst(['SIYUAN_CODEX_GIT_AUTO_SYNC']);
+        const parsedAutoSync = parseEnvBool(envAutoSync);
+        if (parsedAutoSync !== null) {
+            patch.codexGitAutoSyncEnabled = parsedAutoSync;
+        }
+
+        const envCommitMessage = getEnvFirst(['SIYUAN_CODEX_GIT_COMMIT_MESSAGE']);
+        if (!String((settings as any)?.codexGitAutoCommitMessage || '').trim() && envCommitMessage) {
+            patch.codexGitAutoCommitMessage = envCommitMessage;
+        }
+
+        if (Object.keys(patch).length > 0) {
+            await updateGitSettingsPatch(patch);
+        }
+    }
+
+    async function autoDetectGitRepoMeta() {
+        if (gitIsRunning) return;
+        const cwd = String(settings?.codexWorkingDir || '').trim();
+        if (!cwd) return;
+
+        try {
+            const handle = runGitCommand({
+                cliPath: resolveGitCliPath(),
+                cwd,
+                args: ['rev-parse', '--show-toplevel'],
+                timeoutMs: 8000,
+                acceptExitCodes: [0],
+            });
+            const res = await handle.completed;
+            const top = String(res.stdout || '').trim();
+            if (!top) return;
+
+            const current = String((settings as any)?.codexGitRepoDir || '').trim();
+            if (!current) {
+                await updateGitSettingsPatch({ codexGitRepoDir: top });
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    async function openGitSyncDialog() {
+        await hydrateGitSettingsFromEnv();
+        isGitSyncDialogOpen = true;
+        gitRepoDir = String((settings as any)?.codexGitRepoDir || '').trim();
+        gitRemoteName = String((settings as any)?.codexGitRemoteName || 'origin').trim() || 'origin';
+        gitRemoteUrl = String((settings as any)?.codexGitRemoteUrl || '').trim();
+        gitBranch = String((settings as any)?.codexGitBranch || '').trim();
+        gitSyncScope =
+            normalizeGitSyncScope(String((settings as any)?.codexGitSyncScope || '')) || 'notes';
+        gitCommitMessage = '';
+        gitLog = '';
+        gitLastExitCode = null;
+        await tick();
+        gitSyncRepoInputElement?.focus();
+        void autoDetectGitRepoMeta();
+        if ((settings as any)?.codexGitAutoSyncEnabled === true) {
+            void runGitAutoSync();
+        } else {
+            void runGitStatus();
+        }
+    }
+
+    function closeGitSyncDialog() {
+        try {
+            gitAbortCurrent?.();
+        } catch {
+            // ignore
+        }
+        isGitSyncDialogOpen = false;
+        gitIsRunning = false;
+        gitAbortCurrent = null;
+        tick().then(() => textareaElement?.focus());
+    }
+
+    async function runGitSingleCommand(
+        args: string[],
+        options?: { timeoutMs?: number; acceptExitCodes?: number[] }
+    ) {
+        if (gitIsRunning) {
+            pushErrMsg('Git 正在运行中，请稍后再试');
+            return;
+        }
+        const cwd = resolveGitRepoDir();
+        if (!cwd) {
+            pushErrMsg('未设置 Git 仓库目录：请先配置 Codex 工作目录或 Git 仓库目录');
+            return;
+        }
+
+        gitIsRunning = true;
+        gitLastExitCode = null;
+
+        const cliPath = resolveGitCliPath();
+        appendGitLogLine(`$ ${(cliPath || 'git')} ${args.join(' ')}`);
+
+        try {
+            const handle = runGitCommand({
+                cliPath,
+                cwd,
+                args,
+                timeoutMs: options?.timeoutMs ?? 60000,
+                acceptExitCodes: options?.acceptExitCodes ?? [0],
+                onStdoutLine: line => appendGitLogLine(line),
+                onStderrLine: line => appendGitLogLine(line),
+            });
+            gitAbortCurrent = handle.abort;
+            const res = await handle.completed;
+            gitLastExitCode = res.exitCode;
+            if (res.timedOut) {
+                appendGitLogLine('[timeout]');
+            }
+            if (
+                res.exitCode !== null &&
+                (options?.acceptExitCodes ?? [0]).includes(res.exitCode) === false
+            ) {
+                appendGitLogLine(`(exit ${res.exitCode})`);
+                appendGitHintsIfNeeded(res.stderr || res.stdout || '');
+            }
+        } catch (error) {
+            appendGitLogLine((error as Error).message || String(error));
+        } finally {
+            gitIsRunning = false;
+            gitAbortCurrent = null;
+        }
+    }
+
+    async function runGitStatus() {
+        await runGitSingleCommand(['status', '--porcelain=v1', '-b'], { timeoutMs: 15000 });
+    }
+
+    async function runGitInit() {
+        await runGitSingleCommand(['init'], { timeoutMs: 15000 });
+    }
+
+    async function runGitNotesOnlyAdd() {
+        if (gitIsRunning) {
+            pushErrMsg('Git 正在运行中，请稍后再试');
+            return;
+        }
+        const cwd = resolveGitRepoDir();
+        if (!cwd) {
+            pushErrMsg('未设置 Git 仓库目录：请先配置 Codex 工作目录或 Git 仓库目录');
+            return;
+        }
+
+        gitIsRunning = true;
+        gitLastExitCode = null;
+
+        const cliPath = resolveGitCliPath();
+        const accept0 = [0];
+
+        const run = async (
+            args: string[],
+            options?: { timeoutMs?: number; acceptExitCodes?: number[] }
+        ) => {
+            appendGitLogLine(`$ ${(cliPath || 'git')} ${args.join(' ')}`);
+            const handle = runGitCommand({
+                cliPath,
+                cwd,
+                args,
+                timeoutMs: options?.timeoutMs ?? 60000,
+                acceptExitCodes: options?.acceptExitCodes ?? accept0,
+                onStdoutLine: line => appendGitLogLine(line),
+                onStderrLine: line => appendGitLogLine(line),
+            });
+            gitAbortCurrent = handle.abort;
+            const res = await handle.completed;
+            gitLastExitCode = res.exitCode;
+            const ok =
+                res.exitCode !== null &&
+                (options?.acceptExitCodes ?? accept0).includes(res.exitCode) &&
+                !res.timedOut;
+            if (!ok) {
+                appendGitLogLine(res.timedOut ? '[timeout]' : `(exit ${res.exitCode ?? 'null'})`);
+                appendGitHintsIfNeeded(res.stderr || res.stdout || '');
+            }
+            return { ok, res };
+        };
+
+        try {
+            appendGitLogLine('== Add Notes ==');
+            const status = await run(['status', '--porcelain=v1'], {
+                timeoutMs: 15000,
+                acceptExitCodes: [0],
+            });
+            if (!status.ok) return;
+
+            const notePaths = filterNoteContentGitPaths(
+                extractGitPorcelainPaths(status.res.stdout || '')
+            );
+            const specs = buildNoteScopePathspecs(notePaths);
+            if (specs.length === 0) {
+                appendGitLogLine('(no note changes)');
+                return;
+            }
+
+            await run(['add', '-A', '--', ...specs], { timeoutMs: 60000, acceptExitCodes: [0] });
+        } catch (error) {
+            appendGitLogLine((error as Error).message || String(error));
+            appendGitHintsIfNeeded((error as Error).message || String(error));
+        } finally {
+            gitIsRunning = false;
+            gitAbortCurrent = null;
+        }
+    }
+
+    async function runGitNotesOnlyCommit(message: string) {
+        if (gitIsRunning) {
+            pushErrMsg('Git 正在运行中，请稍后再试');
+            return;
+        }
+        const cwd = resolveGitRepoDir();
+        if (!cwd) {
+            pushErrMsg('未设置 Git 仓库目录：请先配置 Codex 工作目录或 Git 仓库目录');
+            return;
+        }
+
+        gitIsRunning = true;
+        gitLastExitCode = null;
+
+        const cliPath = resolveGitCliPath();
+        const accept0 = [0];
+
+        const run = async (
+            args: string[],
+            options?: { timeoutMs?: number; acceptExitCodes?: number[] }
+        ) => {
+            appendGitLogLine(`$ ${(cliPath || 'git')} ${args.join(' ')}`);
+            const handle = runGitCommand({
+                cliPath,
+                cwd,
+                args,
+                timeoutMs: options?.timeoutMs ?? 60000,
+                acceptExitCodes: options?.acceptExitCodes ?? accept0,
+                onStdoutLine: line => appendGitLogLine(line),
+                onStderrLine: line => appendGitLogLine(line),
+            });
+            gitAbortCurrent = handle.abort;
+            const res = await handle.completed;
+            gitLastExitCode = res.exitCode;
+            const ok =
+                res.exitCode !== null &&
+                (options?.acceptExitCodes ?? accept0).includes(res.exitCode) &&
+                !res.timedOut;
+            if (!ok) {
+                appendGitLogLine(res.timedOut ? '[timeout]' : `(exit ${res.exitCode ?? 'null'})`);
+                appendGitHintsIfNeeded(res.stderr || res.stdout || '');
+            }
+            return { ok, res };
+        };
+
+        try {
+            appendGitLogLine('== Commit Notes ==');
+            const status = await run(['status', '--porcelain=v1'], {
+                timeoutMs: 15000,
+                acceptExitCodes: [0],
+            });
+            if (!status.ok) return;
+
+            const notePaths = filterNoteContentGitPaths(
+                extractGitPorcelainPaths(status.res.stdout || '')
+            );
+            const specs = buildNoteScopePathspecs(notePaths);
+            if (specs.length === 0) {
+                appendGitLogLine('(no note changes)');
+                return;
+            }
+
+            const add = await run(['add', '-A', '--', ...specs], {
+                timeoutMs: 60000,
+                acceptExitCodes: [0],
+            });
+            if (!add.ok) return;
+
+            const commit = await run(['commit', '-m', message, '--', ...specs], {
+                timeoutMs: 60000,
+                acceptExitCodes: [0, 1],
+            });
+            if (!commit.ok && commit.res.exitCode !== 1) {
+                pushErrMsg('git commit 失败');
+                return;
+            }
+        } catch (error) {
+            appendGitLogLine((error as Error).message || String(error));
+            appendGitHintsIfNeeded((error as Error).message || String(error));
+        } finally {
+            gitIsRunning = false;
+            gitAbortCurrent = null;
+        }
+    }
+
+    async function runGitAddAll() {
+        if (isNotesOnlyGitSync()) {
+            await runGitNotesOnlyAdd();
+            return;
+        }
+        await runGitSingleCommand(['add', '-A'], { timeoutMs: 30000 });
+    }
+
+    async function runGitCommit() {
+        const message = String(gitCommitMessage || '').trim();
+        if (!message) {
+            pushErrMsg('请输入 commit message');
+            return;
+        }
+        if (isNotesOnlyGitSync()) {
+            await runGitNotesOnlyCommit(message);
+            return;
+        }
+        await runGitSingleCommand(['commit', '-m', message], { timeoutMs: 60000 });
+    }
+
+    function appendGitPullArgs(args: string[]) {
+        const rebase = (settings as any)?.codexGitPullRebase !== false;
+        if (!rebase) return;
+        args.push('--rebase');
+        if ((settings as any)?.codexGitPullAutostash !== false) {
+            args.push('--autostash');
+        }
+    }
+
+    async function runGitPull() {
+        const branch = String(gitBranch || '').trim();
+        const args = ['pull'];
+        appendGitPullArgs(args);
+        if (branch) {
+            const remote = String(gitRemoteName || '').trim() || 'origin';
+            args.push(remote, branch);
+        }
+        await runGitSingleCommand(args, { timeoutMs: 120000 });
+    }
+
+    async function runGitPush() {
+        const branch = String(gitBranch || '').trim();
+        const args = ['push'];
+        if (branch) {
+            const remote = String(gitRemoteName || '').trim() || 'origin';
+            args.push('-u', remote, branch);
+        }
+        await runGitSingleCommand(args, { timeoutMs: 120000 });
+    }
+
+    async function runGitSetRemote() {
+        const remote = String(gitRemoteName || '').trim() || 'origin';
+        const url = String(gitRemoteUrl || '').trim();
+        if (!url) {
+            pushErrMsg('请输入 remote URL');
+            return;
+        }
+
+        // 尝试 set-url，若 remote 不存在则 add
+        await runGitSingleCommand(['remote', 'set-url', remote, url], { timeoutMs: 15000 });
+        if (gitLastExitCode !== 0) {
+            await runGitSingleCommand(['remote', 'add', remote, url], { timeoutMs: 15000 });
+        }
+    }
+
+    let gitAutoSyncToken = 0;
+
+    function buildAutoCommitMessage(): string {
+        const tpl =
+            String(gitCommitMessage || '').trim() ||
+            String((settings as any)?.codexGitAutoCommitMessage || '').trim() ||
+            getEnvFirst(['SIYUAN_CODEX_GIT_COMMIT_MESSAGE']);
+        const now = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(
+            now.getHours()
+        )}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+        if (!tpl) return `Codex auto-sync ${ts}`;
+        return tpl.replace('{ts}', ts).replace('{time}', ts);
+    }
+
+    async function runGitAutoSync() {
+        if (gitIsRunning) {
+            pushErrMsg('Git 正在运行中，请稍后再试');
+            return;
+        }
+
+        const token = (gitAutoSyncToken += 1);
+        const cwd = resolveGitRepoDir();
+        if (!cwd) {
+            appendGitLogLine('未设置 Git 仓库目录，无法自动同步。');
+            appendGitHintsIfNeeded('not a git repository');
+            pushErrMsg('未设置 Git 仓库目录');
+            return;
+        }
+
+        gitIsRunning = true;
+        gitLastExitCode = null;
+        appendGitLogLine('== Auto Sync ==');
+        appendGitLogLine(`(scope: ${resolveGitSyncScope()})`);
+
+        const cliPath = resolveGitCliPath();
+        const accept0 = [0];
+
+        const runStep = async (
+            args: string[],
+            options?: { timeoutMs?: number; acceptExitCodes?: number[] }
+        ) => {
+            appendGitLogLine(`$ ${(cliPath || 'git')} ${args.join(' ')}`);
+            const handle = runGitCommand({
+                cliPath,
+                cwd,
+                args,
+                timeoutMs: options?.timeoutMs ?? 60000,
+                acceptExitCodes: options?.acceptExitCodes ?? accept0,
+                onStdoutLine: line => appendGitLogLine(line),
+                onStderrLine: line => appendGitLogLine(line),
+            });
+            gitAbortCurrent = handle.abort;
+            const res = await handle.completed;
+            gitLastExitCode = res.exitCode;
+            if (token !== gitAutoSyncToken) return { ok: false, aborted: true, res };
+            const ok =
+                res.exitCode !== null &&
+                (options?.acceptExitCodes ?? accept0).includes(res.exitCode) &&
+                !res.timedOut;
+            if (!ok) {
+                appendGitLogLine(res.timedOut ? '[timeout]' : `(exit ${res.exitCode ?? 'null'})`);
+                appendGitHintsIfNeeded(res.stderr || res.stdout || '');
+            }
+            return { ok, aborted: false, res };
+        };
+
+        try {
+            const ver = await runStep(['--version'], { timeoutMs: 8000, acceptExitCodes: [0] });
+            if (!ver.ok) {
+                pushErrMsg('未检测到 git，请先安装 git 或在设置里填写 Git 路径');
+                return;
+            }
+
+            const inside = await runStep(['rev-parse', '--is-inside-work-tree'], {
+                timeoutMs: 8000,
+                acceptExitCodes: [0],
+            });
+            if (!inside.ok) {
+                pushErrMsg('当前目录不是 Git 仓库');
+                return;
+            }
+
+            // 尝试补齐 repo root（用于下次默认）
+            const top = await runStep(['rev-parse', '--show-toplevel'], {
+                timeoutMs: 8000,
+                acceptExitCodes: [0],
+            });
+            const topDir = String(top.res.stdout || '').trim();
+            if (top.ok && topDir) {
+                if (!String(gitRepoDir || '').trim()) {
+                    gitRepoDir = topDir;
+                }
+                if (!String((settings as any)?.codexGitRepoDir || '').trim()) {
+                    await updateGitSettingsPatch({ codexGitRepoDir: topDir });
+                }
+            }
+
+            // remote / branch / upstream（仅用于本次同步）
+            const remotes = await runStep(['remote'], { timeoutMs: 8000, acceptExitCodes: [0] });
+            const remoteList = String(remotes.res.stdout || '')
+                .split(/\r?\n/)
+                .map(s => s.trim())
+                .filter(Boolean);
+
+            let hasRemote = remoteList.length > 0;
+            const preferredRemote = String(gitRemoteName || 'origin').trim() || 'origin';
+            if (hasRemote) {
+                if (!remoteList.includes(preferredRemote)) {
+                    gitRemoteName = remoteList.includes('origin') ? 'origin' : remoteList[0] || 'origin';
+                } else {
+                    gitRemoteName = preferredRemote;
+                }
+            } else {
+                const url = String(gitRemoteUrl || '').trim();
+                if (url) {
+                    const addRemote = await runStep(['remote', 'add', preferredRemote, url], {
+                        timeoutMs: 15000,
+                        acceptExitCodes: [0],
+                    });
+                    if (!addRemote.ok) {
+                        pushErrMsg('remote 配置失败');
+                        return;
+                    }
+                    gitRemoteName = preferredRemote;
+                    hasRemote = true;
+                } else {
+                    appendGitLogLine('(no remote configured; will skip pull/push)');
+                    appendGitLogLine(
+                        '提示：请在设置里填写 Git Remote URL，或设置环境变量 SIYUAN_CODEX_GIT_REMOTE_URL'
+                    );
+                }
+            }
+
+            if (!gitRemoteUrl && hasRemote) {
+                const remote = String(gitRemoteName || 'origin').trim() || 'origin';
+                const urlRes = await runStep(['config', '--get', `remote.${remote}.url`], {
+                    timeoutMs: 8000,
+                    acceptExitCodes: [0, 1],
+                });
+                const url = String(urlRes.res.stdout || '').trim();
+                if (url) gitRemoteUrl = url;
+            }
+
+            if (!gitBranch) {
+                const branchRes = await runStep(['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+                    timeoutMs: 8000,
+                    acceptExitCodes: [0],
+                });
+                const branch = String(branchRes.res.stdout || '').trim();
+                if (branch) gitBranch = branch;
+            }
+
+            const upstreamRes = await runStep(
+                ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'],
+                {
+                    timeoutMs: 8000,
+                    acceptExitCodes: [0, 128],
+                }
+            );
+            const hasUpstream = upstreamRes.ok && String(upstreamRes.res.stdout || '').trim().length > 0;
+
+            // pull（有 upstream 优先；否则尝试 remote+branch）
+            if (hasUpstream) {
+                const pullArgs = ['pull'];
+                appendGitPullArgs(pullArgs);
+                const pull = await runStep(pullArgs, { timeoutMs: 120000, acceptExitCodes: [0] });
+                if (!pull.ok) {
+                    pushErrMsg('git pull 失败');
+                    return;
+                }
+            } else if (hasRemote && String(gitBranch || '').trim()) {
+                const remote = String(gitRemoteName || 'origin').trim() || 'origin';
+                const branch = String(gitBranch || '').trim();
+                const pullArgs = ['pull'];
+                appendGitPullArgs(pullArgs);
+                pullArgs.push(remote, branch);
+                const pull = await runStep(pullArgs, { timeoutMs: 120000, acceptExitCodes: [0] });
+                if (!pull.ok) {
+                    pushErrMsg('git pull 失败');
+                    return;
+                }
+            } else {
+                appendGitLogLine('(skip pull: no upstream)');
+            }
+
+            // 是否需要提交
+            const status = await runStep(['status', '--porcelain=v1'], {
+                timeoutMs: 15000,
+                acceptExitCodes: [0],
+            });
+            if (!status.ok) return;
+            const porcelain = String(status.res.stdout || '');
+            const hasAnyChanges = porcelain.trim().length > 0;
+            const scope = resolveGitSyncScope();
+
+            if (!hasAnyChanges) {
+                appendGitLogLine('(no changes)');
+            } else if (scope === 'notes') {
+                const allPaths = extractGitPorcelainPaths(porcelain);
+                const notePaths = filterNoteContentGitPaths(allPaths);
+                const specs = buildNoteScopePathspecs(notePaths);
+
+                if (specs.length === 0) {
+                    appendGitLogLine('(skip commit: no note changes)');
+                } else {
+                    appendGitLogLine(`(notes-only: ${notePaths.length} paths)`);
+                    const add = await runStep(['add', '-A', '--', ...specs], {
+                        timeoutMs: 60000,
+                        acceptExitCodes: [0],
+                    });
+                    if (!add.ok) return;
+
+                    const msg = buildAutoCommitMessage();
+                    const commit = await runStep(['commit', '-m', msg, '--', ...specs], {
+                        timeoutMs: 60000,
+                        // 1: nothing to commit
+                        acceptExitCodes: [0, 1],
+                    });
+                    if (!commit.ok && commit.res.exitCode !== 1) {
+                        pushErrMsg('git commit 失败');
+                        return;
+                    }
+                }
+            } else {
+                const add = await runStep(['add', '-A'], { timeoutMs: 30000, acceptExitCodes: [0] });
+                if (!add.ok) return;
+
+                const msg = buildAutoCommitMessage();
+                const commit = await runStep(['commit', '-m', msg], {
+                    timeoutMs: 60000,
+                    // 1: nothing to commit
+                    acceptExitCodes: [0, 1],
+                });
+                if (!commit.ok && commit.res.exitCode !== 1) {
+                    pushErrMsg('git commit 失败');
+                    return;
+                }
+            }
+
+            // push（优先 upstream；否则 remote+branch；否则跳过）
+            if (hasUpstream) {
+                const push = await runStep(['push'], { timeoutMs: 120000, acceptExitCodes: [0] });
+                if (!push.ok) {
+                    pushErrMsg('git push 失败');
+                    return;
+                }
+            } else if (hasRemote && String(gitBranch || '').trim()) {
+                const remote = String(gitRemoteName || 'origin').trim() || 'origin';
+                const branch = String(gitBranch || '').trim();
+                const push = await runStep(['push', '-u', remote, branch], {
+                    timeoutMs: 120000,
+                    acceptExitCodes: [0],
+                });
+                if (!push.ok) {
+                    pushErrMsg('git push 失败');
+                    return;
+                }
+            } else {
+                appendGitLogLine('(skip push: no upstream/remote/branch)');
+            }
+
+            appendGitLogLine('== Auto Sync Done ==');
+            pushMsg(t('aiSidebar.git.autoSyncDone') || '同步完成');
+        } catch (error) {
+            appendGitLogLine((error as Error).message || String(error));
+            appendGitHintsIfNeeded((error as Error).message || String(error));
+            pushErrMsg(t('aiSidebar.git.autoSyncFailed') || '同步失败');
+        } finally {
+            if (token === gitAutoSyncToken) {
+                gitIsRunning = false;
+                gitAbortCurrent = null;
+            }
+        }
+    }
+
     // 消息操作函数
     // 在历史消息的多模型响应中选择某个模型的答案（支持切换并保留手动编辑）
     function selectHistoryMultiModelAnswer(absMessageIndex: number, responseIndex: number) {
@@ -9711,12 +11483,13 @@
     }
 
     // 删除消息
-    function deleteMessage(index: number) {
+    function deleteMessage(index: number, count = 1) {
         confirm(
             t('aiSidebar.confirm.deleteMessage.title'),
             t('aiSidebar.confirm.deleteMessage.message'),
             () => {
-                messages = messages.filter((_, i) => i !== index);
+                const safeCount = Math.max(1, Math.floor(Number(count || 1)));
+                messages = messages.filter((_, i) => i < index || i >= index + safeCount);
                 hasUnsavedChanges = true;
             }
         );
@@ -10246,10 +12019,10 @@
                     reasoningEffort: modelConfig.thinkingEffort || 'low',
                     enableImageGeneration,
                     onThinkingChunk: enableThinking
-                        ? async (chunk: string) => {
+                        ? (chunk: string) => {
                               isThinkingPhase = true;
                               streamingThinking += chunk;
-                              await scrollToBottom();
+                              scheduleScrollToBottom();
                           }
                         : undefined,
                     onThinkingComplete: enableThinking
@@ -10276,9 +12049,9 @@
                             })
                         );
                     },
-                    onChunk: async (chunk: string) => {
+                    onChunk: (chunk: string) => {
                         streamingMessage += chunk;
-                        await scrollToBottom();
+                        scheduleScrollToBottom();
                     },
                     onComplete: async (fullText: string) => {
                         // 如果已经中断，不再添加消息（避免重复）
@@ -11000,7 +12773,12 @@
             newContent: group.newCombined,
             newContentForDisplay: group.newCombined,
         };
+        resetDiffDialogViewState();
         isDiffDialogOpen = true;
+        tick().then(() => diffDialogCloseButton?.focus());
+        if (currentDiffOperation) {
+            void loadDiffDialogPreferredLines(currentDiffOperation);
+        }
     }
 
     function getTraceEditFileGroupLines(
@@ -11145,6 +12923,13 @@
             </button>
             <button
                 class="b3-button b3-button--text"
+                on:click={openGitSyncDialog}
+                title={t('aiSidebar.actions.gitSync') || 'Git Sync'}
+            >
+                <svg class="b3-button__icon"><use xlink:href="#iconUpload"></use></svg>
+            </button>
+            <button
+                class="b3-button b3-button--text"
                 on:click={openSettings}
                 title={t('aiSidebar.actions.settings')}
             >
@@ -11153,13 +12938,19 @@
         </div>
     </div>
 
-    <div class="ai-sidebar__messages" bind:this={messagesContainer} on:scroll={handleScroll}>
+    <div
+        class="ai-sidebar__messages"
+        bind:this={messagesContainer}
+        on:scroll={handleScroll}
+        use:autoScrollOnMediaLoad
+    >
         {#each messageGroups as group, groupIndex (groupIndex)}
             {@const firstMessage = group.messages[0]}
             {@const messageIndex = group.startIndex}
             <div
                 class="ai-message ai-message--{group.type}"
-                on:contextmenu={e => handleContextMenu(e, messageIndex, group.type)}
+                on:contextmenu={e =>
+                    handleContextMenu(e, messageIndex, group.type, false, group.messages.length)}
             >
                 <div class="ai-message__header">
                     <span class="ai-message__role">
@@ -12309,7 +14100,7 @@
                         </button>
                         <button
                             class="b3-button b3-button--text ai-message__action"
-                            on:click={() => deleteMessage(messageIndex)}
+                            on:click={() => deleteMessage(messageIndex, group.messages.length)}
                             title={t('aiSidebar.actions.deleteMessage')}
                         >
                             <svg class="b3-button__icon">
@@ -13158,6 +14949,25 @@
             </div>
         {/if}
 
+        {#if !autoScroll || hasUnreadMessagesBelow}
+            <div class="ai-sidebar__scroll-to-bottom">
+                <button
+                    class="b3-button b3-button--primary b3-button--small ai-sidebar__scroll-to-bottom-btn"
+                    on:click={jumpToBottom}
+                    title={t('aiSidebar.actions.scrollToBottom')}
+                >
+                    <span class="ai-sidebar__scroll-to-bottom-text">
+                        {t('aiSidebar.actions.scrollToBottom')}
+                    </span>
+                    {#if hasUnreadMessagesBelow}
+                        <span class="ai-sidebar__scroll-to-bottom-badge">
+                            {t('aiSidebar.messages.newMessages') || '●'}
+                        </span>
+                    {/if}
+                </button>
+            </div>
+        {/if}
+
         {#if messages.filter(msg => msg.role !== 'system').length === 0 && !isLoading}
             <div class="ai-sidebar__empty">
                 <div class="ai-sidebar__empty-icon">💬</div>
@@ -13467,13 +15277,7 @@
             </button>
             <button
                 class="b3-button b3-button--text ai-sidebar__search-btn"
-                on:click={() => {
-                    isSearchDialogOpen = !isSearchDialogOpen;
-                    // 打开对话框时，如果搜索关键词为空，自动加载当前文档
-                    if (isSearchDialogOpen && !searchKeyword.trim()) {
-                        searchDocuments();
-                    }
-                }}
+                on:click={toggleSearchDialog}
                 title={t('aiSidebar.actions.search')}
             >
                 <svg class="b3-button__icon"><use xlink:href="#iconSearch"></use></svg>
@@ -13505,10 +15309,15 @@
     {#if isWebLinkDialogOpen}
         <div class="ai-sidebar__prompt-dialog">
             <div class="ai-sidebar__prompt-dialog-overlay" on:click={closeWebLinkDialog}></div>
-            <div class="ai-sidebar__prompt-dialog-content">
+            <div class="ai-sidebar__prompt-dialog-content" role="dialog" aria-modal="true">
                 <div class="ai-sidebar__prompt-dialog-header">
                     <h4>{t('aiSidebar.webLink.title')}</h4>
-                    <button class="b3-button b3-button--text" on:click={closeWebLinkDialog}>
+                    <button
+                        bind:this={webLinkDialogCloseButton}
+                        class="b3-button b3-button--text"
+                        on:click={closeWebLinkDialog}
+                        aria-label={t('common.close') || 'Close'}
+                    >
                         <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
                     </button>
                 </div>
@@ -13519,6 +15328,7 @@
                                 {t('aiSidebar.webLink.label')}
                             </div>
                             <textarea
+                                bind:this={webLinkDialogTextareaElement}
                                 bind:value={webLinkInput}
                                 placeholder={t('aiSidebar.webLink.placeholder')}
                                 class="b3-text-field ai-sidebar__prompt-textarea"
@@ -13563,14 +15373,15 @@
         <div class="ai-sidebar__search-dialog">
             <div
                 class="ai-sidebar__search-dialog-overlay"
-                on:click={() => (isSearchDialogOpen = false)}
+                on:click={closeSearchDialog}
             ></div>
-            <div class="ai-sidebar__search-dialog-content">
+            <div class="ai-sidebar__search-dialog-content" role="dialog" aria-modal="true">
                 <div class="ai-sidebar__search-dialog-header">
                     <h4>{t('aiSidebar.search.title')}</h4>
                     <button
                         class="b3-button b3-button--text"
-                        on:click={() => (isSearchDialogOpen = false)}
+                        on:click={closeSearchDialog}
+                        aria-label={t('common.close') || 'Close'}
                     >
                         <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
                     </button>
@@ -13579,6 +15390,7 @@
                     <div class="ai-sidebar__search-input-row">
                         <input
                             type="text"
+                            bind:this={searchDialogInputElement}
                             bind:value={searchKeyword}
                             on:input={autoSearch}
                             on:paste={autoSearch}
@@ -13636,7 +15448,12 @@
     {#if isDiffDialogOpen && currentDiffOperation}
         <div class="ai-sidebar__diff-dialog">
             <div class="ai-sidebar__diff-dialog-overlay" on:click={closeDiffDialog}></div>
-            <div class="ai-sidebar__diff-dialog-content">
+            <div
+                class="ai-sidebar__diff-dialog-content"
+                class:ai-sidebar__diff-dialog-content--wrap={diffDialogWrapEnabled}
+                role="dialog"
+                aria-modal="true"
+            >
                 <div class="ai-sidebar__diff-dialog-header">
                     <h3>
                         {#if currentDiffOperation.operationType === 'insert'}
@@ -13645,7 +15462,13 @@
                             {t('aiSidebar.actions.viewDiff')}
                         {/if}
                     </h3>
-                    <button class="b3-button b3-button--cancel" on:click={closeDiffDialog}>
+                    <button
+                        bind:this={diffDialogCloseButton}
+                        class="b3-button b3-button--cancel"
+                        type="button"
+                        on:click={closeDiffDialog}
+                        aria-label={t('common.close') || 'Close'}
+                    >
                         <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
                     </button>
                 </div>
@@ -13661,8 +15484,14 @@
                             <br />
                         {/if}
                         <strong>Diff:</strong>
-                        +{getDiffLineStats(currentDiffOperation).added}
-                        -{getDiffLineStats(currentDiffOperation).removed}
+                        +{diffDialogStats.added}
+                        -{diffDialogStats.removed}
+                        <span class="ai-sidebar__diff-engine-badge" title={diffDialogGitError || ''}>
+                            {diffDialogEngine === 'git' ? 'git' : 'lcs'}
+                            {#if isDiffDialogLinesLoading}
+                                · {t('common.loading')}
+                            {/if}
+                        </span>
                         <br />
                         {#if currentDiffOperation.operationType === 'insert'}
                             <strong>{t('aiSidebar.edit.insertBlock')}:</strong>
@@ -13671,49 +15500,74 @@
                                 : t('aiSidebar.edit.after')}
                         {/if}
                     </div>
-                    {#if currentDiffOperation.operationType === 'insert'}
-                        <!-- 插入操作：只显示新内容 -->
-                        <div class="ai-sidebar__diff-content">
-                            <div
-                                class="ai-sidebar__diff-split-header"
-                                style="margin-top: 12px; display: flex; justify-content: space-between; align-items: center;"
+                    <div class="ai-sidebar__diff-toolbar">
+                        <div class="ai-sidebar__diff-toolbar-left">
+                            <div class="ai-sidebar__diff-toolbar-group">
+                                <button
+                                    class="b3-button b3-button--outline b3-button--small"
+                                    class:ai-sidebar__diff-toolbar-btn--active={diffDialogViewMode ===
+                                        'split'}
+                                    on:click={() => (diffDialogViewMode = 'split')}
+                                    type="button"
+                                >
+                                    {t('aiSidebar.diff.modeSplit') || 'Split'}
+                                </button>
+                                <button
+                                    class="b3-button b3-button--outline b3-button--small"
+                                    class:ai-sidebar__diff-toolbar-btn--active={diffDialogViewMode ===
+                                        'unified'}
+                                    on:click={() => (diffDialogViewMode = 'unified')}
+                                    type="button"
+                                >
+                                    {t('aiSidebar.diff.modeUnified') || 'Unified'}
+                                </button>
+                            </div>
+
+                            <button
+                                class="b3-button b3-button--outline b3-button--small"
+                                on:click={() => (diffDialogWrapEnabled = !diffDialogWrapEnabled)}
+                                type="button"
                             >
-                                <span>{t('aiSidebar.edit.insertContent')}</span>
+                                {diffDialogWrapEnabled
+                                    ? t('aiSidebar.diff.wrapOff') || 'Disable wrapping'
+                                    : t('aiSidebar.diff.wrapOn') || 'Wrap lines'}
+                            </button>
+
+                            <button
+                                class="b3-button b3-button--outline b3-button--small"
+                                on:click={() => {
+                                    diffDialogExpandedFoldIds = diffDialogExpandedFoldIds.has(
+                                        '__all__'
+                                    )
+                                        ? new Set()
+                                        : new Set(['__all__']);
+                                }}
+                                type="button"
+                            >
+                                {diffDialogExpandedFoldIds.has('__all__')
+                                    ? t('aiSidebar.diff.collapseContext') || 'Collapse context'
+                                    : t('aiSidebar.diff.expandContext') || 'Expand context'}
+                            </button>
+                        </div>
+
+                        <div class="ai-sidebar__diff-toolbar-right">
+                            {#if currentDiffOperation.operationType !== 'insert' &&
+                                String(currentDiffOperation.oldContent || '').trim()}
                                 <button
                                     class="b3-button b3-button--text b3-button--small"
                                     on:click={() => {
-                                        navigator.clipboard.writeText(
-                                            currentDiffOperation.newContent
-                                        );
+                                        navigator.clipboard.writeText(currentDiffOperation.oldContent);
                                         pushMsg(t('aiSidebar.success.copySuccess'));
                                     }}
-                                    title={t('aiSidebar.actions.copyNewContent')}
+                                    title={t('aiSidebar.actions.copyOldContent')}
+                                    type="button"
                                 >
                                     <svg class="b3-button__icon">
                                         <use xlink:href="#iconCopy"></use>
                                     </svg>
-                                    {t('aiSidebar.actions.copy')}
+                                    {t('aiSidebar.actions.copyBefore')}
                                 </button>
-                            </div>
-                            <pre
-                                class="ai-sidebar__diff-split-content"
-                                style="border: 1px solid var(--b3-theme-success); background-color: var(--b3-theme-success-lighter);">{currentDiffOperation.newContent}</pre>
-                    </div>
-                    {:else if currentDiffOperation.oldContent}
-                        <div class="ai-sidebar__diff-actions">
-                            <button
-                                class="b3-button b3-button--text b3-button--small"
-                                on:click={() => {
-                                    navigator.clipboard.writeText(currentDiffOperation.oldContent);
-                                    pushMsg(t('aiSidebar.success.copySuccess'));
-                                }}
-                                title={t('aiSidebar.actions.copyOldContent')}
-                            >
-                                <svg class="b3-button__icon">
-                                    <use xlink:href="#iconCopy"></use>
-                                </svg>
-                                {t('aiSidebar.actions.copyBefore')}
-                            </button>
+                            {/if}
                             <button
                                 class="b3-button b3-button--text b3-button--small"
                                 on:click={() => {
@@ -13721,70 +15575,450 @@
                                     pushMsg(t('aiSidebar.success.copySuccess'));
                                 }}
                                 title={t('aiSidebar.actions.copyNewContent')}
+                                type="button"
                             >
                                 <svg class="b3-button__icon">
                                     <use xlink:href="#iconCopy"></use>
                                 </svg>
-                                {t('aiSidebar.actions.copyAfter')}
+                                {currentDiffOperation.operationType === 'insert'
+                                    ? t('aiSidebar.actions.copy')
+                                    : t('aiSidebar.actions.copyAfter')}
                             </button>
+                            {#if diffDialogEngine === 'git' && diffDialogUnifiedPatch}
+                                <button
+                                    class="b3-button b3-button--text b3-button--small"
+                                    on:click={() => {
+                                        navigator.clipboard.writeText(diffDialogUnifiedPatch);
+                                        pushMsg(t('aiSidebar.success.copySuccess'));
+                                    }}
+                                    title={t('aiSidebar.actions.copyPatch') || 'Copy patch'}
+                                    type="button"
+                                >
+                                    <svg class="b3-button__icon">
+                                        <use xlink:href="#iconCopy"></use>
+                                    </svg>
+                                    {t('aiSidebar.actions.copyPatch') || 'Patch'}
+                                </button>
+                            {/if}
                         </div>
-                        {@const splitRows = generateSplitDiffRows(
-                            currentDiffOperation.oldContent,
-                            currentDiffOperation.newContent,
-                            140
-                        )}
-                        <div class="ai-sidebar__diff-split ai-sidebar__diff-split--with-diff">
-                            <div class="ai-sidebar__diff-split-column">
-                                <div class="ai-sidebar__diff-split-header">
-                                    <span>{t('aiSidebar.edit.before')}</span>
-                                </div>
-                                <div class="ai-sidebar__diff-split-content ai-sidebar__diff-split-content--diff">
-                                    {#each splitRows as row}
-                                        <div
-                                            class="ai-sidebar__diff-split-line ai-sidebar__diff-split-line--{row.leftType}"
-                                        >
-                                            <span class="ai-sidebar__diff-marker">
-                                                {row.leftType === 'removed'
-                                                    ? '-'
-                                                    : row.leftType === 'unchanged'
-                                                      ? '·'
-                                                      : ''}
-                                            </span>
-                                            <span class="ai-sidebar__diff-text">{row.leftLine}</span>
-                                        </div>
-                                    {/each}
-                                </div>
-                            </div>
-                            <div class="ai-sidebar__diff-split-column">
-                                <div class="ai-sidebar__diff-split-header">
-                                    <span>{t('aiSidebar.edit.after')}</span>
-                                </div>
-                                <div class="ai-sidebar__diff-split-content ai-sidebar__diff-split-content--diff">
-                                    {#each splitRows as row}
-                                        <div
-                                            class="ai-sidebar__diff-split-line ai-sidebar__diff-split-line--{row.rightType}"
-                                        >
-                                            <span class="ai-sidebar__diff-marker">
-                                                {row.rightType === 'added'
-                                                    ? '+'
-                                                    : row.rightType === 'unchanged'
-                                                      ? '·'
-                                                      : ''}
-                                            </span>
-                                            <span class="ai-sidebar__diff-text">{row.rightLine}</span>
-                                        </div>
-                                    {/each}
-                                </div>
-                            </div>
-                        </div>
-                    {:else}
+                    </div>
+
+                    {#if isDiffDialogLinesLoading && diffDialogLines.length === 0}
                         <div class="ai-sidebar__diff-loading">
                             {t('common.loading')}
                         </div>
+                    {:else}
+                        {#if diffDialogViewMode === 'unified'}
+                            <div
+                                class="ai-sidebar__diff-unified-content"
+                                class:ai-sidebar__diff-wrap={diffDialogWrapEnabled}
+                                class:ai-sidebar__diff-nowrap={!diffDialogWrapEnabled}
+                            >
+                                {#each diffDialogVisibleTokens as token}
+                                    {#if token.kind === 'fold'}
+                                        <button
+                                            class="ai-sidebar__diff-fold-row"
+                                            on:click={() => expandDiffDialogFold(token.id)}
+                                            title={t('aiSidebar.diff.expandContext') || 'Expand context'}
+                                            type="button"
+                                        >
+                                            {formatDiffDialogCollapsedLines(token.hiddenCount)}
+                                        </button>
+                                    {:else}
+                                        <div
+                                            class="ai-sidebar__diff-unified-line ai-sidebar__diff-unified-line--{token.type}"
+                                        >
+                                            <span
+                                                class="ai-sidebar__diff-lineno"
+                                                title={t('aiSidebar.diff.lineNumbers') || 'Line numbers'}
+                                            >
+                                                {token.oldNo ?? ''}
+                                            </span>
+                                            <span
+                                                class="ai-sidebar__diff-lineno"
+                                                title={t('aiSidebar.diff.lineNumbers') || 'Line numbers'}
+                                            >
+                                                {token.newNo ?? ''}
+                                            </span>
+                                            <span class="ai-sidebar__diff-marker">
+                                                {token.type === 'added'
+                                                    ? '+'
+                                                    : token.type === 'removed'
+                                                      ? '-'
+                                                      : '·'}
+                                            </span>
+                                            <span class="ai-sidebar__diff-text">{token.line}</span>
+                                        </div>
+                                    {/if}
+                                {/each}
+                            </div>
+                        {:else}
+                            <div class="ai-sidebar__diff-split ai-sidebar__diff-split--with-diff">
+                                <div class="ai-sidebar__diff-split-column">
+                                    <div class="ai-sidebar__diff-split-header">
+                                        <span>{t('aiSidebar.edit.before')}</span>
+                                    </div>
+                                    <div
+                                        class="ai-sidebar__diff-split-content ai-sidebar__diff-split-content--diff"
+                                        class:ai-sidebar__diff-wrap={diffDialogWrapEnabled}
+                                        class:ai-sidebar__diff-nowrap={!diffDialogWrapEnabled}
+                                    >
+                                        {#each diffDialogVisibleSplitRows as row}
+                                            {#if row.kind === 'fold'}
+                                                <button
+                                                    class="ai-sidebar__diff-fold-row"
+                                                    on:click={() => expandDiffDialogFold(row.id)}
+                                                    title={t('aiSidebar.diff.expandContext') ||
+                                                        'Expand context'}
+                                                    type="button"
+                                                >
+                                                    {formatDiffDialogCollapsedLines(row.hiddenCount)}
+                                                </button>
+                                            {:else}
+                                                <div
+                                                    class="ai-sidebar__diff-split-line ai-sidebar__diff-split-line--{row.leftType}"
+                                                >
+                                                    <span
+                                                        class="ai-sidebar__diff-lineno"
+                                                        title={t('aiSidebar.diff.lineNumbers') ||
+                                                            'Line numbers'}
+                                                    >
+                                                        {row.leftNo ?? ''}
+                                                    </span>
+                                                    <span class="ai-sidebar__diff-marker">
+                                                        {row.leftType === 'removed'
+                                                            ? '-'
+                                                            : row.leftType === 'unchanged'
+                                                              ? '·'
+                                                              : ''}
+                                                    </span>
+                                                    <span class="ai-sidebar__diff-text"
+                                                        >{row.leftLine}</span
+                                                    >
+                                                </div>
+                                            {/if}
+                                        {/each}
+                                    </div>
+                                </div>
+                                <div class="ai-sidebar__diff-split-column">
+                                    <div class="ai-sidebar__diff-split-header">
+                                        <span>{t('aiSidebar.edit.after')}</span>
+                                    </div>
+                                    <div
+                                        class="ai-sidebar__diff-split-content ai-sidebar__diff-split-content--diff"
+                                        class:ai-sidebar__diff-wrap={diffDialogWrapEnabled}
+                                        class:ai-sidebar__diff-nowrap={!diffDialogWrapEnabled}
+                                    >
+                                        {#each diffDialogVisibleSplitRows as row}
+                                            {#if row.kind === 'fold'}
+                                                <button
+                                                    class="ai-sidebar__diff-fold-row"
+                                                    on:click={() => expandDiffDialogFold(row.id)}
+                                                    title={t('aiSidebar.diff.expandContext') ||
+                                                        'Expand context'}
+                                                    type="button"
+                                                >
+                                                    {formatDiffDialogCollapsedLines(row.hiddenCount)}
+                                                </button>
+                                            {:else}
+                                                <div
+                                                    class="ai-sidebar__diff-split-line ai-sidebar__diff-split-line--{row.rightType}"
+                                                >
+                                                    <span
+                                                        class="ai-sidebar__diff-lineno"
+                                                        title={t('aiSidebar.diff.lineNumbers') ||
+                                                            'Line numbers'}
+                                                    >
+                                                        {row.rightNo ?? ''}
+                                                    </span>
+                                                    <span class="ai-sidebar__diff-marker">
+                                                        {row.rightType === 'added'
+                                                            ? '+'
+                                                            : row.rightType === 'unchanged'
+                                                              ? '·'
+                                                              : ''}
+                                                    </span>
+                                                    <span class="ai-sidebar__diff-text"
+                                                        >{row.rightLine}</span
+                                                    >
+                                                </div>
+                                            {/if}
+                                        {/each}
+                                    </div>
+                                </div>
+                            </div>
+                        {/if}
+
+                        {#if (diffDialogViewMode === 'unified'
+                            ? diffDialogHasMoreTokens
+                            : diffDialogHasMoreSplitRows) ||
+                            diffDialogRenderLimit > DIFF_DIALOG_RENDER_LIMIT_INITIAL}
+                            <div class="ai-sidebar__diff-pagination">
+                                {#if diffDialogViewMode === 'unified'
+                                    ? diffDialogHasMoreTokens
+                                    : diffDialogHasMoreSplitRows}
+                                    <button
+                                        class="b3-button b3-button--outline b3-button--small"
+                                        on:click={loadMoreDiffDialogLines}
+                                        type="button"
+                                    >
+                                        {t('aiSidebar.diff.showMore') || 'Show more'}
+                                    </button>
+                                {/if}
+                                {#if diffDialogRenderLimit > DIFF_DIALOG_RENDER_LIMIT_INITIAL}
+                                    <button
+                                        class="b3-button b3-button--text b3-button--small"
+                                        on:click={() =>
+                                            (diffDialogRenderLimit =
+                                                DIFF_DIALOG_RENDER_LIMIT_INITIAL)}
+                                        type="button"
+                                    >
+                                        {t('aiSidebar.diff.showLess') || 'Show less'}
+                                    </button>
+                                {/if}
+                            </div>
+                        {/if}
                     {/if}
                 </div>
                 <div class="ai-sidebar__diff-dialog-footer">
                     <button class="b3-button b3-button--cancel" on:click={closeDiffDialog}>
+                        {t('common.close')}
+                    </button>
+                </div>
+            </div>
+        </div>
+    {/if}
+
+    <!-- Git 同步对话框 -->
+    {#if isGitSyncDialogOpen}
+        <div class="ai-sidebar__git-dialog">
+            <div class="ai-sidebar__git-dialog-overlay" on:click={closeGitSyncDialog}></div>
+            <div class="ai-sidebar__git-dialog-content" role="dialog" aria-modal="true">
+                <div class="ai-sidebar__git-dialog-header">
+                    <h3>{t('aiSidebar.git.title') || 'Git 同步'}</h3>
+                    <button
+                        bind:this={gitSyncDialogCloseButton}
+                        class="b3-button b3-button--cancel"
+                        on:click={closeGitSyncDialog}
+                        aria-label={t('common.close') || 'Close'}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
+                    </button>
+                </div>
+
+                <div class="ai-sidebar__git-dialog-body">
+                    <div class="ai-sidebar__git-tip">
+                        {t('aiSidebar.git.authTip') ||
+                            '建议使用 SSH remote（git@...）或系统凭据管理器，避免把 Token 写进 URL。'}
+                    </div>
+
+                    <div class="ai-sidebar__git-form">
+                        <div class="ai-sidebar__git-row">
+                            <div class="ai-sidebar__git-label">Repo</div>
+                            <input
+                                bind:this={gitSyncRepoInputElement}
+                                class="b3-text-field fn__flex-1"
+                                type="text"
+                                value={gitRepoDir}
+                                placeholder={settings?.codexWorkingDir || ''}
+                                on:change={async e => {
+                                    gitRepoDir = e.target.value;
+                                    await updateGitSettingsPatch({ codexGitRepoDir: gitRepoDir });
+                                }}
+                            />
+                            <button
+                                class="b3-button b3-button--outline"
+                                on:click={async () => {
+                                    gitRepoDir = '';
+                                    await updateGitSettingsPatch({ codexGitRepoDir: '' });
+                                }}
+                                type="button"
+                                disabled={gitIsRunning}
+                            >
+                                {t('aiSidebar.git.useWorkingDir') || '用工作目录'}
+                            </button>
+                        </div>
+
+                        <div class="ai-sidebar__git-row">
+                            <div class="ai-sidebar__git-label">Remote</div>
+                            <input
+                                class="b3-text-field ai-sidebar__git-remote-name"
+                                type="text"
+                                value={gitRemoteName}
+                                placeholder="origin"
+                                on:change={async e => {
+                                    gitRemoteName = e.target.value;
+                                    await updateGitSettingsPatch({
+                                        codexGitRemoteName: gitRemoteName,
+                                    });
+                                }}
+                            />
+                            <input
+                                class="b3-text-field fn__flex-1"
+                                type="text"
+                                value={gitRemoteUrl}
+                                placeholder="git@github.com:user/repo.git"
+                                on:change={async e => {
+                                    gitRemoteUrl = e.target.value;
+                                    await updateGitSettingsPatch({
+                                        codexGitRemoteUrl: gitRemoteUrl,
+                                    });
+                                }}
+                            />
+                            <button
+                                class="b3-button b3-button--outline"
+                                on:click={runGitSetRemote}
+                                type="button"
+                                disabled={gitIsRunning}
+                            >
+                                {t('aiSidebar.git.setRemote') || '设置 Remote'}
+                            </button>
+                        </div>
+
+                        <div class="ai-sidebar__git-row">
+                            <div class="ai-sidebar__git-label">Branch</div>
+                            <input
+                                class="b3-text-field fn__flex-1"
+                                type="text"
+                                value={gitBranch}
+                                placeholder={t('aiSidebar.git.branchOptional') || '可选，留空用当前分支'}
+                                on:change={async e => {
+                                    gitBranch = e.target.value;
+                                    await updateGitSettingsPatch({
+                                        codexGitBranch: gitBranch,
+                                    });
+                                }}
+                            />
+                        </div>
+
+                        <div class="ai-sidebar__git-row">
+                            <div class="ai-sidebar__git-label">
+                                {t('aiSidebar.git.scope') || 'Scope'}
+                            </div>
+                            <select
+                                class="b3-select fn__flex-1"
+                                value={gitSyncScope}
+                                on:change={async e => {
+                                    const next = normalizeGitSyncScope(e.target.value) || 'notes';
+                                    gitSyncScope = next;
+                                    await updateGitSettingsPatch({
+                                        codexGitSyncScope: next,
+                                    });
+                                }}
+                            >
+                                <option value="notes">
+                                    {t('settings.codex.git.syncScope.options.notes') ||
+                                        '仅笔记内容（.sy + assets）'}
+                                </option>
+                                <option value="repo">
+                                    {t('settings.codex.git.syncScope.options.repo') ||
+                                        '整个仓库（git add -A）'}
+                                </option>
+                            </select>
+                        </div>
+
+                        <div class="ai-sidebar__git-row">
+                            <div class="ai-sidebar__git-label">
+                                {t('aiSidebar.git.commitMessage') || 'Commit'}
+                            </div>
+                            <input
+                                class="b3-text-field fn__flex-1"
+                                type="text"
+                                value={gitCommitMessage}
+                                placeholder={t('aiSidebar.git.commitPlaceholder') || '输入 commit message'}
+                                on:change={e => {
+                                    gitCommitMessage = e.target.value;
+                                }}
+                            />
+                        </div>
+                    </div>
+
+                    <div class="ai-sidebar__git-actions">
+                        <button
+                            class="b3-button b3-button--outline"
+                            on:click={runGitAutoSync}
+                            disabled={gitIsRunning}
+                        >
+                            {gitIsRunning
+                                ? t('aiSidebar.git.autoSyncRunning') || '同步中...'
+                                : t('aiSidebar.git.autoSync') || '一键同步'}
+                        </button>
+                        <button
+                            class="b3-button b3-button--outline"
+                            on:click={runGitStatus}
+                            disabled={gitIsRunning}
+                        >
+                            {t('aiSidebar.git.status') || 'Status'}
+                        </button>
+                        <button
+                            class="b3-button b3-button--outline"
+                            on:click={runGitInit}
+                            disabled={gitIsRunning}
+                        >
+                            {t('aiSidebar.git.init') || 'Init'}
+                        </button>
+                        <button
+                            class="b3-button b3-button--outline"
+                            on:click={runGitAddAll}
+                            disabled={gitIsRunning}
+                        >
+                            {isNotesOnlyGitSync()
+                                ? t('aiSidebar.git.addNotes') || 'Add Notes'
+                                : t('aiSidebar.git.addAll') || 'Add -A'}
+                        </button>
+                        <button
+                            class="b3-button b3-button--outline"
+                            on:click={runGitCommit}
+                            disabled={gitIsRunning}
+                        >
+                            {t('aiSidebar.git.commit') || 'Commit'}
+                        </button>
+                        <button
+                            class="b3-button b3-button--outline"
+                            on:click={runGitPull}
+                            disabled={gitIsRunning}
+                        >
+                            <svg class="b3-button__icon"><use xlink:href="#iconDownload"></use></svg>
+                            {t('aiSidebar.git.pull') || 'Pull'}
+                        </button>
+                        <button
+                            class="b3-button b3-button--outline"
+                            on:click={runGitPush}
+                            disabled={gitIsRunning}
+                        >
+                            <svg class="b3-button__icon"><use xlink:href="#iconUpload"></use></svg>
+                            {t('aiSidebar.git.push') || 'Push'}
+                        </button>
+                        {#if gitIsRunning}
+                            <button
+                                class="b3-button b3-button--cancel"
+                                on:click={() => gitAbortCurrent?.()}
+                            >
+                                {t('common.cancel') || 'Cancel'}
+                            </button>
+                        {/if}
+                        <button
+                            class="b3-button b3-button--text"
+                            on:click={() => {
+                                gitLog = '';
+                                gitLastExitCode = null;
+                            }}
+                            disabled={gitIsRunning}
+                        >
+                            {t('aiSidebar.git.clearLog') || 'Clear'}
+                        </button>
+                        {#if gitLastExitCode !== null}
+                            <span class="ai-sidebar__git-exitcode">exit {gitLastExitCode}</span>
+                        {/if}
+                    </div>
+
+                    <pre class="ai-sidebar__git-log">
+                        {gitLog || (t('aiSidebar.git.noLog') || '')}
+                    </pre>
+                </div>
+
+                <div class="ai-sidebar__git-dialog-footer">
+                    <button class="b3-button b3-button--cancel" on:click={closeGitSyncDialog}>
                         {t('common.close')}
                     </button>
                 </div>
@@ -14002,6 +16236,8 @@
 </div>
 
 <style lang="scss">
+    @use './styles/copilot-tokens.scss';
+
     .ai-sidebar {
         display: flex;
         flex-direction: column;
@@ -14276,6 +16512,43 @@
         }
     }
 
+    .ai-sidebar__scroll-to-bottom {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 12px;
+        display: flex;
+        justify-content: center;
+        z-index: 20;
+        pointer-events: none;
+    }
+
+    .ai-sidebar__scroll-to-bottom-btn {
+        pointer-events: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border-radius: 999px;
+        padding: 6px 12px;
+        height: auto;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+    }
+
+    .ai-sidebar__scroll-to-bottom-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 18px;
+        padding: 0 8px;
+        border-radius: 9px;
+        font-size: 11px;
+        font-weight: 600;
+        background: var(--b3-theme-background);
+        color: var(--b3-theme-primary);
+        border: 1px solid var(--b3-theme-primary-light);
+        white-space: nowrap;
+    }
+
     .ai-sidebar__empty {
         display: flex;
         flex-direction: column;
@@ -14306,7 +16579,7 @@
 
         &:hover {
             .ai-message__content {
-                box-shadow: 0 0 0 1px var(--b3-border-color);
+                box-shadow: 0 0 0 1px var(--copilot-border);
             }
         }
     }
@@ -14993,14 +17266,14 @@
 
     .ai-message__content {
         padding: 10px 12px;
-        border-radius: 8px;
+        border-radius: var(--copilot-radius-md);
         line-height: 1.55;
         word-wrap: break-word;
         overflow-wrap: anywhere;
         overflow-x: auto;
         user-select: text; // 允许鼠标选择文本进行复制
         cursor: text; // 显示文本选择光标
-        box-shadow: 0 0 0 1px var(--b3-border-color);
+        box-shadow: 0 0 0 1px var(--copilot-border);
     }
 
     .ai-message__content :global(*:first-child),
@@ -15040,8 +17313,8 @@
         }
 
         .ai-message__content {
-            background: var(--b3-theme-primary-lightest);
-            color: var(--b3-theme-on-background);
+            background: var(--copilot-user-message-bg);
+            color: var(--copilot-text-on-bg);
             margin-left: auto;
             max-width: min(88%, 820px);
         }
@@ -15057,8 +17330,8 @@
         }
 
         .ai-message__content {
-            background: var(--b3-theme-background);
-            color: var(--b3-theme-on-background);
+            background: var(--copilot-assistant-message-bg);
+            color: var(--copilot-text-on-bg);
             margin-right: auto;
             max-width: min(94%, 920px);
         }
@@ -16068,15 +18341,342 @@
         position: relative;
         width: 90%;
         max-width: 900px;
+        background: var(--copilot-surface-1);
+        border-radius: var(--copilot-radius-md);
+        box-shadow: var(--copilot-shadow-md);
+        display: flex;
+        flex-direction: column;
+        max-height: 80vh;
+        --ai-sidebar-diff-white-space: pre;
+        --ai-sidebar-diff-word-break: normal;
+        --ai-sidebar-diff-lineno-width: 56px;
+    }
+
+    .ai-sidebar__diff-dialog-content--wrap {
+        --ai-sidebar-diff-white-space: pre-wrap;
+        --ai-sidebar-diff-word-break: break-word;
+    }
+
+    .ai-sidebar__diff-dialog-content :focus-visible,
+    .ai-sidebar__git-dialog-content :focus-visible,
+    .ai-sidebar__prompt-dialog-content :focus-visible,
+    .ai-sidebar__search-dialog-content :focus-visible {
+        outline: 2px solid var(--copilot-border-strong);
+        outline-offset: 2px;
+    }
+
+    .ai-sidebar__diff-dialog-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: var(--copilot-space-4);
+        border-bottom: 1px solid var(--copilot-border);
+        gap: 12px;
+
+        h3 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .b3-button {
+            padding: 4px;
+            min-width: auto;
+        }
+    }
+
+    .ai-sidebar__diff-dialog-body {
+        padding: var(--copilot-space-4);
+        overflow-y: auto;
+        flex: 1;
+    }
+
+    .ai-sidebar__diff-info {
+        padding: var(--copilot-space-3);
+        background: var(--copilot-surface-2);
+        border-radius: var(--copilot-radius-sm);
+        margin-bottom: var(--copilot-space-4);
+        font-size: 13px;
+
+        strong {
+            color: var(--copilot-text-primary);
+        }
+    }
+
+    .ai-sidebar__diff-engine-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: 8px;
+        padding: 1px 6px;
+        border-radius: 999px;
+        border: 1px solid var(--copilot-border);
+        background: var(--copilot-surface-3);
+        color: var(--copilot-text-secondary);
+        font-size: 12px;
+        line-height: 1.4;
+        vertical-align: middle;
+        user-select: none;
+    }
+
+    .ai-sidebar__diff-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+    }
+
+    .ai-sidebar__diff-toolbar-left,
+    .ai-sidebar__diff-toolbar-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .ai-sidebar__diff-toolbar-group {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+    }
+
+    .ai-sidebar__diff-toolbar-btn--active {
+        border-color: var(--copilot-accent);
+        background: color-mix(in srgb, var(--copilot-accent) 18%, transparent);
+    }
+
+    .ai-sidebar__diff-pagination {
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .ai-sidebar__diff-content {
+        font-family: var(--b3-font-family-code);
+        font-size: 13px;
+        line-height: 1.6;
+        background: var(--copilot-surface-2);
+        border-radius: var(--copilot-radius-sm);
+        border: 1px solid var(--copilot-border);
+        overflow: auto;
+    }
+
+    .ai-sidebar__diff-line {
+        display: flex;
+        padding: 2px 12px;
+        min-height: 24px;
+
+        &--removed {
+            background: var(--copilot-diff-removed-bg);
+            color: var(--b3-theme-error);
+        }
+
+        &--added {
+            background: var(--copilot-diff-added-bg);
+            color: var(--b3-theme-success);
+        }
+
+        &--unchanged {
+            color: var(--copilot-text-primary);
+        }
+    }
+
+    .ai-sidebar__diff-marker {
+        display: inline-block;
+        width: 20px;
+        flex-shrink: 0;
+        font-weight: 600;
+    }
+
+    .ai-sidebar__diff-lineno {
+        display: inline-block;
+        width: var(--ai-sidebar-diff-lineno-width);
+        flex-shrink: 0;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        user-select: none;
+        color: var(--copilot-text-secondary);
+    }
+
+    .ai-sidebar__diff-text {
+        flex: 1;
+        white-space: var(--ai-sidebar-diff-white-space);
+        word-break: var(--ai-sidebar-diff-word-break);
+    }
+
+    .ai-sidebar__diff-fold-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        padding: 2px 10px;
+        min-height: 22px;
+        border: 0;
+        background: color-mix(in srgb, var(--copilot-surface-2) 82%, transparent);
+        color: var(--copilot-text-secondary);
+        cursor: pointer;
+        text-align: left;
+    }
+
+    .ai-sidebar__diff-fold-row:hover {
+        background: var(--copilot-surface-3);
+        color: var(--copilot-text-primary);
+    }
+
+    .ai-sidebar__diff-unified-content {
+        border: 1px solid var(--copilot-border);
+        border-radius: var(--copilot-radius-sm);
+        background: var(--copilot-surface-2);
+        overflow: auto;
+        font-family: var(--b3-font-family-code);
+        font-size: 13px;
+        line-height: 1.6;
+    }
+
+    .ai-sidebar__diff-unified-line {
+        display: flex;
+        gap: 6px;
+        padding: 2px 10px;
+        min-height: 22px;
+    }
+
+    .ai-sidebar__diff-unified-line--removed {
+        background: var(--copilot-diff-removed-bg);
+        color: var(--b3-theme-error);
+    }
+
+    .ai-sidebar__diff-unified-line--added {
+        background: var(--copilot-diff-added-bg);
+        color: var(--b3-theme-success);
+    }
+
+    .ai-sidebar__diff-unified-line--unchanged {
+        color: var(--copilot-text-primary);
+    }
+
+    .ai-sidebar__diff-loading {
+        text-align: center;
+        padding: 32px;
+        color: var(--copilot-text-secondary);
+    }
+
+    .ai-sidebar__diff-split {
+        display: flex;
+        gap: 12px;
+        height: 100%;
+        min-height: 400px;
+    }
+
+    .ai-sidebar__diff-split-column {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--copilot-border);
+        border-radius: var(--copilot-radius-sm);
+        background: var(--copilot-surface-2);
+        overflow: hidden;
+    }
+
+    .ai-sidebar__diff-split-header {
+        padding: 8px 12px;
+        background: var(--copilot-surface-3);
+        border-bottom: 1px solid var(--copilot-border);
+        font-weight: 600;
+        font-size: 13px;
+        color: var(--copilot-text-primary);
+    }
+
+    .ai-sidebar__diff-split-content {
+        flex: 1;
+        margin: 0;
+        padding: 12px;
+        overflow: auto;
+        font-family: var(--b3-font-family-code);
+        font-size: 13px;
+        line-height: 1.6;
+        white-space: var(--ai-sidebar-diff-white-space);
+        word-break: var(--ai-sidebar-diff-word-break);
+        color: var(--copilot-text-primary);
+    }
+
+    .ai-sidebar__diff-split-content--diff {
+        padding: 0;
+    }
+
+    .ai-sidebar__diff-split-line {
+        display: flex;
+        gap: 6px;
+        padding: 2px 10px;
+        min-height: 22px;
+    }
+
+    .ai-sidebar__diff-split-line--removed {
+        background: var(--copilot-diff-removed-bg);
+        color: var(--b3-theme-error);
+    }
+
+    .ai-sidebar__diff-split-line--added {
+        background: var(--copilot-diff-added-bg);
+        color: var(--b3-theme-success);
+    }
+
+    .ai-sidebar__diff-split-line--unchanged {
+        color: var(--copilot-text-primary);
+    }
+
+    .ai-sidebar__diff-split-line--empty {
+        background: color-mix(in srgb, var(--copilot-surface-2) 78%, transparent);
+        color: var(--copilot-text-secondary);
+    }
+
+    .ai-sidebar__diff-dialog-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: var(--copilot-space-4);
+        border-top: 1px solid var(--copilot-border);
+    }
+
+    // Git 同步对话框样式
+    .ai-sidebar__git-dialog {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .ai-sidebar__git-dialog-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+    }
+
+    .ai-sidebar__git-dialog-content {
+        position: relative;
+        width: 90%;
+        max-width: 980px;
         background: var(--b3-theme-background);
         border-radius: 8px;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
         display: flex;
         flex-direction: column;
-        max-height: 80vh;
+        max-height: 82vh;
     }
 
-    .ai-sidebar__diff-dialog-header {
+    .ai-sidebar__git-dialog-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -16096,148 +18696,88 @@
         }
     }
 
-    .ai-sidebar__diff-dialog-body {
+    .ai-sidebar__git-dialog-body {
         padding: 16px;
         overflow-y: auto;
         flex: 1;
-    }
-
-    .ai-sidebar__diff-info {
-        padding: 12px;
-        background: var(--b3-theme-surface);
-        border-radius: 6px;
-        margin-bottom: 16px;
-        font-size: 13px;
-
-        strong {
-            color: var(--b3-theme-on-surface);
-        }
-    }
-
-    .ai-sidebar__diff-content {
-        font-family: var(--b3-font-family-code);
-        font-size: 13px;
-        line-height: 1.6;
-        background: var(--b3-theme-surface);
-        border-radius: 6px;
-        border: 1px solid var(--b3-border-color);
-        overflow: auto;
-    }
-
-    .ai-sidebar__diff-line {
-        display: flex;
-        padding: 2px 12px;
-        min-height: 24px;
-
-        &--removed {
-            background: rgba(255, 0, 0, 0.1);
-            color: var(--b3-theme-error);
-        }
-
-        &--added {
-            background: rgba(0, 255, 0, 0.1);
-            color: var(--b3-theme-success);
-        }
-
-        &--unchanged {
-            color: var(--b3-theme-on-surface);
-        }
-    }
-
-    .ai-sidebar__diff-marker {
-        display: inline-block;
-        width: 20px;
-        flex-shrink: 0;
-        font-weight: 600;
-    }
-
-    .ai-sidebar__diff-text {
-        flex: 1;
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
-
-    .ai-sidebar__diff-loading {
-        text-align: center;
-        padding: 32px;
-        color: var(--b3-theme-on-surface-light);
-    }
-
-    .ai-sidebar__diff-split {
-        display: flex;
-        gap: 12px;
-        height: 100%;
-        min-height: 400px;
-    }
-
-    .ai-sidebar__diff-split-column {
-        flex: 1;
         display: flex;
         flex-direction: column;
-        border: 1px solid var(--b3-border-color);
+        gap: 12px;
+    }
+
+    .ai-sidebar__git-dialog-footer {
+        padding: 12px 16px;
+        border-top: 1px solid var(--b3-border-color);
+        display: flex;
+        justify-content: flex-end;
+    }
+
+    .ai-sidebar__git-tip {
+        padding: 10px 12px;
         border-radius: 6px;
         background: var(--b3-theme-surface);
-        overflow: hidden;
-    }
-
-    .ai-sidebar__diff-split-header {
-        padding: 8px 12px;
-        background: var(--b3-theme-surface-light);
-        border-bottom: 1px solid var(--b3-border-color);
-        font-weight: 600;
+        border: 1px dashed var(--b3-border-color);
+        color: var(--b3-theme-on-surface-light);
         font-size: 13px;
-        color: var(--b3-theme-on-surface);
     }
 
-    .ai-sidebar__diff-split-content {
-        flex: 1;
-        margin: 0;
+    .ai-sidebar__git-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
         padding: 12px;
-        overflow: auto;
-        font-family: var(--b3-font-family-code);
+        background: var(--b3-theme-surface);
+        border-radius: 6px;
+        border: 1px solid var(--b3-border-color);
+    }
+
+    .ai-sidebar__git-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .ai-sidebar__git-label {
+        width: 64px;
+        flex-shrink: 0;
+        color: var(--b3-theme-on-surface-light);
         font-size: 13px;
+        font-weight: 600;
+    }
+
+    .ai-sidebar__git-remote-name {
+        width: 140px;
+        flex-shrink: 0;
+    }
+
+    .ai-sidebar__git-actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .ai-sidebar__git-log {
+        flex: 1;
+        min-height: 240px;
+        max-height: 44vh;
+        overflow: auto;
+        padding: 12px;
+        background: var(--b3-theme-surface);
+        border-radius: 6px;
+        border: 1px solid var(--b3-border-color);
+        font-family: var(--b3-font-family-code);
+        font-size: 12px;
         line-height: 1.6;
         white-space: pre-wrap;
         word-break: break-word;
-        color: var(--b3-theme-on-surface);
+        margin: 0;
     }
 
-    .ai-sidebar__diff-split-content--diff {
-        padding: 0;
-    }
-
-    .ai-sidebar__diff-split-line {
-        display: flex;
-        gap: 6px;
-        padding: 2px 10px;
-        min-height: 22px;
-    }
-
-    .ai-sidebar__diff-split-line--removed {
-        background: rgba(255, 0, 0, 0.1);
-        color: var(--b3-theme-error);
-    }
-
-    .ai-sidebar__diff-split-line--added {
-        background: rgba(0, 255, 0, 0.1);
-        color: var(--b3-theme-success);
-    }
-
-    .ai-sidebar__diff-split-line--unchanged {
-        color: var(--b3-theme-on-surface);
-    }
-
-    .ai-sidebar__diff-split-line--empty {
-        background: color-mix(in srgb, var(--b3-theme-surface) 78%, transparent);
+    .ai-sidebar__git-exitcode {
         color: var(--b3-theme-on-surface-light);
-    }
-
-    .ai-sidebar__diff-dialog-footer {
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
-        padding: 16px;
-        border-top: 1px solid var(--b3-border-color);
+        font-size: 12px;
+        padding: 0 6px;
     }
 
     // 工具批准对话框样式
@@ -17178,17 +19718,28 @@
 
     // 代码块工具栏样式
     :global(.code-block-toolbar) {
-        position: relative;
-        top: 0;
-        left: 0;
-        right: 0;
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 6px 12px;
+        gap: 8px;
+        padding: 6px 10px;
         background: var(--b3-theme-surface);
         border-bottom: 1px solid var(--b3-border-color);
         z-index: 1;
+        flex: 0 0 auto;
+    }
+
+    :global(.code-block-toolbar__left) {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+
+    :global(.code-block-toolbar__right) {
+        display: flex;
+        align-items: center;
+        gap: 6px;
     }
 
     // 代码块语言标签样式（左上角）
@@ -17201,13 +19752,13 @@
         font-weight: 500;
     }
 
-    // 代码块复制按钮样式
-    :global(.code-block-copy-btn) {
+    // 代码块工具栏按钮样式（复制 / 换行 / 折叠）
+    :global(.code-block-toolbar-btn) {
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 12px;
-        height: 12px;
+        width: 22px;
+        height: 22px;
         padding: 0;
         border: none;
         background: transparent;
@@ -17215,6 +19766,8 @@
         cursor: pointer;
         border-radius: 4px;
         transition: all 0.2s;
+        user-select: none;
+        font-size: 12px;
 
         svg {
             width: 14px;
@@ -17224,6 +19777,10 @@
         &:hover {
             background: var(--b3-list-hover);
             color: var(--b3-theme-on-surface);
+        }
+
+        &.active {
+            color: var(--b3-theme-primary);
         }
 
         &.copied {
@@ -17252,7 +19809,6 @@
         display: block;
         padding: 12px !important; /* 代码内容的内边距 */
         margin: 0;
-        margin-top: 37px; /* 为固定的工具栏留出空间 */
         overflow: auto; /* 启用滚动 */
         flex: 1;
         min-height: 0;
@@ -17260,6 +19816,24 @@
         font-size: 0.9em;
         line-height: 1.5;
         background: transparent !important;
+    }
+
+    // 长代码默认折叠（更小高度），点击工具栏展开
+    :global(.ai-message__content pre.code-block--collapsed),
+    :global(.ai-message__thinking-content pre.code-block--collapsed) {
+        max-height: 260px;
+    }
+
+    :global(.ai-message__content pre.code-block--expanded),
+    :global(.ai-message__thinking-content pre.code-block--expanded) {
+        max-height: none;
+    }
+
+    // 换行显示（wrap）
+    :global(.ai-message__content pre.code-block--wrap code),
+    :global(.ai-message__thinking-content pre.code-block--wrap code) {
+        white-space: pre-wrap;
+        word-break: break-word;
     }
 
     :global(.ai-message__content pre code::-webkit-scrollbar),

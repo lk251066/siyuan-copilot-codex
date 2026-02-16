@@ -217,6 +217,41 @@
         }
     }
 
+    function detectGitCliPath() {
+        try {
+            const nodeRequire = (globalThis as any).require || require;
+            const childProcess = nodeRequire('child_process') as typeof import('child_process');
+            const isWin = (globalThis as any)?.process?.platform === 'win32';
+
+            const cmd = isWin ? 'cmd.exe' : 'sh';
+            const args = isWin ? ['/d', '/s', '/c', 'where git'] : ['-lc', 'which git'];
+
+            const child = childProcess.spawn(cmd, args, {
+                windowsHide: true,
+                shell: true,
+            });
+            let out = '';
+            child.stdout?.on('data', (buf: Buffer) => {
+                out += buf.toString('utf8');
+            });
+            child.on('close', () => {
+                const lines = out
+                    .split(/\r?\n/)
+                    .map(s => s.trim())
+                    .filter(Boolean);
+                if (lines.length > 0) {
+                    setSetting('codexGitCliPath', lines[0]);
+                    pushMsg(`${t('settings.codex.git.detectCliPath') || '自动探测'}: ${lines[0]}`);
+                } else {
+                    pushErrMsg(t('settings.codex.git.notFoundInPath'));
+                }
+            });
+        } catch (e) {
+            console.error('Detect git path failed:', e);
+            pushErrMsg(t('settings.codex.git.detectCliFailed'));
+        }
+    }
+
     interface ISettingGroup {
         name: string;
         items: ISettingItem[];
@@ -1205,6 +1240,209 @@
                         type="checkbox"
                         checked={settings.codexSkipGitRepoCheck !== false}
                         on:change={e => setSetting('codexSkipGitRepoCheck', !!e.target.checked)}
+                    />
+                </div>
+
+                <div class="codex-settings__row">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.diffPreferGit.title') || 'Diff 优先使用 git'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.diffPreferGit.description') || ''}
+                        </div>
+                    </div>
+                    <input
+                        class="b3-switch"
+                        type="checkbox"
+                        checked={settings.codexDiffPreferGit !== false}
+                        on:change={e => setSetting('codexDiffPreferGit', !!e.target.checked)}
+                    />
+                </div>
+
+                <div class="codex-settings__row">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.git.cliPath.title') || 'Git 路径'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.git.cliPath.description') || ''}
+                        </div>
+                    </div>
+                    <div class="codex-settings__inline">
+                        <input
+                            class="b3-text-field fn__flex-1"
+                            type="text"
+                            value={settings.codexGitCliPath || ''}
+                            placeholder="git 或 C:\\Program Files\\Git\\bin\\git.exe"
+                            on:change={e => setSetting('codexGitCliPath', e.target.value)}
+                        />
+                        <button
+                            class="b3-button b3-button--outline"
+                            on:click={detectGitCliPath}
+                            type="button"
+                        >
+                            {t('settings.codex.git.detectCliPath') || '自动探测'}
+                        </button>
+                    </div>
+                </div>
+
+                <div class="codex-settings__row">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.git.repoDir.title') || 'Git 仓库目录'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.git.repoDir.description') || ''}
+                        </div>
+                    </div>
+                    <input
+                        class="b3-text-field fn__flex-1"
+                        type="text"
+                        value={settings.codexGitRepoDir || ''}
+                        placeholder={settings.codexWorkingDir || ''}
+                        on:change={e => setSetting('codexGitRepoDir', e.target.value)}
+                    />
+                </div>
+
+                <div class="codex-settings__row">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.git.remote.title') || 'Git Remote'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.git.remote.description') || ''}
+                        </div>
+                    </div>
+                    <div class="codex-settings__inline">
+                        <input
+                            class="b3-text-field"
+                            style="width: 140px;"
+                            type="text"
+                            value={settings.codexGitRemoteName || 'origin'}
+                            placeholder="origin"
+                            on:change={e => setSetting('codexGitRemoteName', e.target.value)}
+                        />
+                        <input
+                            class="b3-text-field fn__flex-1"
+                            type="text"
+                            value={settings.codexGitRemoteUrl || ''}
+                            placeholder="git@github.com:user/repo.git"
+                            on:change={e => setSetting('codexGitRemoteUrl', e.target.value)}
+                        />
+                    </div>
+                </div>
+
+                <div class="codex-settings__row">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.git.branch.title') || '默认分支（可选）'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.git.branch.description') || ''}
+                        </div>
+                    </div>
+                    <input
+                        class="b3-text-field fn__flex-1"
+                        type="text"
+                        value={settings.codexGitBranch || ''}
+                        placeholder={t('aiSidebar.git.branchOptional') || '可选，留空用当前分支'}
+                        on:change={e => setSetting('codexGitBranch', e.target.value)}
+                    />
+                </div>
+
+                <div class="codex-settings__row">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.git.syncScope.title') || '同步范围'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.git.syncScope.description') || ''}
+                        </div>
+                    </div>
+                    <select
+                        class="b3-select fn__flex-1"
+                        value={settings.codexGitSyncScope || 'notes'}
+                        on:change={e => setSetting('codexGitSyncScope', e.target.value)}
+                    >
+                        <option value="notes">
+                            {t('settings.codex.git.syncScope.options.notes') ||
+                                '仅笔记内容（.sy + assets）'}
+                        </option>
+                        <option value="repo">
+                            {t('settings.codex.git.syncScope.options.repo') ||
+                                '整个仓库（git add -A）'}
+                        </option>
+                    </select>
+                </div>
+
+                <div class="codex-settings__row">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.git.pullRebase.title') || 'Pull 使用 rebase'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.git.pullRebase.description') || ''}
+                        </div>
+                    </div>
+                    <input
+                        class="b3-switch"
+                        type="checkbox"
+                        checked={settings.codexGitPullRebase !== false}
+                        on:change={e => setSetting('codexGitPullRebase', !!e.target.checked)}
+                    />
+                </div>
+
+                <div class="codex-settings__row">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.git.pullAutostash.title') ||
+                                'Pull 自动暂存本地改动'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.git.pullAutostash.description') || ''}
+                        </div>
+                    </div>
+                    <input
+                        class="b3-switch"
+                        type="checkbox"
+                        checked={settings.codexGitPullAutostash !== false}
+                        on:change={e => setSetting('codexGitPullAutostash', !!e.target.checked)}
+                    />
+                </div>
+
+                <div class="codex-settings__row">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.git.autoSyncEnabled.title') || '自动同步（可选）'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.git.autoSyncEnabled.description') || ''}
+                        </div>
+                    </div>
+                    <input
+                        class="b3-switch"
+                        type="checkbox"
+                        checked={settings.codexGitAutoSyncEnabled === true}
+                        on:change={e => setSetting('codexGitAutoSyncEnabled', !!e.target.checked)}
+                    />
+                </div>
+
+                <div class="codex-settings__row">
+                    <div class="codex-settings__label">
+                        <div class="codex-settings__title">
+                            {t('settings.codex.git.autoCommitMessage.title') || '自动提交信息（可选）'}
+                        </div>
+                        <div class="codex-settings__desc">
+                            {t('settings.codex.git.autoCommitMessage.description') || ''}
+                        </div>
+                    </div>
+                    <input
+                        class="b3-text-field fn__flex-1"
+                        type="text"
+                        value={settings.codexGitAutoCommitMessage || ''}
+                        placeholder={t('aiSidebar.git.commitPlaceholder') || '输入 commit message'}
+                        on:change={e => setSetting('codexGitAutoCommitMessage', e.target.value)}
                     />
                 </div>
 

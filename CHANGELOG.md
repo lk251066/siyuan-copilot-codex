@@ -1,3 +1,34 @@
+## v1.6.37 / 20260216
+- 🎨 P4（对标 VSCode Copilot Chat）：新增 `src/styles/copilot-tokens.scss`，将聊天消息卡片与 Diff 弹窗核心样式迁移到 token（颜色/边框/圆角/间距/阴影），保持现有交互与行为不变
+- 🧩 P4 样式治理：`ai-sidebar.svelte` 引入 token 层，减少对 `--b3-theme-*` 的直接耦合，便于后续按区域继续迁移
+- 🐛 Git 同步修复：`pull --rebase` 现在默认追加 `--autostash`，避免本地未暂存改动时出现 `cannot pull with rebase` 报错
+
+## v1.6.36 / 20260216
+- ✨ P3（对标 VSCode Copilot Chat）：Diff 弹窗增强（Split/Unified 切换/行号/默认 no-wrap + 横向滚动/wrap 切换/上下文折叠可展开，替代 slice 截断；大 diff 不冻结 UI；保留 git diff --no-index 优先与 copy patch）
+- ⌨️ P1（键盘可用性）：Diff/GitSync/WebLink 等弹层支持 Esc 关闭与 Tab 焦点可见（focus-visible）
+- 🌍 i18n：补齐 Diff 弹窗相关文案键
+
+## v1.6.35 / 20260216
+- ✨ P2（对标 VSCode Copilot Chat）：代码块工具条增强（语言标签非空才显示/复制/换行切换/长代码折叠展开）
+- 🌍 i18n：补齐代码块工具条相关文案键
+
+## v1.6.34 / 20260216
+- ✨ P1（对标 VSCode Copilot Chat）：新增“新消息提示 / 回到底部”按钮，阅读历史时不再错过新消息
+- 🛡️ 选区保护：在消息区选中文本时避免被流式输出打断/抢滚动
+- ⚡️ 流式性能优化：减少流式阶段对消息容器的全量 DOM 扫描，降低滚动抖动与卡顿
+
+## v1.6.33 / 20260216
+- 🐛 Git 检测修复：Windows 下 Git 路径包含空格时不再误用 shell，避免 `git --version` 执行失败导致“未检测到 git”
+
+## v1.6.32 / 20260216
+- ✨ Git 同步范围：支持“仅笔记内容（.sy + assets）”与“整个仓库”切换；仅笔记模式下 Auto Sync/Add/Commit 不再 `git add -A` 全仓库
+
+## v1.6.31 / 20260215
+- 🐛 聊天滚动修复：向上滚动时暂停自动滚动，流式结束后补一次收尾滚动，减少滚动抖动
+- 🧹 删除消息修复：删除消息组时连带删除关联的 tool 消息，避免残留
+- ✨ Diff 强化：差异弹窗优先使用 `git diff --no-index`（失败回退内置 diff），并支持一键复制 patch
+- ✨ Git 同步：聊天顶部新增 Git 同步对话框（status/init/add/commit/pull/push），支持配置仓库目录/remote/分支并展示执行日志
+
 ## v1.6.30 / 20260214
 - 🛠️ 卸载清理补齐：`uninstall()` 现在会清理 `settings/webview-history/chat-sessions/prompts/agent-tools-config`，并递归删除 `/data/storage/petal/{namespace}/sessions|assets|webappIcon`（含历史命名目录）
 - 🌍 i18n 一致性核对：`zh_CN` 与 `en_US` 递归键数量对齐（`612/612`），无缺失键

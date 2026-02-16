@@ -6,7 +6,7 @@
 
 ## 项目说明
 
-- 当前版本：`v1.6.30`（2026-02-14）
+- 当前版本：`v1.6.37`（2026-02-16）
 - 仅保留 `Codex CLI` 工作流（`ask` / `agent`）。
 - 模型列表读取本地 `CODEX_HOME/config.toml`（未设置时回退 `~/.codex/config.toml`），不依赖第三方模型接口。
 - 支持会话管理、引用上下文、附件上传、MCP 工具自检。
@@ -41,6 +41,38 @@
   - `siyuan_import_image_urls`
   - `siyuan_capture_webpage_screenshot`
   - `siyuan_insert_images_to_note`
+
+## 最新改动映射（2026-02-16）
+
+- 发布 `v1.6.37`：P4（对标 VSCode Copilot Chat）— 新增 `copilot-tokens.scss`，并将聊天消息卡片与 Diff 弹窗核心样式迁移到 token（颜色/边框/圆角/间距/阴影），保持交互行为不变
+- 发布 `v1.6.36`：P3（对标 VSCode Copilot Chat）— Diff 弹窗增强（Split/Unified 切换、行号、默认 no-wrap + 横向滚动、wrap 切换、上下文折叠/展开、大 diff 性能优化）；并补齐弹层键盘支持（Esc 关闭、Tab 焦点可见）
+- 发布 `v1.6.35`：P2（对标 VSCode Copilot Chat）— 代码块工具条增强：语言标签（非空才显示）、复制、换行切换、长代码折叠/展开
+- 发布 `v1.6.34`：P1（对标 VSCode Copilot Chat）— 新消息提示/回到底部按钮、选区保护、流式性能优化（减少流式阶段 DOM 全量扫描）
+- 发布 `v1.6.33`：修复 Windows 下 Git 路径包含空格时可能提示“未检测到 git”的问题（`git --version` 执行失败）
+- 发布 `v1.6.32`：Git 同步范围新增“仅笔记内容（.sy + assets）/整个仓库”切换；仅笔记模式下 Auto Sync/Add/Commit 不再 `git add -A` 全仓库
+
+## 最新改动映射（2026-02-15）
+
+- 发布 `v1.6.31`：Diff 弹窗优先使用 `git diff --no-index`（失败回退内置 diff），并支持一键复制 patch
+- 新增 Git 同步对话框：status/init/add/commit/pull/push，支持配置仓库目录/remote/分支并展示执行日志
+- 修复聊天滚动与删除消息组：向上滚动时暂停自动滚动，流式结束后补一次收尾滚动；删除消息组时连带删除 tool 消息
+
+## Git 同步（环境变量）
+
+不想在设置里手填时，可用环境变量自动填充（优先级低于“对话框/设置”）：
+
+- `SIYUAN_CODEX_GIT_CLI_PATH`：Git 可执行路径（可选）
+- `SIYUAN_CODEX_GIT_REPO_DIR`：Git 仓库目录
+- `SIYUAN_CODEX_GIT_REMOTE_NAME`：remote 名称（默认 origin）
+- `SIYUAN_CODEX_GIT_REMOTE_URL`：remote URL（GitHub/Gitee）
+- `SIYUAN_CODEX_GIT_BRANCH`：分支名（可选）
+- `SIYUAN_CODEX_GIT_PULL_REBASE=1`：pull 使用 rebase（可选）
+- `SIYUAN_CODEX_GIT_PULL_AUTOSTASH=1`：rebase pull 自动暂存本地改动（默认开启）
+- `SIYUAN_CODEX_GIT_SYNC_SCOPE=notes|repo`：同步范围（notes=仅笔记内容）
+- `SIYUAN_CODEX_GIT_AUTO_SYNC=1`：打开 Git 同步窗口自动执行 Auto Sync
+- `SIYUAN_CODEX_GIT_COMMIT_MESSAGE`：自动提交信息（可选）
+
+说明：插件默认禁用交互式鉴权（避免卡住），推荐使用 SSH remote 或系统凭据管理器；失败时会在日志里给可执行的排查指引。
 
 ## 最新改动映射（2026-02-14）
 

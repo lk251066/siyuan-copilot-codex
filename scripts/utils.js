@@ -16,6 +16,23 @@ import readline from 'node:readline';
 export const log = (info) => console.log(`\x1B[36m%s\x1B[0m`, info);
 export const error = (info) => console.log(`\x1B[31m%s\x1B[0m`, info);
 
+function normalizeFsPath(p) {
+    const raw = String(p || '').trim();
+    if (!raw) return raw;
+    if (process.platform === 'win32') return raw;
+
+    // When running under WSL/Linux, SiYuan API may return Windows paths like "D:\\SIYUAN".
+    // Convert them to WSL mount paths "/mnt/d/SIYUAN" so fs.existsSync/copy works.
+    const match = raw.match(/^([a-zA-Z]):[\\/](.*)$/);
+    if (!match) return raw;
+
+    const drive = match[1].toLowerCase();
+    const rest = match[2].replace(/\\/g, '/');
+    const mount = `/mnt/${drive}`;
+    if (!fs.existsSync(mount)) return raw;
+    return `${mount}/${rest}`;
+}
+
 // HTTP POST headers
 export const POST_HEADER = {
     "Content-Type": "application/json",
@@ -83,7 +100,7 @@ export async function chooseTarget(workspaces) {
     });
 
     if (count === 1) {
-        return `${workspaces[0].path}/data/plugins`;
+        return normalizeFsPath(`${workspaces[0].path}/data/plugins`);
     } else {
         const rl = readline.createInterface({
             input: process.stdin,
@@ -95,7 +112,7 @@ export async function chooseTarget(workspaces) {
             });
         });
         rl.close();
-        return `${workspaces[index].path}/data/plugins`;
+        return normalizeFsPath(`${workspaces[index].path}/data/plugins`);
     }
 }
 

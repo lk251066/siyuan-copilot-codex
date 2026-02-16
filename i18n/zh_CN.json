@@ -35,6 +35,55 @@
                 "title": "允许非 Git 目录",
                 "description": "自动添加 `--skip-git-repo-check`（思源 workspace 通常不是 Git 仓库）"
             },
+            "diffPreferGit": {
+                "title": "Diff 优先使用 git",
+                "description": "在差异弹窗中优先用 `git diff` 生成差异（需要系统安装 git），失败时会自动回退到内置 diff"
+            },
+            "git": {
+                "cliPath": {
+                    "title": "Git 路径",
+                    "description": "留空则使用 PATH 中的 `git`；也可填写绝对路径（如 `C:\\\\Program Files\\\\Git\\\\bin\\\\git.exe`）"
+                },
+                "detectCliPath": "自动探测",
+                "notFoundInPath": "未找到 git，请确认已安装并在 PATH 中可用",
+                "detectCliFailed": "自动探测失败，请手动填写 git 路径",
+                "repoDir": {
+                    "title": "Git 仓库目录",
+                    "description": "留空则使用 Codex 工作目录（--cd）"
+                },
+                "remote": {
+                    "title": "Git Remote",
+                    "description": "Remote 名称与 URL（可选）。GitHub/Gitee 都可用"
+                },
+                "branch": {
+                    "title": "默认分支（可选）",
+                    "description": "用于 Pull/Push 的分支名；留空则使用当前分支/上游配置"
+                },
+                "syncScope": {
+                    "title": "同步范围",
+                    "description": "控制 Git 同步会 add/commit 的文件范围。选“仅笔记内容”后，只同步 `.sy` 与 `assets`，不会把整个仓库都提交。",
+                    "options": {
+                        "notes": "仅笔记内容（.sy + assets）",
+                        "repo": "整个仓库（git add -A）"
+                    }
+                },
+                "pullRebase": {
+                    "title": "Pull 使用 rebase",
+                    "description": "执行 `git pull --rebase`（避免产生额外 merge commit）"
+                },
+                "pullAutostash": {
+                    "title": "Pull 自动暂存本地改动",
+                    "description": "rebase pull 时自动追加 `--autostash`，避免因未暂存改动导致 pull 失败"
+                },
+                "autoSyncEnabled": {
+                    "title": "自动同步（可选）",
+                    "description": "开启后：打开 Git 同步对话框会自动执行一键同步（失败会给出指引）。也支持用环境变量 `SIYUAN_CODEX_GIT_AUTO_SYNC=1` 强制开启"
+                },
+                "autoCommitMessage": {
+                    "title": "自动提交信息（可选）",
+                    "description": "一键同步需要自动提交时使用。留空会自动生成；也支持环境变量 `SIYUAN_CODEX_GIT_COMMIT_MESSAGE`"
+                }
+            },
             "runMode": {
                 "title": "执行权限",
                 "description": "控制 Codex 执行命令与写文件权限（注意：MCP 工具调用不受该开关直接限制）",
@@ -286,6 +335,7 @@
             "thinking": "思考过程",
             "streamingIndicator": "正在生成...",
             "interrupted": "[生成已中断]",
+            "newMessages": "新消息",
             "messageCount": "条消息"
         },
         "actions": {
@@ -305,6 +355,7 @@
             "copyFileContent": "复制文件内容",
             "copyBefore": "复制修改前",
             "copyAfter": "复制修改后",
+            "copyPatch": "复制 Patch",
             "copyOldContent": "复制修改前的内容",
             "copyNewContent": "复制修改后的内容",
             "clear": "清空对话",
@@ -328,7 +379,40 @@
             "rejectEdit": "拒绝",
             "viewDiff": "查看差异",
             "applied": "已应用",
-            "rejected": "已拒绝"
+            "rejected": "已拒绝",
+            "gitSync": "Git 同步"
+        },
+        "codeBlock": {
+            "copyCode": "复制代码",
+            "wrapOn": "开启换行",
+            "wrapOff": "关闭换行",
+            "expand": "展开",
+            "collapse": "收起"
+        },
+        "git": {
+            "title": "Git 同步",
+            "authTip": "建议使用 SSH remote（git@...）或系统凭据管理器，避免把 Token 写进 URL。",
+            "useWorkingDir": "用工作目录",
+            "setRemote": "设置 Remote",
+            "branchOptional": "可选，留空用当前分支",
+            "commitMessage": "Commit",
+            "commitPlaceholder": "输入 commit message",
+            "scope": "范围",
+            "scopeNotes": "仅笔记",
+            "scopeRepo": "整个仓库",
+            "status": "Status",
+            "init": "Init",
+            "addAll": "Add -A",
+            "addNotes": "Add Notes",
+            "commit": "Commit",
+            "pull": "Pull",
+            "push": "Push",
+            "autoSync": "一键同步",
+            "autoSyncRunning": "同步中...",
+            "autoSyncDone": "同步完成",
+            "autoSyncFailed": "同步失败",
+            "clearLog": "清空",
+            "noLog": "尚无输出"
         },
         "webLink": {
             "title": "添加网页链接",
@@ -483,7 +567,15 @@
         },
         "diff": {
             "modeUnified": "对比模式",
-            "modeSplit": "分栏模式"
+            "modeSplit": "分栏模式",
+            "wrapOn": "开启换行",
+            "wrapOff": "关闭换行",
+            "expandContext": "展开上下文",
+            "collapseContext": "收起上下文",
+            "collapsedLines": "… 已折叠 {count} 行",
+            "lineNumbers": "行号",
+            "showMore": "展开更多",
+            "showLess": "收起"
         },
         "search": {
             "title": "搜索文档",
@@ -526,7 +618,7 @@
             "addToCodexContextFailed": "提交到 Codex 引用失败"
         },
         "success": {
-            "copySuccess": "消息已复制",
+            "copySuccess": "已复制",
             "copyMarkdownSuccess": "对话已复制为 Markdown",
             "copyImageUrl": "已复制图片URL",
             "copyWebMarkdown": "已复制网页Markdown内容",

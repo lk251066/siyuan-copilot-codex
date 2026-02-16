@@ -35,6 +35,55 @@
                 "title": "Allow non-Git dirs",
                 "description": "Automatically add `--skip-git-repo-check`"
             },
+            "diffPreferGit": {
+                "title": "Prefer git diff",
+                "description": "Prefer `git diff` in the diff dialog (requires git). Fallback to built-in diff on failure"
+            },
+            "git": {
+                "cliPath": {
+                    "title": "Git path",
+                    "description": "Optional. Leave empty to use `git` from PATH"
+                },
+                "detectCliPath": "Detect",
+                "notFoundInPath": "Git not found. Please confirm it is installed and available in PATH",
+                "detectCliFailed": "Detection failed. Please enter git path manually",
+                "repoDir": {
+                    "title": "Git repo directory",
+                    "description": "Optional. Leave empty to use Codex working directory (--cd)"
+                },
+                "remote": {
+                    "title": "Git remote",
+                    "description": "Remote name and URL (optional). Works for GitHub/Gitee via git remote"
+                },
+                "branch": {
+                    "title": "Default branch (optional)",
+                    "description": "Branch for pull/push. Leave empty to use current branch/upstream config"
+                },
+                "syncScope": {
+                    "title": "Sync scope",
+                    "description": "Controls which files Git Sync will add/commit. Choose \"Notes only\" to sync `.sy` and `assets` only, instead of committing the whole repo.",
+                    "options": {
+                        "notes": "Notes only (.sy + assets)",
+                        "repo": "Whole repo (git add -A)"
+                    }
+                },
+                "pullRebase": {
+                    "title": "Pull with rebase",
+                    "description": "Run `git pull --rebase` to avoid extra merge commits"
+                },
+                "pullAutostash": {
+                    "title": "Auto-stash on pull",
+                    "description": "When pull uses rebase, append `--autostash` to avoid failures caused by unstaged local changes"
+                },
+                "autoSyncEnabled": {
+                    "title": "Auto sync (optional)",
+                    "description": "When enabled: opening Git Sync dialog runs one-click sync automatically (with guidance on failure). You can also force it via env `SIYUAN_CODEX_GIT_AUTO_SYNC=1`"
+                },
+                "autoCommitMessage": {
+                    "title": "Auto commit message (optional)",
+                    "description": "Used when one-click sync needs to auto-commit. Leave empty to auto-generate. You can also set env `SIYUAN_CODEX_GIT_COMMIT_MESSAGE`"
+                }
+            },
             "runMode": {
                 "title": "Execution Permission",
                 "description": "Controls Codex shell/file permissions (note: MCP tool calls are not directly restricted by this toggle)",
@@ -286,6 +335,7 @@
             "thinking": "Thinking Process",
             "streamingIndicator": "Generating...",
             "interrupted": "[Generation Interrupted]",
+            "newMessages": "New messages",
             "messageCount": "messages"
         },
         "actions": {
@@ -305,6 +355,7 @@
             "copyFileContent": "Copy file content",
             "copyBefore": "Copy Before",
             "copyAfter": "Copy After",
+            "copyPatch": "Copy Patch",
             "copyOldContent": "Copy Old Content",
             "copyNewContent": "Copy New Content",
             "clear": "Clear Chat",
@@ -328,7 +379,40 @@
             "rejectEdit": "Reject",
             "viewDiff": "View Diff",
             "applied": "Applied",
-            "rejected": "Rejected"
+            "rejected": "Rejected",
+            "gitSync": "Git Sync"
+        },
+        "codeBlock": {
+            "copyCode": "Copy code",
+            "wrapOn": "Wrap lines",
+            "wrapOff": "Disable wrapping",
+            "expand": "Expand",
+            "collapse": "Collapse"
+        },
+        "git": {
+            "title": "Git Sync",
+            "authTip": "Tip: prefer SSH remote (git@...) or your system credential manager. Avoid embedding tokens in URL.",
+            "useWorkingDir": "Use working dir",
+            "setRemote": "Set Remote",
+            "branchOptional": "Optional; leave empty to use current branch",
+            "commitMessage": "Commit",
+            "commitPlaceholder": "Commit message",
+            "scope": "Scope",
+            "scopeNotes": "Notes only",
+            "scopeRepo": "Whole repo",
+            "status": "Status",
+            "init": "Init",
+            "addAll": "Add -A",
+            "addNotes": "Add Notes",
+            "commit": "Commit",
+            "pull": "Pull",
+            "push": "Push",
+            "autoSync": "Auto Sync",
+            "autoSyncRunning": "Syncing...",
+            "autoSyncDone": "Sync done",
+            "autoSyncFailed": "Sync failed",
+            "clearLog": "Clear",
+            "noLog": "No output yet"
         },
         "webLink": {
             "title": "Add Web Link",
@@ -483,7 +567,15 @@
         },
         "diff": {
             "modeUnified": "Unified Diff",
-            "modeSplit": "Split View"
+            "modeSplit": "Split View",
+            "wrapOn": "Wrap lines",
+            "wrapOff": "Disable wrapping",
+            "expandContext": "Expand context",
+            "collapseContext": "Collapse context",
+            "collapsedLines": "… {count} lines collapsed",
+            "lineNumbers": "Line numbers",
+            "showMore": "Show more",
+            "showLess": "Show less"
         },
         "search": {
             "title": "Search Documents",
@@ -526,7 +618,7 @@
             "addToCodexContextFailed": "Failed to submit context to Codex"
         },
         "success": {
-            "copySuccess": "Message copied",
+            "copySuccess": "Copied",
             "copyMarkdownSuccess": "Conversation copied as Markdown",
             "copyImageUrl": "Image URL copied",
             "copyWebMarkdown": "Web page markdown copied",

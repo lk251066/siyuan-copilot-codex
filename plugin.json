@@ -2,7 +2,7 @@
   "name": "siyuan-copilot-codex",
   "author": "lk251066",
   "url": "https://github.com/lk251066/siyuan-copilot-codex",
-  "version": "1.6.30",
+  "version": "1.6.37",
   "minAppVersion": "3.0.12",
   "backends": [
     "all"
