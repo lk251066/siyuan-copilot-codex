@@ -21,7 +21,7 @@ import {
 import { appendBlock, deleteBlock, setBlockAttrs, getBlockAttrs, pushMsg, pushErrMsg, sql, renderSprig, getChildBlocks, insertBlock, renameDocByID, prependBlock, updateBlock, createDocWithMd, getBlockKramdown, getBlockDOM, putFile, getFileBlob, readDir, removeFile } from "./api";
 
 import SettingPanel from "./SettingsPannel.svelte";
-import { getDefaultSettings } from "./defaultSettings";
+import { getDefaultSettings, mergeSettingsWithDefaults } from "./defaultSettings";
 import { setPluginInstance, t, getCurrentLanguage } from "./utils/i18n";
 import AISidebar from "./ai-sidebar.svelte";
 import ChatDialog from "./components/ChatDialog.svelte";
@@ -2667,7 +2667,7 @@ export default class PluginSample extends Plugin {
         }
 
         const defaultSettings = getDefaultSettings();
-        let mergedSettings = { ...defaultSettings, ...settings };
+        let mergedSettings = mergeSettingsWithDefaults(settings);
         const codexAutoResult = this.applyCodexAutoSettings(settings, mergedSettings);
         const removedKeysOnUpgrade = [
             'autoRenameProvider',
@@ -2750,7 +2750,11 @@ export default class PluginSample extends Plugin {
      * 保存设置
      */
     async saveSettings(settings: any) {
-        let nextSettings = settings;
+        const persistedSettings = (await this.loadData(SETTINGS_FILE)) || {};
+        let nextSettings = mergeSettingsWithDefaults({
+            ...persistedSettings,
+            ...(settings || {}),
+        });
         try {
             const syncResult = bidirectionalSyncPromptWithWorkingDirAgentsFile(nextSettings);
             nextSettings = syncResult.settings;
@@ -2770,7 +2774,7 @@ export default class PluginSample extends Plugin {
 
     async syncSystemPromptFromWorkingDirAgentsFile() {
         const settings = (await this.loadData(SETTINGS_FILE)) || {};
-        const mergedSettings = { ...getDefaultSettings(), ...settings };
+        const mergedSettings = mergeSettingsWithDefaults(settings);
         const syncResult = pullPromptFromWorkingDirAgentsFile(mergedSettings);
         if (syncResult.changed) {
             await this.saveData(SETTINGS_FILE, syncResult.settings);

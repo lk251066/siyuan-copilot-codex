@@ -2,7 +2,11 @@
     import { onMount } from 'svelte';
     import SettingPanel from '@/libs/components/setting-panel.svelte';
     import { t } from './utils/i18n';
-    import { getDefaultSettings, type CustomProviderConfig } from './defaultSettings';
+    import {
+        getDefaultSettings,
+        mergeSettingsWithDefaults,
+        type CustomProviderConfig,
+    } from './defaultSettings';
     import { pushMsg, pushErrMsg, lsNotebooks } from './api';
     import { confirm } from 'siyuan';
     import ProviderConfigPanel from './components/ProviderConfigPanel.svelte';
@@ -619,7 +623,7 @@
 
     async function runload() {
         const loadedSettings = await plugin.loadSettings();
-        settings = { ...getDefaultSettings(), ...loadedSettings };
+        settings = mergeSettingsWithDefaults(loadedSettings);
 
         // 确保 aiProviders 存在
         if (!settings.aiProviders) {
@@ -1131,13 +1135,16 @@
                         </div>
                         <div class="codex-settings__desc">
                             {t('settings.codex.enabled.description') || ''}
+                            {` `}
+                            {t('settings.codex.enabled.fixed') ||
+                                '当前插件为 Codex-only，已固定启用。'}
                         </div>
                     </div>
                     <input
                         class="b3-switch"
                         type="checkbox"
-                        checked={!!settings.codexEnabled}
-                        on:change={e => setSetting('codexEnabled', !!e.target.checked)}
+                        checked={true}
+                        disabled={true}
                     />
                 </div>
 

@@ -35,7 +35,11 @@
     import { parseMultipleWebPages } from './utils/webParser';
     import SessionManager from './components/SessionManager.svelte';
     import ToolSelector, { type ToolConfig } from './components/ToolSelector.svelte';
-    import type { ProviderConfig } from './defaultSettings';
+    import {
+        getDefaultSettings,
+        mergeSettingsWithDefaults,
+        type ProviderConfig,
+    } from './defaultSettings';
     import { settingsStore } from './stores/settings';
     import {
         parseUnifiedDiffToLines,
@@ -92,6 +96,14 @@
         codexThreadId?: string; // Codex CLI thread id（用于续聊）
     }
 
+    interface QueuedCodexSendDraft {
+        id: string;
+        userContent: string;
+        attachments: MessageAttachment[];
+        contextDocuments: ContextDocument[];
+        queuedAt: number;
+    }
+
     let messages: Message[] = [];
     let currentInput = '';
     let isLoading = false;
@@ -105,7 +117,7 @@
     let streamingCodexTimelineExpanded = true;
     let streamingToolCallsExpanded = true;
     let streamingSearchCallsExpanded = true;
-    let settings: any = {};
+    let settings: any = getDefaultSettings();
     let messagesContainer: HTMLElement;
     let textareaElement: HTMLTextAreaElement;
     let inputContainer: HTMLElement;
@@ -141,6 +153,8 @@
     // 中断控制
     let abortController: AbortController | null = null;
     let isAborted = false; // 标记是否已中断，防止中断后 onComplete 重复添加消息
+    let queuedCodexSendDrafts: QueuedCodexSendDraft[] = [];
+    let isProcessingQueuedCodexSend = false;
 
     // 自动滚动控制
     let autoScroll = true;
@@ -1585,7 +1599,9 @@
     }
 
     onMount(async () => {
-        settings = await plugin.loadSettings();
+        settings = mergeSettingsWithDefaults(await plugin.loadSettings());
+        // 优先强制写回 Codex-only，避免后续初始化中途异常导致 codexEnabled 仍为 false
+        await enforceCodexOnlySettings();
         chatMode = resolveSavedCodexChatMode(settings?.codexChatMode);
         tempModelSettings = { ...tempModelSettings, chatMode };
 
@@ -1654,7 +1670,7 @@
         unsubscribe = settingsStore.subscribe(newSettings => {
             if (newSettings && Object.keys(newSettings).length > 0) {
                 // 更新本地设置（强制 Codex only）
-                const incoming = { ...newSettings };
+                const incoming = mergeSettingsWithDefaults(newSettings);
                 const needForceCodex = incoming.codexEnabled !== true;
                 const hasMultiModels =
                     Array.isArray(incoming.selectedMultiModels) &&
@@ -5536,9 +5552,126 @@
         refreshCurrentNotePageAfterReply();
     }
 
+    function hasComposedPayloadForSend(): boolean {
+        return !!currentInput.trim() || currentAttachments.length > 0;
+    }
+
+    function cloneAttachment(attachment: MessageAttachment): MessageAttachment {
+        return { ...attachment };
+    }
+
+    function cloneContextDoc(doc: ContextDocument): ContextDocument {
+        return { ...doc };
+    }
+
+    function enqueueCurrentDraftForCodex(): boolean {
+        const userContent = currentInput.trim();
+        if (!userContent && currentAttachments.length === 0) return false;
+        const nextIndex = queuedCodexSendDrafts.length + 1;
+        const draft: QueuedCodexSendDraft = {
+            id: `queued_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            userContent,
+            attachments: currentAttachments.map(cloneAttachment),
+            contextDocuments: contextDocuments.map(cloneContextDoc),
+            queuedAt: Date.now(),
+        };
+        queuedCodexSendDrafts = [...queuedCodexSendDrafts, draft];
+        currentInput = '';
+        currentAttachments = [];
+        contextDocuments = [];
+        hasUnsavedChanges = true;
+        pushMsg(
+            (t('aiSidebar.codex.queue.enqueued') || '已加入发送队列（第 {index} 条）').replace(
+                '{index}',
+                String(nextIndex)
+            )
+        );
+        return true;
+    }
+
+    function clearQueuedCodexSendDrafts(notify = false): number {
+        const removedCount = queuedCodexSendDrafts.length;
+        if (removedCount === 0) return 0;
+        queuedCodexSendDrafts = [];
+        if (notify) {
+            pushMsg(
+                (t('aiSidebar.codex.queue.cleared') || '已清空发送队列（{count} 条）').replace(
+                    '{count}',
+                    String(removedCount)
+                )
+            );
+        }
+        return removedCount;
+    }
+
+    async function processQueuedCodexSends() {
+        if (isLoading) return;
+        if (isProcessingQueuedCodexSend) return;
+        if (queuedCodexSendDrafts.length === 0) return;
+
+        isProcessingQueuedCodexSend = true;
+        try {
+            while (!isLoading && queuedCodexSendDrafts.length > 0) {
+                const [nextDraft, ...rest] = queuedCodexSendDrafts;
+                queuedCodexSendDrafts = rest;
+                currentInput = nextDraft.userContent;
+                currentAttachments = nextDraft.attachments.map(cloneAttachment);
+                contextDocuments = nextDraft.contextDocuments.map(cloneContextDoc);
+                await tick();
+                await sendMessage();
+            }
+        } finally {
+            isProcessingQueuedCodexSend = false;
+        }
+    }
+
+    function shouldQueueCurrentDraft(): boolean {
+        return isLoading && hasComposedPayloadForSend();
+    }
+
+    function handleSendButtonClick() {
+        if (isLoading) {
+            if (!hasComposedPayloadForSend()) {
+                pushMsg(
+                    t('aiSidebar.codex.queue.emptyHint') ||
+                        '当前任务运行中：先输入新内容再点发送可加入队列；若要停止请点右侧暂停按钮'
+                );
+                return;
+            }
+            void sendMessage();
+            return;
+        }
+        void sendMessage();
+    }
+
     // 发送消息
     async function sendMessage() {
-        if ((!currentInput.trim() && currentAttachments.length === 0) || isLoading) return;
+        if (isLoading) {
+            if (!hasComposedPayloadForSend()) {
+                pushMsg(
+                    t('aiSidebar.codex.queue.emptyHint') ||
+                        '当前任务运行中：先输入新内容再点发送可加入队列；若要停止请点右侧暂停按钮'
+                );
+                return;
+            }
+            enqueueCurrentDraftForCodex();
+            return;
+        }
+
+        if (!hasComposedPayloadForSend()) return;
+
+        let codexEnabled = settings?.codexEnabled === true;
+        if (!codexEnabled && typeof plugin?.loadSettings === 'function') {
+            try {
+                const refreshedSettings = await plugin.loadSettings();
+                if (refreshedSettings && typeof refreshedSettings === 'object') {
+                    settings = mergeSettingsWithDefaults({ ...settings, ...refreshedSettings });
+                    codexEnabled = settings?.codexEnabled === true;
+                }
+            } catch (error) {
+                console.warn('Reload settings before send failed:', error);
+            }
+        }
 
         // 如果处于等待选择答案状态，阻止发送
         if (isWaitingForAnswerSelection) {
@@ -5546,10 +5679,16 @@
             return;
         }
 
-        const codexEnabled = settings?.codexEnabled === true;
         if (!codexEnabled) {
-            pushErrMsg('当前版本仅支持 Codex 模式，请先在设置中启用 Codex');
-            return;
+            settings = mergeSettingsWithDefaults({ ...settings, codexEnabled: true });
+            codexEnabled = true;
+            if (typeof plugin?.saveSettings === 'function') {
+                try {
+                    await plugin.saveSettings(settings);
+                } catch (error) {
+                    console.warn('Force enable codex before send failed:', error);
+                }
+            }
         }
 
         // 发送前轻量回拉一次工作目录 AGENTS.md（仅当前 codexWorkingDir）
@@ -5772,6 +5911,8 @@
                 streamingSearchCalls = [];
                 isThinkingPhase = false;
                 abortController = null;
+            } finally {
+                void processQueuedCodexSends();
             }
             return;
         }
@@ -6917,6 +7058,7 @@
 
     // 中断消息生成
     function abortMessage() {
+        clearQueuedCodexSendDrafts(true);
         if (abortController) {
             abortController.abort();
             isAborted = true; // 设置中断标志，防止 onComplete 再次添加消息
@@ -7013,6 +7155,14 @@
                 isLoading = false;
             }
             abortController = null;
+        } else if (isLoading) {
+            isLoading = false;
+            isThinkingPhase = false;
+            streamingMessage = '';
+            streamingThinking = '';
+            streamingCodexTimeline = [];
+            streamingToolCalls = [];
+            streamingSearchCalls = [];
         }
     }
 
@@ -7089,6 +7239,7 @@
             ? [{ role: 'system', content: settings.aiSystemPrompt }]
             : [];
         contextDocuments = [];
+        clearQueuedCodexSendDrafts(false);
         streamingMessage = '';
  streamingThinking = '';
  streamingCodexTimeline = [];
@@ -7118,22 +7269,14 @@
             // Ctrl+Enter 发送模式
             if (e.key === 'Enter' && e.ctrlKey) {
                 e.preventDefault();
-                if (isLoading) {
-                    abortMessage();
-                } else {
-                    sendMessage();
-                }
+                handleSendButtonClick();
                 return;
             }
         } else {
             // Enter 发送模式（Shift+Enter 换行）
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                if (isLoading) {
-                    abortMessage();
-                } else {
-                    sendMessage();
-                }
+                handleSendButtonClick();
                 return;
             }
         }
@@ -15667,22 +15810,60 @@
                 ></textarea>
                 <button
                     class="ai-sidebar__send-btn"
-                    class:ai-sidebar__send-btn--abort={isLoading}
-                    on:click={isLoading ? abortMessage : sendMessage}
-                    disabled={!isLoading && !currentInput.trim() && currentAttachments.length === 0}
-                    title={isLoading ? t('aiSidebar.actions.stop') : t('aiSidebar.actions.send')}
-                    aria-label={isLoading ? t('aiSidebar.actions.stop') : t('aiSidebar.actions.send')}
+                    on:click={handleSendButtonClick}
+                    disabled={
+                        (!isLoading && !currentInput.trim() && currentAttachments.length === 0) ||
+                        (isLoading && !hasComposedPayloadForSend())
+                    }
+                    title={shouldQueueCurrentDraft()
+                        ? t('aiSidebar.actions.queue')
+                        : isLoading
+                          ? t('aiSidebar.actions.queue')
+                          : t('aiSidebar.actions.send')}
+                    aria-label={shouldQueueCurrentDraft()
+                        ? t('aiSidebar.actions.queue')
+                        : isLoading
+                          ? t('aiSidebar.actions.queue')
+                          : t('aiSidebar.actions.send')}
                 >
-                    {#if isLoading}
+                    {#if shouldQueueCurrentDraft()}
                         <svg class="b3-button__icon">
-                            <use xlink:href="#iconPause"></use>
+                            <use xlink:href="#iconAdd"></use>
+                        </svg>
+                    {:else if isLoading}
+                        <svg class="b3-button__icon">
+                            <use xlink:href="#iconAdd"></use>
                         </svg>
                     {:else}
                         <svg class="b3-button__icon"><use xlink:href="#iconUp"></use></svg>
                     {/if}
+                    {#if queuedCodexSendDrafts.length > 0}
+                        <span class="ai-sidebar__send-queue-badge">{queuedCodexSendDrafts.length}</span>
+                    {/if}
                 </button>
             </div>
         </div>
+        {#if isLoading}
+            <div class="ai-sidebar__queue-hint" role="status" aria-live="polite">
+                <span>
+                    {#if shouldQueueCurrentDraft()}
+                        {t('aiSidebar.codex.queue.readyHint') ||
+                            '检测到新草稿：点击发送将加入队列（不会中断当前任务）'}
+                    {:else}
+                        {t('aiSidebar.codex.queue.emptyHint') ||
+                            '当前任务运行中：先输入新内容再点发送可加入队列；若要停止请点右侧暂停按钮'}
+                    {/if}
+                </span>
+                <button
+                    class="b3-button b3-button--text ai-sidebar__queue-stop-btn"
+                    on:click={abortMessage}
+                    title={t('aiSidebar.actions.stop')}
+                    aria-label={t('aiSidebar.actions.stop')}
+                >
+                    <svg class="b3-button__icon"><use xlink:href="#iconPause"></use></svg>
+                </button>
+            </div>
+        {/if}
 
         <!-- 隐藏的文件上传 input -->
         <input
@@ -17962,6 +18143,34 @@
         gap: 0;
     }
 
+    .ai-sidebar__queue-hint {
+        margin-top: 6px;
+        padding: 4px 8px;
+        font-size: 12px;
+        line-height: 1.4;
+        border-radius: 6px;
+        color: var(--b3-theme-on-surface-light);
+        background: var(--b3-theme-surface-lighter);
+        border: 1px dashed var(--b3-border-color);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    .ai-sidebar__queue-stop-btn {
+        flex-shrink: 0;
+        height: 22px;
+        min-height: 22px;
+        padding: 0 6px;
+        border-radius: 6px;
+    }
+
+    .ai-sidebar__queue-stop-btn .b3-button__icon {
+        width: 14px;
+        height: 14px;
+    }
+
     .ai-sidebar__input-wrapper {
         flex: 1;
         position: relative;
@@ -18367,6 +18576,24 @@
         .b3-button__icon {
             width: 17px;
             height: 17px;
+        }
+
+        .ai-sidebar__send-queue-badge {
+            position: absolute;
+            top: -4px;
+            right: -4px;
+            min-width: 16px;
+            height: 16px;
+            padding: 0 4px;
+            border-radius: 999px;
+            background: var(--b3-theme-on-surface);
+            color: var(--b3-theme-surface);
+            font-size: 10px;
+            line-height: 16px;
+            font-weight: 600;
+            text-align: center;
+            box-shadow: 0 0 0 1px var(--b3-theme-background);
+            pointer-events: none;
         }
     }
 

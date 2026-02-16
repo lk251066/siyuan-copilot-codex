@@ -18,7 +18,8 @@
             "title": "Codex CLI（本地）",
             "enabled": {
                 "title": "启用 Codex CLI",
-                "description": "使用本机 Codex CLI 作为侧边栏引擎（`codex exec --json`），并复用本地 `~/.codex` 的 MCP"
+                "description": "使用本机 Codex CLI 作为侧边栏引擎（`codex exec --json`），并复用本地 `~/.codex` 的 MCP",
+                "fixed": "当前插件为 Codex-only，已固定启用。"
             },
             "cliPath": {
                 "title": "Codex 路径",
@@ -321,7 +322,13 @@
             "refreshModelsLoading": "拉取中...",
             "modelsRefreshed": "Codex 本地模型已更新（{count}）",
             "refreshModelsFailed": "拉取 Codex 模型失败：{error}",
-            "modelLoadError": "本地模型读取错误：{error}"
+            "modelLoadError": "本地模型读取错误：{error}",
+            "queue": {
+                "enqueued": "已加入发送队列（第 {index} 条）",
+                "readyHint": "检测到新草稿：点击发送将加入队列（不会中断当前任务）",
+                "emptyHint": "当前任务运行中：先输入新内容再点发送可加入队列；若要停止请点右侧暂停按钮",
+                "cleared": "已清空发送队列（{count} 条）"
+            }
         },
         "empty": {
             "title": "开始对话",
@@ -366,6 +373,7 @@
             "openInTab": "在页签打开",
             "openInNewWindow": "在新窗口打开",
             "send": "发送",
+            "queue": "加入队列",
             "stop": "停止",
             "scrollToBottom": "回到底部",
             "editMessage": "编辑消息",

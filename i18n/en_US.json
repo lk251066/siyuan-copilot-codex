@@ -18,7 +18,8 @@
             "title": "Codex CLI (Local)",
             "enabled": {
                 "title": "Enable Codex CLI",
-                "description": "Use local Codex CLI as the sidebar engine (`codex exec --json`) and reuse your local `~/.codex` MCP"
+                "description": "Use local Codex CLI as the sidebar engine (`codex exec --json`) and reuse your local `~/.codex` MCP",
+                "fixed": "This Codex-only plugin is always enabled."
             },
             "cliPath": {
                 "title": "Codex Path",
@@ -321,7 +322,13 @@
             "refreshModelsLoading": "Refreshing...",
             "modelsRefreshed": "Codex local models updated ({count})",
             "refreshModelsFailed": "Failed to refresh Codex models: {error}",
-            "modelLoadError": "Local model load error: {error}"
+            "modelLoadError": "Local model load error: {error}",
+            "queue": {
+                "enqueued": "Queued for sending (#{index})",
+                "readyHint": "Draft detected: click Send to queue it without interrupting the current run.",
+                "emptyHint": "Task is running: type a new draft first, then click Send to queue it; use the pause button to stop the current run.",
+                "cleared": "Cleared send queue ({count})"
+            }
         },
         "empty": {
             "title": "Start Conversation",
@@ -366,6 +373,7 @@
             "openInTab": "Open in Tab",
             "openInNewWindow": "Open in New Window",
             "send": "Send",
+            "queue": "Queue",
             "stop": "Stop",
             "scrollToBottom": "Scroll to Bottom",
             "editMessage": "Edit Message",

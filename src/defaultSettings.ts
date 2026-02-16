@@ -127,7 +127,7 @@ export const getDefaultSettings = () => ({
     openLinksInWebView: true, // 是否在 webview 中打开外部链接
 
     // Codex CLI（本地）设置
-    codexEnabled: false as boolean,
+    codexEnabled: true as boolean,
     codexCliPath: '' as string, // Windows: C:\\Users\\<you>\\AppData\\Roaming\\npm\\codex.cmd
     codexWorkingDir: '' as string, // Codex --cd / -C
     codexPromptSyncEnabled: true as boolean, // 是否与 codexWorkingDir/AGENTS.md 双向同步
@@ -176,3 +176,87 @@ export const getDefaultSettings = () => ({
     aiTemperature: 1,
     aiMaxTokens: 2000,
 });
+
+const BUILTIN_PROVIDER_IDS = ['gemini', 'deepseek', 'openai', 'moonshot', 'volcano'] as const;
+
+const isPlainObject = (value: unknown): value is Record<string, any> =>
+    !!value && typeof value === 'object' && !Array.isArray(value);
+
+export const mergeSettingsWithDefaults = (rawSettings: any = {}) => {
+    const defaults = getDefaultSettings();
+    const incoming = isPlainObject(rawSettings) ? rawSettings : {};
+
+    const merged: any = {
+        ...defaults,
+        ...incoming,
+    };
+
+    const defaultProviders = isPlainObject(defaults.aiProviders) ? defaults.aiProviders : {};
+    const incomingProviders = isPlainObject(incoming.aiProviders) ? incoming.aiProviders : {};
+    const mergedProviders: Record<string, any> = {
+        ...defaultProviders,
+        ...incomingProviders,
+    };
+
+    for (const providerId of BUILTIN_PROVIDER_IDS) {
+        const defaultProvider = isPlainObject(defaultProviders[providerId])
+            ? defaultProviders[providerId]
+            : { apiKey: '', customApiUrl: '', models: [] };
+        const incomingProvider = isPlainObject(incomingProviders[providerId])
+            ? incomingProviders[providerId]
+            : {};
+        mergedProviders[providerId] = {
+            ...defaultProvider,
+            ...incomingProvider,
+            models: Array.isArray(incomingProvider.models)
+                ? incomingProvider.models
+                : Array.isArray(defaultProvider.models)
+                  ? defaultProvider.models
+                  : [],
+        };
+    }
+
+    mergedProviders.customProviders = Array.isArray(incomingProviders.customProviders)
+        ? incomingProviders.customProviders
+              .filter(isPlainObject)
+              .map((provider: Record<string, any>, index: number) => ({
+                  ...provider,
+                  id: String(provider.id || `custom-${index + 1}`),
+                  name: String(provider.name || `Custom Provider ${index + 1}`),
+                  apiKey: typeof provider.apiKey === 'string' ? provider.apiKey : '',
+                  customApiUrl: typeof provider.customApiUrl === 'string' ? provider.customApiUrl : '',
+                  models: Array.isArray(provider.models) ? provider.models : [],
+              }))
+        : [];
+
+    merged.aiProviders = mergedProviders;
+
+    merged.dataTransfer = {
+        ...defaults.dataTransfer,
+        ...(isPlainObject(incoming.dataTransfer) ? incoming.dataTransfer : {}),
+    };
+
+    if (!Array.isArray(merged.selectedMultiModels)) {
+        merged.selectedMultiModels = [];
+    }
+
+    if (!Array.isArray(merged.webApps)) {
+        merged.webApps = [];
+    }
+
+    if (!isPlainObject(merged.codexSkillOverrides)) {
+        merged.codexSkillOverrides = {};
+    }
+
+    merged.codexEnabled = true;
+    merged.sendMessageShortcut = merged.sendMessageShortcut === 'enter' ? 'enter' : 'ctrl+enter';
+    merged.searchEngine = merged.searchEngine === 'bing' ? 'bing' : 'google';
+    merged.codexRunMode = ['read_only', 'workspace_write', 'fully_open'].includes(merged.codexRunMode)
+        ? merged.codexRunMode
+        : defaults.codexRunMode;
+    merged.codexChatMode = merged.codexChatMode === 'agent' || merged.codexChatMode === 'edit'
+        ? 'agent'
+        : 'ask';
+
+    return merged;
+};

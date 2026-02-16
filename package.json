@@ -12,6 +12,8 @@
     "build": "cross-env NODE_ENV=production vite build",
     "test:mcp-fallback": "node --no-warnings ./scripts/test_mcp_screenshot_fallback.mjs",
     "test:git-dryrun": "node --no-warnings ./scripts/test_git_autosync_dryrun_regression.mjs",
+    "test:codex-queue": "node --no-warnings ./scripts/test_codex_send_queue_regression.mjs",
+    "test:settings-merge": "node --no-warnings ./scripts/test_settings_default_merge_regression.mjs",
     "make-link": "node --no-warnings ./scripts/make_dev_link.js",
     "make_dev_copy": "node --no-warnings ./scripts/make_dev_copy.js",
     "update-version": "node --no-warnings ./scripts/update_version.js",
