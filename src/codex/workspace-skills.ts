@@ -64,6 +64,19 @@ function toPosixPath(input: string): string {
     return String(input || '').replace(/\\/g, '/');
 }
 
+function normalizeInlineText(input: string): string {
+    return String(input || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function truncateText(input: string, maxLength: number): string {
+    const text = normalizeInlineText(input);
+    if (!text) return '';
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+}
+
 function getSiyuanWorkspaceDir(): string {
     try {
         const cfg =
@@ -203,6 +216,7 @@ export function listWorkspaceSkills(
             } catch {
                 continue;
             }
+            entries.sort((a, b) => a.name.localeCompare(b.name, 'en'));
 
             for (const entry of entries) {
                 if (result.length >= maxSkills) break;
@@ -228,13 +242,18 @@ export function listWorkspaceSkills(
                             : `plugin/skills/${relativeToRoot}`;
                     const key = relativePath;
                     const override = options.skillOverrides?.[key];
+                    const resolvedName =
+                        normalizeInlineText(String(override?.name || '')) ||
+                        normalizeInlineText(parsed.name) ||
+                        normalizeInlineText(entry.name);
+                    const resolvedDescription =
+                        normalizeInlineText(String(override?.description || '')) ||
+                        normalizeInlineText(parsed.description) ||
+                        'No description';
                     result.push({
                         key,
-                        name: String(override?.name || '').trim() || parsed.name || entry.name,
-                        description:
-                            String(override?.description || '').trim() ||
-                            parsed.description ||
-                            'No description',
+                        name: resolvedName,
+                        description: resolvedDescription,
                         filePath: skillFile,
                         relativePath,
                         source: root.source,
@@ -258,22 +277,20 @@ export function buildWorkspaceSkillsPrompt(
 
     const lines: string[] = [
         '## Local Skills',
-        '- 先查看 `skills/INDEX.md`，再读取命中的 `SKILL.md`。',
-        '- 用户显式提到 `$skill-name` 时，必须启用该 skill。',
+        '- 先查看 `skills/INDEX.md`，再读取命中的 `SKILL.md`，不要全量加载。',
+        '- 用户显式提到 `$skill-name` 时，必须启用对应 skill。',
         '- 任务语义匹配 skill 名称或描述时，优先使用本地 skill。',
         '- 优先使用工作目录 `skills/`；缺失时再使用 `plugin/skills/`。',
         '- 若技能文件缺失或不可读，需说明原因并降级到通用流程。',
         '',
-        'Available skills:',
+        `Available skills (${skills.length}):`,
     ];
 
     skills.forEach((skill, idx) => {
         const sourceLabel = skill.source === 'workspace' ? 'workspace' : 'plugin';
-        lines.push(
-            `${idx + 1}. ${skill.name}: ${skill.description}`,
-            `   source: ${sourceLabel}`,
-            `   file: ${skill.relativePath}`
-        );
+        const name = normalizeInlineText(skill.name) || `skill-${idx + 1}`;
+        const description = truncateText(skill.description, 110) || 'No description';
+        lines.push(`${idx + 1}. ${name} — ${description} [${sourceLabel}] (${skill.relativePath})`);
     });
 
     return lines.join('\n');

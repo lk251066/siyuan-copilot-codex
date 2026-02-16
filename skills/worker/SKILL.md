@@ -14,15 +14,27 @@ protocol in your inbox first, then use this checklist to avoid missing lifecycle
 2. Send ACK to the lead via MCP tool `omx_state.team_send_message` (to_worker=`leader-fixed`)
 3. Read your task: `.omx/state/team/<team>/tasks/task-<id>.json`
 4. Claim the task via MCP tool `omx_state.team_claim_task`
-5. Do the work **only within the allowed paths** in the task description
+5. Execute the task **only within the allowed paths** in task description
 6. On completion:
    - Update task file to `{"status":"completed","result":"..."}` (or use `team_update_task`)
    - Update your status file to `{"state":"idle"}`
 7. If blocked, set status to `{"state":"blocked","reason":"..."}` and message the lead
+
+## Completion Checklist (must report)
+
+- What changed (file paths + brief summary)
+- Minimal executable verification (commands + key output)
+- Current progress and remaining work estimate
+- Whether follow-up is needed from leader
+
+## Anti-stall Rules
+
+- If waiting on missing context for >2 minutes, message the leader with one clear question.
+- If tool/path permissions block execution, report exact error and propose fallback.
+- Do not keep task `in_progress` after work is finished; close task immediately.
 
 ## Rules
 
 - Do not print secrets (tokens, API keys, full settings.json) to the terminal.
 - Do not edit files outside the paths listed in the task description.
 - Prefer minimal, verifiable changes and record executable verification results when asked.
-

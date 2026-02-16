@@ -4436,7 +4436,7 @@
         const baseSystemPrompt =
             (tempModelSettings.systemPrompt || '').trim() || String(settings.aiSystemPrompt || '').trim();
         const skillsPrompt = buildWorkspaceSkillsPrompt(workingDir, {
-            maxSkills: 100,
+            maxSkills: 40,
             skillOverrides:
                 settings.codexSkillOverrides && typeof settings.codexSkillOverrides === 'object'
                     ? settings.codexSkillOverrides
