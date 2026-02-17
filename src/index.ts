@@ -2945,12 +2945,24 @@ export default class PluginSample extends Plugin {
             this.looksLikeResetSettings(incomingSettings) &&
             this.hasUsefulRecoveryData(persistedSettings);
 
-        const baseSettings = shouldGuardResetWrite
+        let baseSettings = shouldGuardResetWrite
             ? this.mergePreferCurrentMeaningful(incomingSettings, persistedSettings)
             : {
                   ...persistedSettings,
                   ...incomingSettings,
               };
+
+        const saveRecoveryResult = this.recoverResetSettingsIfNeeded(baseSettings);
+        if (saveRecoveryResult.changed) {
+            baseSettings = saveRecoveryResult.settings;
+            pushMsg(
+                (t("migration.settingsRecovered") ||
+                    "检测到设置被重置，已自动从备份恢复关键配置（来源：{source}）").replace(
+                    "{source}",
+                    saveRecoveryResult.source
+                )
+            );
+        }
 
         let nextSettings = mergeSettingsWithDefaults(baseSettings);
         if (shouldGuardResetWrite) {

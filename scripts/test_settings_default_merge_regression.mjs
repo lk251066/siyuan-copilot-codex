@@ -55,6 +55,13 @@ const checks = [
             indexSource.includes('this.mergePreferCurrentMeaningful(incomingSettings, persistedSettings)'),
     },
     {
+        name: 'saveSettings can recover from backups before final write',
+        pass:
+            indexSource.includes('const saveRecoveryResult = this.recoverResetSettingsIfNeeded(baseSettings);') &&
+            indexSource.includes('if (saveRecoveryResult.changed) {') &&
+            indexSource.includes('baseSettings = saveRecoveryResult.settings;'),
+    },
+    {
         name: 'settings panel loads settings through merge helper',
         pass: settingsPanelSource.includes('settings = mergeSettingsWithDefaults(loadedSettings);'),
     },
