@@ -2568,12 +2568,12 @@ export default class PluginSample extends Plugin {
         }
     }
 
-    private readLatestSettingsBackup(namespace: string): { path: string; settings: any } | null {
+    private readSettingsBackups(namespace: string): Array<{ path: string; settings: any }> {
         try {
             const fs = this.nodeRequireForPlugin<typeof import('fs')>('fs');
             const path = this.nodeRequireForPlugin<typeof import('path')>('path');
             const dir = path.join('/data/storage/petal', namespace);
-            if (!fs.existsSync(dir)) return null;
+            if (!fs.existsSync(dir)) return [];
             const files = fs
                 .readdirSync(dir)
                 .filter(
@@ -2586,17 +2586,18 @@ export default class PluginSample extends Plugin {
                     const bm = fs.statSync(path.join(dir, b)).mtimeMs || 0;
                     return bm - am;
                 });
+            const backups: Array<{ path: string; settings: any }> = [];
             for (const file of files) {
                 const fullPath = path.join(dir, file);
                 const settings = this.readJsonFileSafe(fullPath);
                 if (settings) {
-                    return { path: fullPath, settings };
+                    backups.push({ path: fullPath, settings });
                 }
             }
-            return null;
+            return backups;
         } catch (error) {
             console.warn('Read settings backup failed:', namespace, error);
-            return null;
+            return [];
         }
     }
 
@@ -2656,8 +2657,8 @@ export default class PluginSample extends Plugin {
                     settings,
                 });
             }
-            const backup = this.readLatestSettingsBackup(namespace);
-            if (backup) {
+            const backups = this.readSettingsBackups(namespace);
+            for (const backup of backups) {
                 candidates.push({
                     source: backup.path,
                     settings: backup.settings,

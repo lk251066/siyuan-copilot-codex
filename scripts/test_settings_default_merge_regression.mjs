@@ -32,6 +32,7 @@ const checks = [
         name: 'index loadSettings has reset-recovery fallback flow',
         pass:
             indexSource.includes('const recoveryResult = this.recoverResetSettingsIfNeeded(loadedSettings);') &&
+            indexSource.includes('const backups = this.readSettingsBackups(namespace);') &&
             indexSource.includes('settingsRecoveryApplied: SETTINGS_RECOVERY_VERSION'),
     },
     {
