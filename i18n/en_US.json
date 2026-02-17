@@ -934,7 +934,8 @@
         "achuanFallback": "Legacy Achuan provider detected; switched to OpenAI automatically",
         "autoSetModelCapabilities": "Model capabilities were auto-initialized for existing models",
         "codexAutoConfigured": "Codex CLI baseline configuration was auto-completed",
-        "agentsPromptSynced": "Detected AGENTS.md update in working directory; system prompt has been synced"
+        "agentsPromptSynced": "Detected AGENTS.md update in working directory; system prompt has been synced",
+        "settingsRecovered": "Detected settings reset; restored key configuration from backup ({source})"
     },
     "fullscreen": {
         "title": "Fullscreen View",

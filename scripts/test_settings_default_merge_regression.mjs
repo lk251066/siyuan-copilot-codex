@@ -15,6 +15,10 @@ const checks = [
         pass: defaultSettingsSource.includes('export const mergeSettingsWithDefaults'),
     },
     {
+        name: 'default settings tracks settings recovery marker',
+        pass: defaultSettingsSource.includes('settingsRecoveryApplied: 0 as number'),
+    },
+    {
         name: 'codex enabled default is forced on in merge helper',
         pass:
             defaultSettingsSource.includes('codexEnabled: true as boolean') &&
@@ -23,6 +27,12 @@ const checks = [
     {
         name: 'index loadSettings uses merge helper',
         pass: indexSource.includes('let mergedSettings = mergeSettingsWithDefaults(settings);'),
+    },
+    {
+        name: 'index loadSettings has reset-recovery fallback flow',
+        pass:
+            indexSource.includes('const recoveryResult = this.recoverResetSettingsIfNeeded(loadedSettings);') &&
+            indexSource.includes('settingsRecoveryApplied: SETTINGS_RECOVERY_VERSION'),
     },
     {
         name: 'index sync prompt path uses merge helper',
@@ -38,6 +48,10 @@ const checks = [
     {
         name: 'settings panel loads settings through merge helper',
         pass: settingsPanelSource.includes('settings = mergeSettingsWithDefaults(loadedSettings);'),
+    },
+    {
+        name: 'settings panel runload no longer force-saves on mount',
+        pass: !settingsPanelSource.includes('await saveSettings();\n\n        // console.debug'),
     },
     {
         name: 'sidebar starts with default settings and merges loaded settings',

@@ -166,6 +166,7 @@ export const getDefaultSettings = () => ({
     dataTransfer: {
         sessionData: false,
         autoSetModelCapabilities: false, // 是否已自动设置模型能力
+        settingsRecoveryApplied: 0 as number,
     },
 
     // 保留旧设置以便兼容升级

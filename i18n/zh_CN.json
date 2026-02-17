@@ -934,7 +934,8 @@
         "achuanFallback": "检测到旧平台 Achuan，已自动切换到 OpenAI",
         "autoSetModelCapabilities": "已自动为现有模型设置能力",
         "codexAutoConfigured": "已自动完成 Codex CLI 基础配置",
-        "agentsPromptSynced": "检测到工作目录 AGENTS.md 已更新，系统提示词已同步为文件内容"
+        "agentsPromptSynced": "检测到工作目录 AGENTS.md 已更新，系统提示词已同步为文件内容",
+        "settingsRecovered": "检测到设置被重置，已自动从备份恢复关键配置（来源：{source}）"
     },
     "fullscreen": {
         "title": "全屏查看",

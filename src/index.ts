@@ -38,12 +38,14 @@ const WEBVIEW_HISTORY_FILE = "webview-history.json";
 const WEBAPP_ICON_DIR = "/data/storage/petal/siyuan-plugin-copilot/webappIcon";
 const MAX_HISTORY_COUNT = 200;
 const DEFAULT_PLUGIN_NAMESPACE = "siyuan-copilot-codex";
+const LEGACY_PLUGIN_NAMESPACE = "siyuan-plugin-copilot";
 const ADD_CHAT_CONTEXT_EVENT_SUFFIX = "add-chat-context";
 const DOCK_ICON_ID = "iconCode";
 const ICON_COPILOT_ID = "iconCopilotCodex";
 const ICON_MODEL_SETTING_ID = "iconModelSettingCodex";
 const ICON_TRANSLATE_ID = "iconTranslateCodex";
 const ICON_WEBAPP_ID = "iconCopilotWebAppCodex";
+const SETTINGS_RECOVERY_VERSION = 1;
 
 const AI_SIDEBAR_TYPE = "codex-ai-chat-sidebar";
 const AI_TAB_TYPE = "codex-ai-chat-tab";
@@ -2417,7 +2419,7 @@ export default class PluginSample extends Plugin {
             new Set([
                 String(this.name || "").trim(),
                 DEFAULT_PLUGIN_NAMESPACE,
-                "siyuan-plugin-copilot",
+                LEGACY_PLUGIN_NAMESPACE,
             ].filter(Boolean))
         );
 
@@ -2504,6 +2506,180 @@ export default class PluginSample extends Plugin {
         return '';
     }
 
+    private nodeRequireForPlugin<T = any>(id: string): T {
+        const w = globalThis as any;
+        if (w?.require && typeof w.require === 'function') return w.require(id);
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        return require(id);
+    }
+
+    private isPlainObjectValue(value: any): value is Record<string, any> {
+        return !!value && typeof value === 'object' && !Array.isArray(value);
+    }
+
+    private cloneJsonValue<T>(value: T): T {
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch {
+            return value;
+        }
+    }
+
+    private isMeaningfulSettingValue(value: any): boolean {
+        if (value === undefined || value === null) return false;
+        if (typeof value === 'string') return value.trim().length > 0;
+        if (Array.isArray(value)) return value.length > 0;
+        if (this.isPlainObjectValue(value)) return Object.keys(value).length > 0;
+        return true;
+    }
+
+    private mergePreferCurrentMeaningful(current: any, fallback: any): any {
+        if (this.isPlainObjectValue(current) && this.isPlainObjectValue(fallback)) {
+            const next: Record<string, any> = this.cloneJsonValue(fallback);
+            for (const [key, currentValue] of Object.entries(current)) {
+                const fallbackValue = (fallback as Record<string, any>)[key];
+                next[key] = this.mergePreferCurrentMeaningful(currentValue, fallbackValue);
+            }
+            return next;
+        }
+
+        if (Array.isArray(current)) {
+            if (current.length > 0) return this.cloneJsonValue(current);
+            if (Array.isArray(fallback) && fallback.length > 0) return this.cloneJsonValue(fallback);
+            return this.cloneJsonValue(current);
+        }
+
+        if (this.isMeaningfulSettingValue(current)) return this.cloneJsonValue(current);
+        if (this.isMeaningfulSettingValue(fallback)) return this.cloneJsonValue(fallback);
+        return this.cloneJsonValue(current ?? fallback);
+    }
+
+    private readJsonFileSafe(filePath: string): any | null {
+        try {
+            const fs = this.nodeRequireForPlugin<typeof import('fs')>('fs');
+            if (!fs.existsSync(filePath)) return null;
+            const raw = String(fs.readFileSync(filePath, 'utf8') || '').trim();
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            return this.isPlainObjectValue(parsed) ? parsed : null;
+        } catch (error) {
+            console.warn('Read settings JSON failed:', filePath, error);
+            return null;
+        }
+    }
+
+    private readLatestSettingsBackup(namespace: string): { path: string; settings: any } | null {
+        try {
+            const fs = this.nodeRequireForPlugin<typeof import('fs')>('fs');
+            const path = this.nodeRequireForPlugin<typeof import('path')>('path');
+            const dir = path.join('/data/storage/petal', namespace);
+            if (!fs.existsSync(dir)) return null;
+            const files = fs
+                .readdirSync(dir)
+                .filter(
+                    (name: string) =>
+                        /^settings\.json\.bak-\d{8}-\d{6}$/.test(name) ||
+                        /^settings\.json\.pre-restore-\d{8}-\d{6}$/.test(name)
+                )
+                .sort((a: string, b: string) => {
+                    const am = fs.statSync(path.join(dir, a)).mtimeMs || 0;
+                    const bm = fs.statSync(path.join(dir, b)).mtimeMs || 0;
+                    return bm - am;
+                });
+            for (const file of files) {
+                const fullPath = path.join(dir, file);
+                const settings = this.readJsonFileSafe(fullPath);
+                if (settings) {
+                    return { path: fullPath, settings };
+                }
+            }
+            return null;
+        } catch (error) {
+            console.warn('Read settings backup failed:', namespace, error);
+            return null;
+        }
+    }
+
+    private looksLikeResetSettings(settings: any): boolean {
+        const webAppsCount = Array.isArray(settings?.webApps) ? settings.webApps.length : 0;
+        const gitFieldsEmpty =
+            !String(settings?.codexGitCliPath || '').trim() &&
+            !String(settings?.codexGitRepoDir || '').trim() &&
+            !String(settings?.codexGitRemoteUrl || '').trim() &&
+            !String(settings?.codexGitBranch || '').trim() &&
+            settings?.codexGitAutoSyncEnabled !== true;
+        const codexBaselineExists =
+            !!String(settings?.codexCliPath || '').trim() || !!String(settings?.codexWorkingDir || '').trim();
+        return codexBaselineExists && gitFieldsEmpty && webAppsCount === 0;
+    }
+
+    private hasUsefulRecoveryData(settings: any): boolean {
+        if (!this.isPlainObjectValue(settings)) return false;
+        const webAppsCount = Array.isArray(settings?.webApps) ? settings.webApps.length : 0;
+        const hasGitSignal =
+            !!String(settings?.codexGitCliPath || '').trim() ||
+            !!String(settings?.codexGitRepoDir || '').trim() ||
+            !!String(settings?.codexGitRemoteUrl || '').trim() ||
+            !!String(settings?.codexGitBranch || '').trim() ||
+            settings?.codexGitAutoSyncEnabled === true;
+        return webAppsCount > 0 || hasGitSignal;
+    }
+
+    private recoverResetSettingsIfNeeded(rawSettings: any): {
+        settings: any;
+        changed: boolean;
+        source: string;
+    } {
+        const current = this.isPlainObjectValue(rawSettings) ? rawSettings : {};
+        const alreadyRecovered =
+            Number(current?.dataTransfer?.settingsRecoveryApplied || 0) >= SETTINGS_RECOVERY_VERSION;
+        if (alreadyRecovered || !this.looksLikeResetSettings(current)) {
+            return { settings: current, changed: false, source: '' };
+        }
+
+        const namespaces = Array.from(
+            new Set([
+                String(this.name || '').trim(),
+                DEFAULT_PLUGIN_NAMESPACE,
+                LEGACY_PLUGIN_NAMESPACE,
+            ].filter(Boolean))
+        );
+
+        const candidates: Array<{ source: string; settings: any }> = [];
+        for (const namespace of namespaces) {
+            const settingsPath = `/data/storage/petal/${namespace}/${SETTINGS_FILE}`;
+            const settings = this.readJsonFileSafe(settingsPath);
+            if (settings) {
+                candidates.push({
+                    source: settingsPath,
+                    settings,
+                });
+            }
+            const backup = this.readLatestSettingsBackup(namespace);
+            if (backup) {
+                candidates.push({
+                    source: backup.path,
+                    settings: backup.settings,
+                });
+            }
+        }
+
+        for (const candidate of candidates) {
+            if (!this.hasUsefulRecoveryData(candidate.settings)) continue;
+            const merged = this.mergePreferCurrentMeaningful(current, candidate.settings);
+            const next = {
+                ...merged,
+                dataTransfer: {
+                    ...(this.isPlainObjectValue(merged?.dataTransfer) ? merged.dataTransfer : {}),
+                    settingsRecoveryApplied: SETTINGS_RECOVERY_VERSION,
+                },
+            };
+            return { settings: next, changed: true, source: candidate.source };
+        }
+
+        return { settings: current, changed: false, source: '' };
+    }
+
     private applyCodexAutoSettings(rawSettings: any, mergedSettings: any): { changed: boolean; autoEnabled: boolean } {
         let changed = false;
         let autoEnabled = false;
@@ -2556,8 +2732,20 @@ export default class PluginSample extends Plugin {
      * 加载设置
      */
     async loadSettings() {
-        const settings = (await this.loadData(SETTINGS_FILE)) || {};
+        const loadedSettings = (await this.loadData(SETTINGS_FILE)) || {};
         let migratedSettingsChanged = false;
+        const recoveryResult = this.recoverResetSettingsIfNeeded(loadedSettings);
+        const settings = recoveryResult.settings;
+        if (recoveryResult.changed) {
+            migratedSettingsChanged = true;
+            pushMsg(
+                (t("migration.settingsRecovered") ||
+                    "检测到设置被重置，已自动从备份恢复关键配置").replace(
+                    "{source}",
+                    recoveryResult.source
+                )
+            );
+        }
 
         // 迁移：如果存在旧的 aiProviders.v3 配置，迁移为自定义平台（customProviders）
         try {
