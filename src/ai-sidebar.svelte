@@ -276,6 +276,7 @@
     let gitIsRunning = false;
     let gitLastExitCode: number | null = null;
     let gitAbortCurrent: null | (() => void) = null;
+    let gitSettingSaveTimers: Record<string, number> = {};
     $: if (isCodexMode && chatMode === 'edit') {
         chatMode = 'agent';
     }
@@ -1760,6 +1761,11 @@
     });
 
     onDestroy(async () => {
+        for (const timer of Object.values(gitSettingSaveTimers)) {
+            window.clearTimeout(timer);
+        }
+        gitSettingSaveTimers = {};
+
         // 取消订阅
         if (unsubscribe) {
             unsubscribe();
@@ -10995,6 +11001,22 @@
         await plugin.saveSettings(settings);
     }
 
+    function scheduleGitSettingsPatchSave(
+        key: string,
+        patchBuilder: () => Record<string, any>,
+        delay = 320
+    ) {
+        const timer = gitSettingSaveTimers[key];
+        if (timer) {
+            window.clearTimeout(timer);
+            delete gitSettingSaveTimers[key];
+        }
+        gitSettingSaveTimers[key] = window.setTimeout(() => {
+            delete gitSettingSaveTimers[key];
+            void updateGitSettingsPatch(patchBuilder());
+        }, delay);
+    }
+
     function getEnvFirst(keys: string[]): string {
         const env = (globalThis as any)?.process?.env || {};
         for (const key of keys) {
@@ -16544,9 +16566,11 @@
                                 type="text"
                                 value={gitRepoDir}
                                 placeholder={settings?.codexWorkingDir || ''}
-                                on:change={async e => {
+                                on:input={e => {
                                     gitRepoDir = e.target.value;
-                                    await updateGitSettingsPatch({ codexGitRepoDir: gitRepoDir });
+                                    scheduleGitSettingsPatchSave('codexGitRepoDir', () => ({
+                                        codexGitRepoDir: gitRepoDir,
+                                    }));
                                 }}
                             />
                             <button
@@ -16569,11 +16593,11 @@
                                 type="text"
                                 value={gitRemoteName}
                                 placeholder="origin"
-                                on:change={async e => {
+                                on:input={e => {
                                     gitRemoteName = e.target.value;
-                                    await updateGitSettingsPatch({
+                                    scheduleGitSettingsPatchSave('codexGitRemoteName', () => ({
                                         codexGitRemoteName: gitRemoteName,
-                                    });
+                                    }));
                                 }}
                             />
                             <input
@@ -16581,11 +16605,11 @@
                                 type="text"
                                 value={gitRemoteUrl}
                                 placeholder="git@github.com:user/repo.git"
-                                on:change={async e => {
+                                on:input={e => {
                                     gitRemoteUrl = e.target.value;
-                                    await updateGitSettingsPatch({
+                                    scheduleGitSettingsPatchSave('codexGitRemoteUrl', () => ({
                                         codexGitRemoteUrl: gitRemoteUrl,
-                                    });
+                                    }));
                                 }}
                             />
                             <button
@@ -16605,11 +16629,11 @@
                                 type="text"
                                 value={gitBranch}
                                 placeholder={t('aiSidebar.git.branchOptional') || '可选，留空用当前分支'}
-                                on:change={async e => {
+                                on:input={e => {
                                     gitBranch = e.target.value;
-                                    await updateGitSettingsPatch({
+                                    scheduleGitSettingsPatchSave('codexGitBranch', () => ({
                                         codexGitBranch: gitBranch,
-                                    });
+                                    }));
                                 }}
                             />
                         </div>

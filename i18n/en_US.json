@@ -935,7 +935,8 @@
         "autoSetModelCapabilities": "Model capabilities were auto-initialized for existing models",
         "codexAutoConfigured": "Codex CLI baseline configuration was auto-completed",
         "agentsPromptSynced": "Detected AGENTS.md update in working directory; system prompt has been synced",
-        "settingsRecovered": "Detected settings reset; restored key configuration from backup ({source})"
+        "settingsRecovered": "Detected settings reset; restored key configuration from backup ({source})",
+        "settingsGuarded": "Detected suspicious reset-write; preserved existing key settings automatically"
     },
     "fullscreen": {
         "title": "Fullscreen View",

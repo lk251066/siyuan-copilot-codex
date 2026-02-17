@@ -42,12 +42,27 @@ const checks = [
         name: 'saveSettings merges with persisted settings to avoid field loss',
         pass:
             indexSource.includes('const persistedSettings = (await this.loadData(SETTINGS_FILE)) || {};') &&
+            indexSource.includes('const incomingSettings = this.isPlainObjectValue(settings) ? settings : {};') &&
             indexSource.includes('...persistedSettings,') &&
-            indexSource.includes('...(settings || {}),'),
+            indexSource.includes('...incomingSettings,'),
+    },
+    {
+        name: 'saveSettings guards suspicious reset writes',
+        pass:
+            indexSource.includes('const shouldGuardResetWrite =') &&
+            indexSource.includes('this.looksLikeResetSettings(incomingSettings)') &&
+            indexSource.includes('this.hasUsefulRecoveryData(persistedSettings)') &&
+            indexSource.includes('this.mergePreferCurrentMeaningful(incomingSettings, persistedSettings)'),
     },
     {
         name: 'settings panel loads settings through merge helper',
         pass: settingsPanelSource.includes('settings = mergeSettingsWithDefaults(loadedSettings);'),
+    },
+    {
+        name: 'settings panel has debounced text autosave for codex config',
+        pass:
+            settingsPanelSource.includes('function setSettingDebounced(') &&
+            settingsPanelSource.includes("on:input={e => setSettingDebounced('codexGitRepoDir', e.target.value)}"),
     },
     {
         name: 'settings panel runload no longer force-saves on mount',

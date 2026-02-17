@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onDestroy, onMount } from 'svelte';
     import SettingPanel from '@/libs/components/setting-panel.svelte';
     import { t } from './utils/i18n';
     import {
@@ -20,6 +20,7 @@
 
     // 使用动态默认设置
     let settings = { ...getDefaultSettings() };
+    let textSaveTimer: number | null = null;
 
     // 笔记本列表
     let notebookOptions: Record<string, string> = {};
@@ -42,6 +43,22 @@
     function setSetting(key: string, value: any) {
         settings = { ...settings, [key]: value };
         saveSettings();
+    }
+
+    function scheduleSaveSettings(delay = 320) {
+        if (textSaveTimer) {
+            window.clearTimeout(textSaveTimer);
+            textSaveTimer = null;
+        }
+        textSaveTimer = window.setTimeout(() => {
+            textSaveTimer = null;
+            void saveSettings();
+        }, delay);
+    }
+
+    function setSettingDebounced(key: string, value: any, delay = 320) {
+        settings = { ...settings, [key]: value };
+        scheduleSaveSettings(delay);
     }
 
     async function refreshCodexModels(showToast = false) {
@@ -621,6 +638,13 @@
         await runload();
     });
 
+    onDestroy(() => {
+        if (textSaveTimer) {
+            window.clearTimeout(textSaveTimer);
+            textSaveTimer = null;
+        }
+    });
+
     async function runload() {
         const loadedSettings = await plugin.loadSettings();
         settings = mergeSettingsWithDefaults(loadedSettings);
@@ -1161,7 +1185,7 @@
                             type="text"
                             value={settings.codexCliPath || ''}
                             placeholder="codex 或 C:\\Users\\...\\codex.cmd"
-                            on:change={e => setSetting('codexCliPath', e.target.value)}
+                            on:input={e => setSettingDebounced('codexCliPath', e.target.value)}
                         />
                         <button
                             class="b3-button b3-button--outline"
@@ -1187,7 +1211,7 @@
                         type="text"
                         value={settings.codexWorkingDir || ''}
                         placeholder="C:\\path\\to\\siyuan-workspace"
-                        on:change={e => setSetting('codexWorkingDir', e.target.value)}
+                        on:input={e => setSettingDebounced('codexWorkingDir', e.target.value)}
                     />
                 </div>
 
@@ -1280,7 +1304,7 @@
                             type="text"
                             value={settings.codexGitCliPath || ''}
                             placeholder="git 或 C:\\Program Files\\Git\\bin\\git.exe"
-                            on:change={e => setSetting('codexGitCliPath', e.target.value)}
+                            on:input={e => setSettingDebounced('codexGitCliPath', e.target.value)}
                         />
                         <button
                             class="b3-button b3-button--outline"
@@ -1306,7 +1330,7 @@
                         type="text"
                         value={settings.codexGitRepoDir || ''}
                         placeholder={settings.codexWorkingDir || ''}
-                        on:change={e => setSetting('codexGitRepoDir', e.target.value)}
+                        on:input={e => setSettingDebounced('codexGitRepoDir', e.target.value)}
                     />
                 </div>
 
@@ -1326,14 +1350,15 @@
                             type="text"
                             value={settings.codexGitRemoteName || 'origin'}
                             placeholder="origin"
-                            on:change={e => setSetting('codexGitRemoteName', e.target.value)}
+                            on:input={e =>
+                                setSettingDebounced('codexGitRemoteName', e.target.value)}
                         />
                         <input
                             class="b3-text-field fn__flex-1"
                             type="text"
                             value={settings.codexGitRemoteUrl || ''}
                             placeholder="git@github.com:user/repo.git"
-                            on:change={e => setSetting('codexGitRemoteUrl', e.target.value)}
+                            on:input={e => setSettingDebounced('codexGitRemoteUrl', e.target.value)}
                         />
                     </div>
                 </div>
@@ -1352,7 +1377,7 @@
                         type="text"
                         value={settings.codexGitBranch || ''}
                         placeholder={t('aiSidebar.git.branchOptional') || '可选，留空用当前分支'}
-                        on:change={e => setSetting('codexGitBranch', e.target.value)}
+                        on:input={e => setSettingDebounced('codexGitBranch', e.target.value)}
                     />
                 </div>
 
@@ -1447,7 +1472,8 @@
                         type="text"
                         value={settings.codexGitAutoCommitMessage || ''}
                         placeholder={t('aiSidebar.git.commitPlaceholder') || '输入 commit message'}
-                        on:change={e => setSetting('codexGitAutoCommitMessage', e.target.value)}
+                        on:input={e =>
+                            setSettingDebounced('codexGitAutoCommitMessage', e.target.value)}
                     />
                 </div>
 

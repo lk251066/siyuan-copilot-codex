@@ -2631,11 +2631,12 @@ export default class PluginSample extends Plugin {
         source: string;
     } {
         const current = this.isPlainObjectValue(rawSettings) ? rawSettings : {};
-        const alreadyRecovered =
-            Number(current?.dataTransfer?.settingsRecoveryApplied || 0) >= SETTINGS_RECOVERY_VERSION;
-        if (alreadyRecovered || !this.looksLikeResetSettings(current)) {
+        const looksReset = this.looksLikeResetSettings(current);
+        if (!looksReset) {
             return { settings: current, changed: false, source: '' };
         }
+        // 即使已打过恢复标记，只要再次检测到“重置态”，仍允许再次恢复。
+        // 这样可覆盖“被异常流程重复写空”的场景。
 
         const namespaces = Array.from(
             new Set([
@@ -2939,10 +2940,34 @@ export default class PluginSample extends Plugin {
      */
     async saveSettings(settings: any) {
         const persistedSettings = (await this.loadData(SETTINGS_FILE)) || {};
-        let nextSettings = mergeSettingsWithDefaults({
-            ...persistedSettings,
-            ...(settings || {}),
-        });
+        const incomingSettings = this.isPlainObjectValue(settings) ? settings : {};
+        const shouldGuardResetWrite =
+            this.looksLikeResetSettings(incomingSettings) &&
+            this.hasUsefulRecoveryData(persistedSettings);
+
+        const baseSettings = shouldGuardResetWrite
+            ? this.mergePreferCurrentMeaningful(incomingSettings, persistedSettings)
+            : {
+                  ...persistedSettings,
+                  ...incomingSettings,
+              };
+
+        let nextSettings = mergeSettingsWithDefaults(baseSettings);
+        if (shouldGuardResetWrite) {
+            nextSettings = {
+                ...nextSettings,
+                dataTransfer: {
+                    ...(this.isPlainObjectValue(nextSettings?.dataTransfer)
+                        ? nextSettings.dataTransfer
+                        : {}),
+                    settingsRecoveryApplied: SETTINGS_RECOVERY_VERSION,
+                },
+            };
+            pushMsg(
+                t("migration.settingsGuarded") ||
+                    "检测到疑似重置写入，已自动保留已有关键设置"
+            );
+        }
         try {
             const syncResult = bidirectionalSyncPromptWithWorkingDirAgentsFile(nextSettings);
             nextSettings = syncResult.settings;
