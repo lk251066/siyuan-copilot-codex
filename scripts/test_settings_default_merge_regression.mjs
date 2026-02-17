@@ -63,6 +63,14 @@ const checks = [
             indexSource.includes('baseSettings = saveRecoveryResult.settings;'),
     },
     {
+        name: 'settings save/load writes audit events for reset diagnosis',
+        pass:
+            indexSource.includes('const SETTINGS_AUDIT_FILE = "settings-write-audit.ndjson";') &&
+            indexSource.includes("this.appendSettingsAuditEvent('save_settings_prepare'") &&
+            indexSource.includes("this.appendSettingsAuditEvent('save_settings_committed'") &&
+            indexSource.includes("this.appendSettingsAuditEvent('load_settings'"),
+    },
+    {
         name: 'settings panel loads settings through merge helper',
         pass: settingsPanelSource.includes('settings = mergeSettingsWithDefaults(loadedSettings);'),
     },

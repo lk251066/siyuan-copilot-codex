@@ -39,6 +39,7 @@ const WEBAPP_ICON_DIR = "/data/storage/petal/siyuan-plugin-copilot/webappIcon";
 const MAX_HISTORY_COUNT = 200;
 const DEFAULT_PLUGIN_NAMESPACE = "siyuan-copilot-codex";
 const LEGACY_PLUGIN_NAMESPACE = "siyuan-plugin-copilot";
+const SETTINGS_AUDIT_FILE = "settings-write-audit.ndjson";
 const ADD_CHAT_CONTEXT_EVENT_SUFFIX = "add-chat-context";
 const DOCK_ICON_ID = "iconCode";
 const ICON_COPILOT_ID = "iconCopilotCodex";
@@ -2568,6 +2569,39 @@ export default class PluginSample extends Plugin {
         }
     }
 
+    private summarizeSettingsForAudit(settings: any): Record<string, any> {
+        const safe = this.isPlainObjectValue(settings) ? settings : {};
+        return {
+            codexCliPath: String(safe?.codexCliPath || '').trim(),
+            codexWorkingDir: String(safe?.codexWorkingDir || '').trim(),
+            codexGitCliPath: String(safe?.codexGitCliPath || '').trim(),
+            codexGitRepoDir: String(safe?.codexGitRepoDir || '').trim(),
+            codexGitRemoteUrl: String(safe?.codexGitRemoteUrl || '').trim(),
+            codexGitBranch: String(safe?.codexGitBranch || '').trim(),
+            codexGitAutoSyncEnabled: safe?.codexGitAutoSyncEnabled === true,
+            webAppsLen: Array.isArray(safe?.webApps) ? safe.webApps.length : 0,
+            settingsRecoveryApplied: Number(safe?.dataTransfer?.settingsRecoveryApplied || 0),
+        };
+    }
+
+    private appendSettingsAuditEvent(event: string, payload: Record<string, any>) {
+        try {
+            const fs = this.nodeRequireForPlugin<typeof import('fs')>('fs');
+            const path = this.nodeRequireForPlugin<typeof import('path')>('path');
+            const baseDir = path.join('/data/storage/petal', this.pluginNamespace);
+            fs.mkdirSync(baseDir, { recursive: true });
+            const filePath = path.join(baseDir, SETTINGS_AUDIT_FILE);
+            const line = JSON.stringify({
+                ts: new Date().toISOString(),
+                event,
+                ...payload,
+            });
+            fs.appendFileSync(filePath, `${line}\n`, 'utf8');
+        } catch (error) {
+            console.warn('Append settings audit failed:', error);
+        }
+    }
+
     private readSettingsBackups(namespace: string): Array<{ path: string; settings: any }> {
         try {
             const fs = this.nodeRequireForPlugin<typeof import('fs')>('fs');
@@ -2748,6 +2782,13 @@ export default class PluginSample extends Plugin {
                 )
             );
         }
+        this.appendSettingsAuditEvent('load_settings', {
+            loadedLooksReset: this.looksLikeResetSettings(loadedSettings),
+            recovered: recoveryResult.changed,
+            recoverySource: recoveryResult.source || '',
+            loadedSummary: this.summarizeSettingsForAudit(loadedSettings),
+            activeSummary: this.summarizeSettingsForAudit(settings),
+        });
 
         // 迁移：如果存在旧的 aiProviders.v3 配置，迁移为自定义平台（customProviders）
         try {
@@ -2929,6 +2970,10 @@ export default class PluginSample extends Plugin {
         // 保存合并后的设置，确保内置 webApps 能在 onLayoutReady 中正确注册
         if (needsSave) {
             await this.saveData(SETTINGS_FILE, mergedSettings);
+            this.appendSettingsAuditEvent('load_settings_saved', {
+                needsSave,
+                mergedSummary: this.summarizeSettingsForAudit(mergedSettings),
+            });
         }
 
         // 更新 store
@@ -2942,9 +2987,10 @@ export default class PluginSample extends Plugin {
     async saveSettings(settings: any) {
         const persistedSettings = (await this.loadData(SETTINGS_FILE)) || {};
         const incomingSettings = this.isPlainObjectValue(settings) ? settings : {};
+        const incomingLooksReset = this.looksLikeResetSettings(incomingSettings);
+        const persistedHasUsefulRecovery = this.hasUsefulRecoveryData(persistedSettings);
         const shouldGuardResetWrite =
-            this.looksLikeResetSettings(incomingSettings) &&
-            this.hasUsefulRecoveryData(persistedSettings);
+            incomingLooksReset && persistedHasUsefulRecovery;
 
         let baseSettings = shouldGuardResetWrite
             ? this.mergePreferCurrentMeaningful(incomingSettings, persistedSettings)
@@ -2964,6 +3010,17 @@ export default class PluginSample extends Plugin {
                 )
             );
         }
+
+        this.appendSettingsAuditEvent('save_settings_prepare', {
+            incomingLooksReset,
+            persistedHasUsefulRecovery,
+            shouldGuardResetWrite,
+            recoveredInSave: saveRecoveryResult.changed,
+            recoverySource: saveRecoveryResult.source || '',
+            incomingSummary: this.summarizeSettingsForAudit(incomingSettings),
+            persistedSummary: this.summarizeSettingsForAudit(persistedSettings),
+            nextBaseSummary: this.summarizeSettingsForAudit(baseSettings),
+        });
 
         let nextSettings = mergeSettingsWithDefaults(baseSettings);
         if (shouldGuardResetWrite) {
@@ -2994,6 +3051,11 @@ export default class PluginSample extends Plugin {
             console.error('Sync AGENTS.md failed:', e);
         }
         await this.saveData(SETTINGS_FILE, nextSettings);
+        this.appendSettingsAuditEvent('save_settings_committed', {
+            shouldGuardResetWrite,
+            recoveredInSave: saveRecoveryResult.changed,
+            committedSummary: this.summarizeSettingsForAudit(nextSettings),
+        });
         // 更新 store，通知所有订阅者
         updateSettings(nextSettings);
     }
