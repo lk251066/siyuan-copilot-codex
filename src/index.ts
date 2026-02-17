@@ -2483,6 +2483,36 @@ export default class PluginSample extends Plugin {
         return (globalThis as any)?.window?.siyuan?.config || (globalThis as any)?.siyuan?.config || {};
     }
 
+    private resolveWorkspaceDataRootForFs(): string {
+        try {
+            const path = this.nodeRequireForPlugin<typeof import('path')>('path');
+            const cfg = this.getSiyuanConfig();
+            const rawCandidates = [
+                cfg?.system?.workspaceDir,
+                cfg?.system?.workspace,
+                cfg?.workspaceDir,
+            ];
+            for (const candidate of rawCandidates) {
+                if (typeof candidate !== 'string') continue;
+                const trimmed = candidate.trim();
+                if (!trimmed) continue;
+                if (/[\\/]+data$/i.test(trimmed)) {
+                    return trimmed;
+                }
+                return path.join(trimmed, 'data');
+            }
+        } catch (error) {
+            console.warn('Resolve workspace data root failed:', error);
+        }
+        return '/data';
+    }
+
+    private resolvePetalStorageDirForFs(namespace: string): string {
+        const path = this.nodeRequireForPlugin<typeof import('path')>('path');
+        const dataRoot = this.resolveWorkspaceDataRootForFs();
+        return path.join(dataRoot, 'storage', 'petal', namespace);
+    }
+
     private detectCodexWorkingDir(): string {
         const cfg = this.getSiyuanConfig();
         const candidates = [cfg?.system?.workspaceDir, cfg?.system?.workspace, cfg?.workspaceDir];
@@ -2529,6 +2559,8 @@ export default class PluginSample extends Plugin {
     private isMeaningfulSettingValue(value: any): boolean {
         if (value === undefined || value === null) return false;
         if (typeof value === 'string') return value.trim().length > 0;
+        if (typeof value === 'boolean') return value === true;
+        if (typeof value === 'number') return value !== 0;
         if (Array.isArray(value)) return value.length > 0;
         if (this.isPlainObjectValue(value)) return Object.keys(value).length > 0;
         return true;
@@ -2588,7 +2620,7 @@ export default class PluginSample extends Plugin {
         try {
             const fs = this.nodeRequireForPlugin<typeof import('fs')>('fs');
             const path = this.nodeRequireForPlugin<typeof import('path')>('path');
-            const baseDir = path.join('/data/storage/petal', this.pluginNamespace);
+            const baseDir = this.resolvePetalStorageDirForFs(this.pluginNamespace);
             fs.mkdirSync(baseDir, { recursive: true });
             const filePath = path.join(baseDir, SETTINGS_AUDIT_FILE);
             const line = JSON.stringify({
@@ -2606,7 +2638,7 @@ export default class PluginSample extends Plugin {
         try {
             const fs = this.nodeRequireForPlugin<typeof import('fs')>('fs');
             const path = this.nodeRequireForPlugin<typeof import('path')>('path');
-            const dir = path.join('/data/storage/petal', namespace);
+            const dir = this.resolvePetalStorageDirForFs(namespace);
             if (!fs.existsSync(dir)) return [];
             const files = fs
                 .readdirSync(dir)
@@ -2636,9 +2668,11 @@ export default class PluginSample extends Plugin {
     }
 
     private looksLikeResetSettings(settings: any): boolean {
+        if (!this.isPlainObjectValue(settings) || Object.keys(settings).length === 0) {
+            return true;
+        }
         const webAppsCount = Array.isArray(settings?.webApps) ? settings.webApps.length : 0;
         const gitFieldsEmpty =
-            !String(settings?.codexGitCliPath || '').trim() &&
             !String(settings?.codexGitRepoDir || '').trim() &&
             !String(settings?.codexGitRemoteUrl || '').trim() &&
             !String(settings?.codexGitBranch || '').trim() &&
@@ -2652,7 +2686,6 @@ export default class PluginSample extends Plugin {
         if (!this.isPlainObjectValue(settings)) return false;
         const webAppsCount = Array.isArray(settings?.webApps) ? settings.webApps.length : 0;
         const hasGitSignal =
-            !!String(settings?.codexGitCliPath || '').trim() ||
             !!String(settings?.codexGitRepoDir || '').trim() ||
             !!String(settings?.codexGitRemoteUrl || '').trim() ||
             !!String(settings?.codexGitBranch || '').trim() ||
@@ -2682,8 +2715,9 @@ export default class PluginSample extends Plugin {
         );
 
         const candidates: Array<{ source: string; settings: any }> = [];
+        const path = this.nodeRequireForPlugin<typeof import('path')>('path');
         for (const namespace of namespaces) {
-            const settingsPath = `/data/storage/petal/${namespace}/${SETTINGS_FILE}`;
+            const settingsPath = path.join(this.resolvePetalStorageDirForFs(namespace), SETTINGS_FILE);
             const settings = this.readJsonFileSafe(settingsPath);
             if (settings) {
                 candidates.push({

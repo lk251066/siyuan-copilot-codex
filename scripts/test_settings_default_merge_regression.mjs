@@ -36,6 +36,14 @@ const checks = [
             indexSource.includes('settingsRecoveryApplied: SETTINGS_RECOVERY_VERSION'),
     },
     {
+        name: 'settings fs path resolves through workspace data root helper',
+        pass:
+            indexSource.includes('private resolveWorkspaceDataRootForFs(): string') &&
+            indexSource.includes('private resolvePetalStorageDirForFs(namespace: string): string') &&
+            indexSource.includes('this.resolvePetalStorageDirForFs(this.pluginNamespace)') &&
+            indexSource.includes('this.resolvePetalStorageDirForFs(namespace)'),
+    },
+    {
         name: 'index sync prompt path uses merge helper',
         pass: indexSource.includes('const mergedSettings = mergeSettingsWithDefaults(settings);'),
     },
@@ -61,6 +69,12 @@ const checks = [
             indexSource.includes('const saveRecoveryResult = this.recoverResetSettingsIfNeeded(baseSettings);') &&
             indexSource.includes('if (saveRecoveryResult.changed) {') &&
             indexSource.includes('baseSettings = saveRecoveryResult.settings;'),
+    },
+    {
+        name: 'reset detection treats empty settings as suspicious and does not rely on git cli path',
+        pass:
+            indexSource.includes('Object.keys(settings).length === 0') &&
+            !indexSource.includes("!String(settings?.codexGitCliPath || '').trim() &&"),
     },
     {
         name: 'settings save/load writes audit events for reset diagnosis',
