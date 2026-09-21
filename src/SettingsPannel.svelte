@@ -212,26 +212,47 @@
         try {
             const nodeRequire = (globalThis as any).require || require;
             const childProcess = nodeRequire('child_process') as typeof import('child_process');
-            const child = childProcess.spawn('cmd.exe', ['/d', '/s', '/c', 'where codex'], {
-                windowsHide: true,
-                shell: true,
-            });
-            let out = '';
-            child.stdout?.on('data', (buf: Buffer) => {
-                out += buf.toString('utf8');
-            });
-            child.on('close', () => {
-                const lines = out
-                    .split(/\r?\n/)
-                    .map(s => s.trim())
-                    .filter(Boolean);
-                if (lines.length > 0) {
-                    setSetting('codexCliPath', lines[0]);
-                    pushMsg(`${t('settings.codex.detectCliPath') || '自动探测'}: ${lines[0]}`);
-                } else {
-                    pushErrMsg(t('settings.codex.notFoundInPath'));
+            const fs = nodeRequire('fs') as typeof import('fs');
+            const isWin = (globalThis as any)?.process?.platform === 'win32';
+            const isMac = (globalThis as any)?.process?.platform === 'darwin';
+            const preferred = isWin
+                ? []
+                : isMac
+                  ? [
+                        '/opt/homebrew/bin/codex',
+                        '/usr/local/bin/codex',
+                        '/Applications/Codex.app/Contents/Resources/codex',
+                        '/Applications/codex.app/Contents/Resources/codex',
+                        '/Applications/Codex.app/Contents/MacOS/codex',
+                        '/Applications/codex.app/Contents/MacOS/codex',
+                    ]
+                  : [];
+            for (const p of preferred) {
+                if (fs.existsSync(p)) {
+                    setSetting('codexCliPath', p);
+                    pushMsg(`${t('settings.codex.detectCliPath') || '自动探测'}: ${p}`);
+                    return;
                 }
-            });
+            }
+
+            const result = isWin
+                ? childProcess.spawnSync('cmd.exe', ['/d', '/s', '/c', 'where codex'], {
+                      windowsHide: true,
+                      shell: true,
+                      encoding: 'utf8',
+                  })
+                : childProcess.spawnSync('which', ['codex'], { encoding: 'utf8' });
+            const out = String(result?.stdout || '');
+            const lines = out
+                .split(/\r?\n/)
+                .map(s => s.trim())
+                .filter(Boolean);
+            if (lines.length > 0) {
+                setSetting('codexCliPath', lines[0]);
+                pushMsg(`${t('settings.codex.detectCliPath') || '自动探测'}: ${lines[0]}`);
+            } else {
+                pushErrMsg(t('settings.codex.notFoundInPath'));
+            }
         } catch (e) {
             console.error('Detect codex path failed:', e);
             pushErrMsg(t('settings.codex.detectCliFailed'));
@@ -242,31 +263,40 @@
         try {
             const nodeRequire = (globalThis as any).require || require;
             const childProcess = nodeRequire('child_process') as typeof import('child_process');
+            const fs = nodeRequire('fs') as typeof import('fs');
             const isWin = (globalThis as any)?.process?.platform === 'win32';
-
-            const cmd = isWin ? 'cmd.exe' : 'sh';
-            const args = isWin ? ['/d', '/s', '/c', 'where git'] : ['-lc', 'which git'];
-
-            const child = childProcess.spawn(cmd, args, {
-                windowsHide: true,
-                shell: true,
-            });
-            let out = '';
-            child.stdout?.on('data', (buf: Buffer) => {
-                out += buf.toString('utf8');
-            });
-            child.on('close', () => {
-                const lines = out
-                    .split(/\r?\n/)
-                    .map(s => s.trim())
-                    .filter(Boolean);
-                if (lines.length > 0) {
-                    setSetting('codexGitCliPath', lines[0]);
-                    pushMsg(`${t('settings.codex.git.detectCliPath') || '自动探测'}: ${lines[0]}`);
-                } else {
-                    pushErrMsg(t('settings.codex.git.notFoundInPath'));
+            const isMac = (globalThis as any)?.process?.platform === 'darwin';
+            const preferred = isWin
+                ? []
+                : isMac
+                  ? ['/opt/homebrew/bin/git', '/usr/local/bin/git', '/usr/bin/git']
+                  : [];
+            for (const p of preferred) {
+                if (fs.existsSync(p)) {
+                    setSetting('codexGitCliPath', p);
+                    pushMsg(`${t('settings.codex.git.detectCliPath') || '自动探测'}: ${p}`);
+                    return;
                 }
-            });
+            }
+
+            const result = isWin
+                ? childProcess.spawnSync('cmd.exe', ['/d', '/s', '/c', 'where git'], {
+                      windowsHide: true,
+                      shell: true,
+                      encoding: 'utf8',
+                  })
+                : childProcess.spawnSync('which', ['git'], { encoding: 'utf8' });
+            const out = String(result?.stdout || '');
+            const lines = out
+                .split(/\r?\n/)
+                .map(s => s.trim())
+                .filter(Boolean);
+            if (lines.length > 0) {
+                setSetting('codexGitCliPath', lines[0]);
+                pushMsg(`${t('settings.codex.git.detectCliPath') || '自动探测'}: ${lines[0]}`);
+            } else {
+                pushErrMsg(t('settings.codex.git.notFoundInPath'));
+            }
         } catch (e) {
             console.error('Detect git path failed:', e);
             pushErrMsg(t('settings.codex.git.detectCliFailed'));

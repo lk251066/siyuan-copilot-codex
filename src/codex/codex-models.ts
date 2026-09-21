@@ -148,6 +148,10 @@ function resolveCodexConfigCandidates(options: FetchCodexModelsOptions = {}): st
     return deduped;
 }
 
+export function resolveCodexConfigCandidatePaths(options: FetchCodexModelsOptions = {}): string[] {
+    return resolveCodexConfigCandidates(options);
+}
+
 export function resolveCodexLocalConfigPaths(options: FetchCodexModelsOptions = {}): string[] {
     const fs = nodeRequire<typeof import('fs')>('fs');
     const matches: string[] = [];
@@ -165,10 +169,14 @@ export function resolveCodexLocalConfigPaths(options: FetchCodexModelsOptions = 
 
 export async function fetchCodexModels(options: FetchCodexModelsOptions = {}): Promise<string[]> {
     const fs = nodeRequire<typeof import('fs')>('fs');
+    const candidates = resolveCodexConfigCandidates(options);
     const configPaths = resolveCodexLocalConfigPaths(options);
 
     if (configPaths.length === 0) {
-        throw new Error('未找到本地 Codex 配置文件（~/.codex/config.toml）');
+        const tips = candidates.length > 0 ? `；已尝试：${candidates.join(' | ')}` : '';
+        throw new Error(
+            `未找到本地 Codex 配置文件（config.toml）${tips}。可先运行一次 codex/login 自动生成，或手动创建。`
+        );
     }
 
     const allModels = new Set<string>();

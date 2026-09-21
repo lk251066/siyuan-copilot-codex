@@ -2459,7 +2459,24 @@ export default class PluginSample extends Plugin {
         try {
             const nodeRequire = (globalThis as any).require || require;
             const childProcess = nodeRequire('child_process') as typeof import('child_process');
+            const fs = nodeRequire('fs') as typeof import('fs');
             const isWin = (globalThis as any)?.process?.platform === 'win32';
+            const isMac = (globalThis as any)?.process?.platform === 'darwin';
+            const preferred = isWin
+                ? []
+                : isMac
+                  ? [
+                        '/opt/homebrew/bin/codex',
+                        '/usr/local/bin/codex',
+                        '/Applications/Codex.app/Contents/Resources/codex',
+                        '/Applications/codex.app/Contents/Resources/codex',
+                        '/Applications/Codex.app/Contents/MacOS/codex',
+                        '/Applications/codex.app/Contents/MacOS/codex',
+                    ]
+                  : [];
+            for (const p of preferred) {
+                if (fs.existsSync(p)) return p;
+            }
             const result = isWin
                 ? childProcess.spawnSync('cmd.exe', ['/d', '/s', '/c', 'where codex'], {
                     windowsHide: true,

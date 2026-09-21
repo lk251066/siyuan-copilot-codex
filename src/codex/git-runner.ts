@@ -43,6 +43,24 @@ function isWindows(): boolean {
     return p === 'win32';
 }
 
+function isMac(): boolean {
+    const p = (globalThis as any)?.process?.platform;
+    return p === 'darwin';
+}
+
+function resolveGitCliCommand(cliPathRaw: string | undefined): string {
+    const configured = String(cliPathRaw || '').trim();
+    if (configured) return configured;
+    if (isWindows()) return 'git';
+    if (!isMac()) return 'git';
+    const fs = nodeRequire<typeof import('fs')>('fs');
+    const preferred = ['/opt/homebrew/bin/git', '/usr/local/bin/git', '/usr/bin/git'];
+    for (const p of preferred) {
+        if (fs.existsSync(p)) return p;
+    }
+    return 'git';
+}
+
 function appendLinesFromChunk(
     buffer: string,
     chunk: Buffer,
@@ -71,7 +89,7 @@ function flushBufferedLine(buffer: string, onLine?: (line: string) => void): str
 
 export function runGitCommand(options: RunGitCommandOptions): RunGitCommandHandle {
     const childProcess = nodeRequire<typeof import('child_process')>('child_process');
-    const cliPath = (options.cliPath || '').trim() || 'git';
+    const cliPath = resolveGitCliCommand(options.cliPath);
 
     const env: Record<string, string> = {
         ...(globalThis as any)?.process?.env,

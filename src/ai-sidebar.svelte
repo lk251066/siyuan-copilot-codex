@@ -517,6 +517,29 @@
         return (globalThis as any)?.process?.platform === 'win32';
     }
 
+    function isMacPlatform(): boolean {
+        return (globalThis as any)?.process?.platform === 'darwin';
+    }
+
+    let lastLoggedMcpNodeCommand = '';
+
+    function resolveMcpNodeCommand(): string {
+        if (isWindowsPlatform()) return 'node';
+        if (!isMacPlatform()) return 'node';
+        const fs = nodeRequireForSidebar<any>('fs');
+        const preferred = ['/opt/homebrew/bin/node', '/usr/local/bin/node'];
+        for (const p of preferred) {
+            if (fs.existsSync(p)) return p;
+        }
+        return 'node';
+    }
+
+    function logMcpNodeCommandOnce(cmd: string): void {
+        if (!cmd || cmd === lastLoggedMcpNodeCommand) return;
+        lastLoggedMcpNodeCommand = cmd;
+        console.info(`[Codex MCP] Using node command: ${cmd}`);
+    }
+
     function resolveSiyuanMcpScriptPath(): { scriptPath: string; candidates: string[] } {
         const path = nodeRequireForSidebar<any>('path');
         const fs = nodeRequireForSidebar<any>('fs');
@@ -588,9 +611,11 @@
             env.SIYUAN_API_TOKEN = String(settings.siyuanApiToken).trim();
         }
         env.SIYUAN_MCP_READ_ONLY = '1';
+        const nodeCmd = resolveMcpNodeCommand();
+        logMcpNodeCommandOnce(nodeCmd);
 
         return await new Promise((resolve, reject) => {
-            const child = childProcess.spawn('node', [scriptPath], {
+            const child = childProcess.spawn(nodeCmd, [scriptPath], {
                 env,
                 shell: isWindowsPlatform(),
                 windowsHide: true,
@@ -779,10 +804,12 @@
             env.SIYUAN_API_TOKEN = String(settings.siyuanApiToken).trim();
         }
         env.SIYUAN_MCP_READ_ONLY = '1';
+        const nodeCmd = resolveMcpNodeCommand();
+        logMcpNodeCommandOnce(nodeCmd);
 
         try {
             const payload = await new Promise<any>((resolve, reject) => {
-                const child = childProcess.spawn('node', [scriptPath], {
+                const child = childProcess.spawn(nodeCmd, [scriptPath], {
                     env,
                     shell: isWindowsPlatform(),
                     windowsHide: true,
