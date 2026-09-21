@@ -98,6 +98,15 @@ export const getDefaultSettings = () => ({
     messageFontSize: 14 as number, // 消息字体大小
     multiModelViewMode: 'tab' as 'tab' | 'card', // 多模型回答样式：tab (页签视图) | card (卡片视图)
 
+    // 提示词库
+    prompts: [] as Array<{
+        id: string;
+        title: string;
+        content: string;
+        createdAt: number;
+        updatedAt: number;
+    }>,
+
     // 多模型设置
     selectedMultiModels: [] as Array<{ provider: string; modelId: string }>, // 选中的多模型列表
 
@@ -244,6 +253,28 @@ export const mergeSettingsWithDefaults = (rawSettings: any = {}) => {
     if (!Array.isArray(merged.webApps)) {
         merged.webApps = [];
     }
+
+    merged.prompts = Array.isArray(merged.prompts)
+        ? merged.prompts
+              .filter(isPlainObject)
+              .map((prompt: Record<string, any>, index: number) => {
+                  const now = Date.now();
+                  return {
+                      id: String(prompt.id || `prompt-${index + 1}`),
+                      title: String(prompt.title || '').trim(),
+                      content: String(prompt.content || '').trim(),
+                      createdAt:
+                          typeof prompt.createdAt === 'number' && Number.isFinite(prompt.createdAt)
+                              ? prompt.createdAt
+                              : now,
+                      updatedAt:
+                          typeof prompt.updatedAt === 'number' && Number.isFinite(prompt.updatedAt)
+                              ? prompt.updatedAt
+                              : now,
+                  };
+              })
+              .filter((prompt: any) => prompt.title && prompt.content)
+        : [];
 
     if (!isPlainObject(merged.codexSkillOverrides)) {
         merged.codexSkillOverrides = {};
