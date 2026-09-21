@@ -105,6 +105,14 @@ const checks = [
             sidebarSource.includes('settings = mergeSettingsWithDefaults(await plugin.loadSettings());'),
     },
     {
+        name: 'prompt templates use the shared serialized store',
+        pass:
+            sidebarSource.includes("from './stores/prompt-templates'") &&
+            sidebarSource.includes('subscribePromptTemplates') &&
+            sidebarSource.includes('updatePromptTemplates') &&
+            !sidebarSource.includes('settings = { ...settings, prompts: promptTemplates };'),
+    },
+    {
         name: 'send flow self-heals codexEnabled before send instead of hard-failing',
         pass:
             sidebarSource.includes('settings = mergeSettingsWithDefaults({ ...settings, codexEnabled: true });') &&

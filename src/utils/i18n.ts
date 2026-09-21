@@ -1,4 +1,46 @@
+import enUS from "../../i18n/en_US.json";
+import zhCN from "../../i18n/zh_CN.json";
+
 let pluginInstance: any = null;
+
+const fallbackI18nByLang: Record<string, any> = {
+    zh_CN: zhCN,
+    en_US: enUS,
+};
+
+function normalizeLanguage(lang: string): string {
+    const raw = String(lang || "").toLowerCase();
+    if (raw.startsWith("zh")) return "zh_CN";
+    if (raw.startsWith("en")) return "en_US";
+    return "zh_CN";
+}
+
+function getRuntimeLanguage(): string {
+    const windowLang = (globalThis as any)?.window?.siyuan?.config?.lang;
+    const globalLang = (globalThis as any)?.siyuan?.config?.lang;
+    return normalizeLanguage(String(windowLang || globalLang || ""));
+}
+
+function getFallbackI18nData(): any {
+    return fallbackI18nByLang[getRuntimeLanguage()] || fallbackI18nByLang.zh_CN;
+}
+
+function resolveI18nData(): any {
+    if (pluginInstance && pluginInstance.i18n && typeof pluginInstance.i18n === "object") {
+        return pluginInstance.i18n;
+    }
+
+    try {
+        const { i18n } = require("siyuan");
+        if (i18n && typeof i18n === "object") {
+            return i18n;
+        }
+    } catch (error) {
+        // ignore
+    }
+
+    return getFallbackI18nData();
+}
 
 // 设置插件实例的引用
 export function setPluginInstance(plugin: any) {
@@ -11,16 +53,15 @@ export function setPluginInstance(plugin: any) {
 export function getCurrentLanguage(): string {
     if (pluginInstance && pluginInstance.i18n) {
         // 从插件实例获取当前语言
-        return pluginInstance.i18n.getCurrentLanguage?.() || 'zh_CN';
+        return normalizeLanguage(pluginInstance.i18n.getCurrentLanguage?.() || "zh_CN");
     }
 
     // 尝试从全局获取
     try {
         const { i18n } = require("siyuan");
-        return i18n.getCurrentLanguage?.() || 'zh_CN';
+        return normalizeLanguage(i18n.getCurrentLanguage?.() || "zh_CN");
     } catch (error) {
-        console.warn('无法获取当前语言:', error);
-        return 'zh_CN';
+        return getRuntimeLanguage();
     }
 }
 
@@ -28,28 +69,7 @@ export function getCurrentLanguage(): string {
  * 翻译函数
  */
 export function t(key: string, params?: { [key: string]: string }): string {
-    // 首先尝试从插件实例获取i18n数据
-    let i18nData = null;
-
-    if (pluginInstance && pluginInstance.i18n) {
-        i18nData = pluginInstance.i18n;
-    }
-
-    // 如果插件实例不可用，尝试从全局获取
-    if (!i18nData) {
-        try {
-            const { i18n } = require("siyuan");
-            i18nData = i18n;
-        } catch (error) {
-            console.warn('无法获取i18n对象:', error);
-        }
-    }
-
-    // 如果仍然没有i18n数据，使用key作为后备
-    if (!i18nData || typeof i18nData !== 'object') {
-        console.warn('i18n数据不可用，使用key作为后备:', key);
-        return key;
-    }
+    const i18nData = resolveI18nData();
 
     // 支持嵌套键访问（如 settings.template.description）
     let text = i18nData;
@@ -84,20 +104,7 @@ export function t(key: string, params?: { [key: string]: string }): string {
  * 检查是否存在翻译键
  */
 export function hasTranslation(key: string): boolean {
-    let i18nData = null;
-
-    if (pluginInstance && pluginInstance.i18n) {
-        i18nData = pluginInstance.i18n;
-    }
-
-    if (!i18nData) {
-        try {
-            const { i18n } = require("siyuan");
-            i18nData = i18n;
-        } catch (error) {
-            return false;
-        }
-    }
+    const i18nData = resolveI18nData();
 
     if (!i18nData) {
         return false;

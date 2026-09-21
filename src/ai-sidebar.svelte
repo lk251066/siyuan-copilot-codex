@@ -42,6 +42,12 @@
     } from './defaultSettings';
     import { settingsStore } from './stores/settings';
     import {
+        loadPromptTemplates as loadPromptTemplatesStore,
+        subscribePromptTemplates,
+        updatePromptTemplates,
+        type PromptTemplate,
+    } from './stores/prompt-templates';
+    import {
         parseUnifiedDiffToLines,
         runGitCommand,
         runGitDiffNoIndex,
@@ -149,6 +155,17 @@
     let webLinkDialogTextareaElement: HTMLTextAreaElement;
     let webLinkInput = '';
     let isFetchingWebContent = false;
+
+    // 提示词库
+    let isPromptDialogOpen = false;
+    let promptDialogCloseButton: HTMLButtonElement;
+    let promptTitleInputElement: HTMLInputElement;
+    let promptTemplates: PromptTemplate[] = [];
+    let promptTitleInput = '';
+    let promptContentInput = '';
+    let editingPromptId = '';
+    let isPromptEditorDialogOpen = false;
+    let unsubscribePromptTemplates = () => {};
 
     // 中断控制
     let abortController: AbortController | null = null;
@@ -1627,6 +1644,9 @@
     }
 
     onMount(async () => {
+        unsubscribePromptTemplates = subscribePromptTemplates(value => {
+            promptTemplates = value;
+        });
         settings = mergeSettingsWithDefaults(await plugin.loadSettings());
         // 优先强制写回 Codex-only，避免后续初始化中途异常导致 codexEnabled 仍为 false
         await enforceCodexOnlySettings();
@@ -1664,6 +1684,7 @@
 
         // 初始化字体大小设置
         messageFontSize = settings.messageFontSize || 12;
+        await loadPromptTemplates();
 
         // 初始化多模型视图样式设置
         multiModelViewMode = settings.multiModelViewMode || 'tab';
@@ -1788,6 +1809,7 @@
     });
 
     onDestroy(async () => {
+        unsubscribePromptTemplates();
         for (const timer of Object.values(gitSettingSaveTimers)) {
             window.clearTimeout(timer);
         }
@@ -2124,6 +2146,146 @@
     function closeSearchDialog() {
         isSearchDialogOpen = false;
         tick().then(() => textareaElement?.focus());
+    }
+
+    function resetPromptForm() {
+        editingPromptId = '';
+        promptTitleInput = '';
+        promptContentInput = '';
+    }
+
+    function closePromptEditorDialog() {
+        isPromptEditorDialogOpen = false;
+        resetPromptForm();
+        tick().then(() => promptDialogCloseButton?.focus());
+    }
+
+    async function loadPromptTemplates() {
+        try {
+            await loadPromptTemplatesStore(plugin, settings?.prompts);
+        } catch (error) {
+            console.warn('[PromptTemplates] Load data file failed:', error);
+            pushErrMsg(t('aiSidebar.errors.loadPromptTemplatesFailed') || '提示词加载失败');
+        }
+    }
+
+    async function openPromptDialog() {
+        await loadPromptTemplates();
+        isPromptDialogOpen = true;
+        tick().then(() => promptDialogCloseButton?.focus());
+    }
+
+    function togglePromptDialog() {
+        if (isPromptDialogOpen) {
+            closePromptDialog();
+            return;
+        }
+        void openPromptDialog();
+    }
+
+    function closePromptDialog() {
+        isPromptDialogOpen = false;
+        isPromptEditorDialogOpen = false;
+        resetPromptForm();
+        tick().then(() => textareaElement?.focus());
+    }
+
+    function startCreatePromptTemplate() {
+        resetPromptForm();
+        isPromptEditorDialogOpen = true;
+        tick().then(() => promptTitleInputElement?.focus());
+    }
+
+    async function savePromptTemplate() {
+        const title = promptTitleInput.trim();
+        const content = promptContentInput.trim();
+        if (!title || !content) {
+            pushErrMsg(t('aiSidebar.errors.emptyPromptContent'));
+            return;
+        }
+
+        const now = Date.now();
+        try {
+            await updatePromptTemplates(
+                plugin,
+                current => {
+                    const exists = current.some(prompt => prompt.id === editingPromptId);
+                    return editingPromptId && exists
+                        ? current.map(prompt =>
+                              prompt.id === editingPromptId
+                                  ? { ...prompt, title, content, updatedAt: now }
+                                  : prompt
+                          )
+                        : [
+                              {
+                                  id: `prompt-${now}-${Math.random().toString(36).slice(2, 8)}`,
+                                  title,
+                                  content,
+                                  createdAt: now,
+                                  updatedAt: now,
+                              },
+                              ...current,
+                          ];
+                },
+                settings?.prompts
+            );
+        } catch (error) {
+            console.error('[PromptTemplates] Save failed:', error);
+            pushErrMsg(t('aiSidebar.errors.savePromptTemplateFailed') || '提示词保存失败');
+            return;
+        }
+        resetPromptForm();
+        isPromptEditorDialogOpen = false;
+        pushMsg(t('aiSidebar.success.savePromptTemplateSuccess') || t('aiSidebar.prompt.save'));
+        await tick();
+        promptDialogCloseButton?.focus();
+    }
+
+    function editPromptTemplate(prompt: PromptTemplate) {
+        editingPromptId = prompt.id;
+        promptTitleInput = prompt.title;
+        promptContentInput = prompt.content;
+        isPromptEditorDialogOpen = true;
+        tick().then(() => promptTitleInputElement?.focus());
+    }
+
+    function deletePromptTemplate(prompt: PromptTemplate) {
+        confirm(
+            t('aiSidebar.confirm.deletePrompt.title'),
+            t('aiSidebar.confirm.deletePrompt.message'),
+            async () => {
+                try {
+                    await updatePromptTemplates(
+                        plugin,
+                        current => current.filter(item => item.id !== prompt.id),
+                        settings?.prompts
+                    );
+                } catch (error) {
+                    console.error('[PromptTemplates] Delete failed:', error);
+                    pushErrMsg(t('aiSidebar.errors.deletePromptTemplateFailed') || '提示词删除失败');
+                    return;
+                }
+                if (editingPromptId === prompt.id) {
+                    resetPromptForm();
+                }
+                pushMsg(
+                    t('aiSidebar.success.deletePromptTemplateSuccess') ||
+                        t('aiSidebar.prompt.delete')
+                );
+            }
+        );
+    }
+
+    function insertPromptTemplate(prompt: PromptTemplate) {
+        const content = prompt.content.trim();
+        if (!content) return;
+        const current = currentInput.trimEnd();
+        currentInput = current ? `${current}\n\n${content}` : content;
+        closePromptDialog();
+        tick().then(() => {
+            textareaElement?.focus();
+            autoResizeTextarea();
+        });
     }
 
     function toggleSearchDialog() {
@@ -7376,6 +7538,16 @@
             closeWebLinkDialog();
             return;
         }
+        if (isPromptEditorDialogOpen) {
+            e.preventDefault();
+            closePromptEditorDialog();
+            return;
+        }
+        if (isPromptDialogOpen) {
+            e.preventDefault();
+            closePromptDialog();
+            return;
+        }
         if (isSearchDialogOpen) {
             e.preventDefault();
             closeSearchDialog();
@@ -10082,6 +10254,15 @@
         // 关闭打开窗口菜单
         if (showOpenWindowMenu && !target.closest('.ai-sidebar__open-window-menu-container')) {
             showOpenWindowMenu = false;
+        }
+
+        if (
+            isPromptDialogOpen &&
+            !target.closest('.ai-sidebar__prompt-panel') &&
+            !target.closest('.ai-sidebar__prompt-btn') &&
+            !target.closest('.ai-sidebar__prompt-dialog')
+        ) {
+            closePromptDialog();
         }
 
         // 关闭图片查看器
@@ -15785,6 +15966,64 @@
         on:dragleave={handleDragLeave}
         on:drop={handleDrop}
     >
+        {#if isPromptDialogOpen}
+            <div class="ai-sidebar__prompt-panel" role="dialog" aria-modal="false">
+                <div class="ai-sidebar__prompt-panel-header">
+                    <button
+                        class="b3-button b3-button--text ai-sidebar__prompt-create-btn"
+                        on:click={startCreatePromptTemplate}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconAdd"></use></svg>
+                        <span>{t('aiSidebar.prompt.new')}</span>
+                    </button>
+                </div>
+
+                <div class="ai-sidebar__prompt-saved-items">
+                    {#if promptTemplates.length > 0}
+                        {#each promptTemplates as prompt (prompt.id)}
+                            <div class="ai-sidebar__prompt-saved-item">
+                                <button
+                                    class="ai-sidebar__prompt-saved-info"
+                                    on:click={() => insertPromptTemplate(prompt)}
+                                    title={prompt.content}
+                                >
+                                    <span class="ai-sidebar__prompt-saved-item-title">
+                                        {prompt.title}
+                                    </span>
+                                </button>
+                                <div class="ai-sidebar__prompt-saved-actions">
+                                    <button
+                                        class="b3-button b3-button--text"
+                                        on:click={() => editPromptTemplate(prompt)}
+                                        title={t('aiSidebar.prompt.edit')}
+                                        aria-label={t('aiSidebar.prompt.edit')}
+                                    >
+                                        <svg class="b3-button__icon">
+                                            <use xlink:href="#iconEdit"></use>
+                                        </svg>
+                                    </button>
+                                    <button
+                                        class="b3-button b3-button--text"
+                                        on:click={() => deletePromptTemplate(prompt)}
+                                        title={t('aiSidebar.prompt.delete')}
+                                        aria-label={t('aiSidebar.prompt.delete')}
+                                    >
+                                        <svg class="b3-button__icon">
+                                            <use xlink:href="#iconTrashcan"></use>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                        {/each}
+                    {:else}
+                        <div class="ai-sidebar__prompt-empty">
+                            {t('aiSidebar.prompt.empty')}
+                        </div>
+                    {/if}
+                </div>
+            </div>
+        {/if}
+
         <!-- 模式选择 -->
         <div class="ai-sidebar__mode-selector">
             <label for="chat-mode-select" class="ai-sidebar__mode-label">
@@ -16055,6 +16294,15 @@
                 <svg class="b3-button__icon"><use xlink:href="#iconSearch"></use></svg>
             </button>
             <button
+                class="b3-button b3-button--text ai-sidebar__prompt-btn"
+                class:ai-sidebar__prompt-btn--active={isPromptDialogOpen}
+                on:click={togglePromptDialog}
+                title={t('aiSidebar.prompt.title')}
+                aria-label={t('aiSidebar.prompt.title')}
+            >
+                <svg class="b3-button__icon"><use xlink:href="#iconQuote"></use></svg>
+            </button>
+            <button
                 class="b3-button b3-button--text ai-sidebar__codex-toolcheck-btn ai-sidebar__bottom-action-btn"
                 on:click={runCodexToolSelfCheck}
                 disabled={isCheckingCodexTools || isLoading}
@@ -16076,6 +16324,80 @@
             </button>
         </div>
     </div>
+
+    <!-- 新建/编辑提示词弹窗 -->
+    {#if isPromptEditorDialogOpen}
+        <div class="ai-sidebar__prompt-dialog">
+            <div class="ai-sidebar__prompt-dialog-overlay" on:click={closePromptEditorDialog}></div>
+            <div
+                class="ai-sidebar__prompt-dialog-content ai-sidebar__prompt-editor-dialog-content"
+                role="dialog"
+                aria-modal="true"
+            >
+                <div class="ai-sidebar__prompt-dialog-header">
+                    <h4>
+                        {editingPromptId ? t('aiSidebar.prompt.edit') : t('aiSidebar.prompt.new')}
+                    </h4>
+                    <button
+                        class="b3-button b3-button--text ai-sidebar__prompt-editor-close"
+                        on:click={closePromptEditorDialog}
+                        aria-label={t('common.close') || 'Close'}
+                    >
+                        <svg class="b3-button__icon"><use xlink:href="#iconClose"></use></svg>
+                    </button>
+                </div>
+                <div class="ai-sidebar__prompt-dialog-body ai-sidebar__prompt-editor-body">
+                    <div class="ai-sidebar__prompt-form">
+                        <div class="ai-sidebar__prompt-form-field">
+                            <label
+                                class="ai-sidebar__prompt-form-label"
+                                for="prompt-template-title"
+                            >
+                                {t('aiSidebar.prompt.titleLabel') || '标题'}
+                            </label>
+                            <input
+                                id="prompt-template-title"
+                                bind:this={promptTitleInputElement}
+                                bind:value={promptTitleInput}
+                                class="b3-text-field ai-sidebar__prompt-title-input ai-sidebar__prompt-editor-title"
+                                placeholder={t('aiSidebar.prompt.titlePlaceholder')}
+                            />
+                        </div>
+                        <div class="ai-sidebar__prompt-form-field">
+                            <label
+                                class="ai-sidebar__prompt-form-label"
+                                for="prompt-template-content"
+                            >
+                                {t('aiSidebar.prompt.contentLabel') || '内容'}
+                            </label>
+                            <textarea
+                                id="prompt-template-content"
+                                bind:value={promptContentInput}
+                                placeholder={t('aiSidebar.prompt.contentPlaceholder')}
+                                class="b3-text-field ai-sidebar__prompt-textarea ai-sidebar__prompt-editor-textarea"
+                                rows="14"
+                            ></textarea>
+                        </div>
+                        <div class="ai-sidebar__prompt-form-actions">
+                            <button
+                                class="b3-button b3-button--cancel"
+                                on:click={closePromptEditorDialog}
+                            >
+                                {t('aiSidebar.prompt.cancel')}
+                            </button>
+                            <button
+                                class="b3-button b3-button--primary"
+                                on:click={savePromptTemplate}
+                                disabled={!promptTitleInput.trim() || !promptContentInput.trim()}
+                            >
+                                {t('aiSidebar.prompt.save')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    {/if}
 
     <!-- 网页链接对话框 -->
     {#if isWebLinkDialogOpen}
@@ -18491,6 +18813,7 @@
     .ai-sidebar__upload-btn,
     .ai-sidebar__weblink-btn,
     .ai-sidebar__search-btn,
+    .ai-sidebar__prompt-btn,
     .ai-sidebar__bottom-action-btn {
         flex-shrink: 0;
         height: 24px;
@@ -18500,6 +18823,11 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
+    }
+
+    .ai-sidebar__prompt-btn--active {
+        color: var(--b3-theme-primary);
+        background: var(--b3-theme-primary-lightest);
     }
 
     .ai-sidebar__bottom-action-btn {
@@ -18862,7 +19190,42 @@
         }
     }
 
-    // 提示词管理对话框样式
+    .ai-sidebar__prompt-panel {
+        margin-bottom: 10px;
+        padding: 0 6px 6px;
+        border: 1px solid var(--b3-border-color);
+        border-radius: 6px;
+        background: var(--b3-theme-background);
+        box-shadow: none;
+        max-height: min(42vh, 360px);
+        overflow-y: auto;
+        box-sizing: border-box;
+    }
+
+    .ai-sidebar__prompt-panel-header {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        min-height: 40px;
+        padding: 4px 8px 6px;
+        border-bottom: 1px solid var(--b3-border-color);
+        background: var(--b3-theme-background);
+        box-sizing: border-box;
+    }
+
+    .ai-sidebar__prompt-create-btn {
+        color: var(--b3-theme-primary);
+        min-height: 28px;
+        padding: 0 4px;
+        font-size: 14px;
+        font-weight: 600;
+        gap: 6px;
+    }
+
+    // 提示词/网页链接对话框样式
     .ai-sidebar__prompt-dialog {
         position: fixed;
         top: 0;
@@ -18896,6 +19259,13 @@
         max-height: 80vh;
     }
 
+    .ai-sidebar__prompt-editor-dialog-content {
+        width: min(900px, calc(100vw - 32px));
+        max-width: 900px;
+        max-height: calc(100vh - 32px);
+        border-radius: 8px;
+    }
+
     .ai-sidebar__prompt-dialog-header {
         display: flex;
         align-items: center;
@@ -18910,9 +19280,31 @@
         }
     }
 
+    .ai-sidebar__prompt-editor-dialog-content .ai-sidebar__prompt-dialog-header {
+        padding: 24px 24px 22px;
+
+        h4 {
+            font-size: 24px;
+            line-height: 1.2;
+        }
+    }
+
+    .ai-sidebar__prompt-editor-close {
+        color: var(--b3-theme-primary);
+
+        .b3-button__icon {
+            width: 22px;
+            height: 22px;
+        }
+    }
+
     .ai-sidebar__prompt-dialog-body {
         padding: 16px;
         overflow-y: auto;
+    }
+
+    .ai-sidebar__prompt-editor-body {
+        padding: 24px;
     }
 
     .ai-sidebar__prompt-form {
@@ -18933,10 +19325,27 @@
         color: var(--b3-theme-on-background);
     }
 
+    .ai-sidebar__prompt-title-input {
+        width: 100%;
+    }
+
+    .ai-sidebar__prompt-editor-title {
+        height: 42px;
+        border-radius: 8px;
+        font-size: 16px;
+    }
+
     .ai-sidebar__prompt-textarea {
         min-height: 120px;
         resize: vertical;
         font-family: var(--b3-font-family);
+    }
+
+    .ai-sidebar__prompt-editor-textarea {
+        min-height: min(54vh, 560px);
+        border-radius: 8px;
+        font-size: 16px;
+        line-height: 1.55;
     }
 
     .ai-sidebar__prompt-form-actions {
@@ -18966,51 +19375,92 @@
     .ai-sidebar__prompt-saved-items {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 0;
+        padding-top: 4px;
     }
 
     .ai-sidebar__prompt-saved-item {
+        position: relative;
         display: flex;
-        align-items: flex-start;
+        align-items: center;
         justify-content: space-between;
-        gap: 12px;
-        padding: 12px;
-        background: var(--b3-theme-surface);
-        border-radius: 6px;
-        border: 1px solid var(--b3-border-color);
+        min-height: 32px;
+        padding: 4px 76px 4px 18px;
+        background: transparent;
+        border-radius: 4px;
+        border: 1px solid transparent;
+        box-sizing: border-box;
+        transition:
+            background 0.16s ease,
+            color 0.16s ease;
 
         &:hover {
             background: var(--b3-theme-primary-lightest);
+        }
+
+        &:hover .ai-sidebar__prompt-saved-actions,
+        &:focus-within .ai-sidebar__prompt-saved-actions {
+            opacity: 1;
+            pointer-events: auto;
         }
     }
 
     .ai-sidebar__prompt-saved-info {
         flex: 1;
         min-width: 0;
+        border: none;
+        background: transparent;
+        padding: 0;
+        text-align: left;
+        cursor: pointer;
+        font: inherit;
+        display: block;
+        width: 100%;
     }
 
     .ai-sidebar__prompt-saved-item-title {
+        display: block;
         font-size: 14px;
-        font-weight: 600;
+        font-weight: 500;
         color: var(--b3-theme-on-surface);
-        margin-bottom: 4px;
+        line-height: 1.35;
         overflow: hidden;
         text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .ai-sidebar__prompt-saved-item-content {
-        font-size: 12px;
-        color: var(--b3-theme-on-surface-light);
-        line-height: 1.4;
-        word-break: break-word;
+        white-space: normal;
+        overflow-wrap: anywhere;
     }
 
     .ai-sidebar__prompt-saved-actions {
+        position: absolute;
+        right: 16px;
+        top: 50%;
+        transform: translateY(-50%);
         display: flex;
         align-items: center;
         gap: 4px;
-        flex-shrink: 0;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.14s ease;
+
+        .b3-button {
+            color: var(--b3-theme-on-surface-light);
+            border-radius: 6px;
+            min-height: 24px;
+            padding: 2px 4px;
+
+            &:hover {
+                color: var(--b3-theme-primary);
+                background: var(--b3-theme-primary-lightest);
+            }
+        }
+    }
+
+    .ai-sidebar__prompt-empty {
+        padding: 12px;
+        color: var(--b3-theme-on-surface-light);
+        text-align: center;
+        border: 1px dashed var(--b3-border-color);
+        border-radius: 6px;
     }
 
     // 搜索对话框样式

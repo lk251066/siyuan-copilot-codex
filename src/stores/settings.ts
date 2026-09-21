@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import type { Writable } from 'svelte/store';
 
 // 创建一个可写的 store 来存储设置
@@ -11,10 +11,6 @@ export function updateSettings(newSettings: any) {
 
 // 获取当前设置的辅助函数
 export function getSettings(): Promise<any> {
-    return new Promise((resolve) => {
-        const unsubscribe = settingsStore.subscribe((value) => {
-            resolve(value);
-            unsubscribe();
-        });
-    });
+    // 使用 get() 直接读取当前值，避免 subscribe 立即同步回调导致的 TDZ（Cannot access 'unsubscribe' before initialization）。
+    return Promise.resolve(get(settingsStore));
 }
